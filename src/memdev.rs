@@ -23,7 +23,7 @@ pub struct BiosRom {
 }
 
 impl BiosRom {
-  fn new(source: &mut Read) -> BiosRom {
+  pub fn new(source: &mut impl Read) -> BiosRom {
     let mut bios = BiosRom {rom: [0;0x100]};
     source.read(&mut bios.rom).unwrap();
     bios
@@ -151,13 +151,13 @@ impl MemDevice for Ram127 {
  * Memory-management unit
  */
 pub struct GbMmu {
-  rom: Box<MemDevice>,
-  vram: Box<MemDevice>,
-  wram: Box<MemDevice>,
-  oam: Box<MemDevice>,
-  zram: Box<MemDevice>,
-  bios: Box<MemDevice>,
-  nullrom: Box<MemDevice>,
+  rom: Box<dyn MemDevice>,
+  vram: Box<dyn MemDevice>,
+  wram: Box<dyn MemDevice>,
+  oam: Box<dyn MemDevice>,
+  zram: Box<dyn MemDevice>,
+  bios: Box<dyn MemDevice>,
+  nullrom: Box<dyn MemDevice>,
   bios_enabled: bool,
 }
 
@@ -173,6 +173,10 @@ impl GbMmu {
       nullrom: Box::new( NullRom {}),
       bios_enabled: true,
     }
+  }
+
+  pub fn set_bios(&mut self, bios: BiosRom) {
+    self.bios = Box::new( bios );
   }
 }
 
