@@ -78,6 +78,22 @@ impl MemDevice for Mbc1Rom {
 /*
  * RAM devices
  */
+impl MemDevice for [u8] {
+  fn read(&self, addr:u16) -> u8 {
+    //if addr as usize >= N {
+    //  panic!("Illegal {}-byte RAM address {:x}", N, addr);
+    //}
+    self[addr as usize]
+  }
+
+  fn write(&mut self, addr: u16, value: u8) {
+    //if addr as usize >= N {
+    //  panic!("Illegal {}-byte RAM address {:x}", N, addr);
+    //}
+    self[addr as usize] = value;
+  }
+}
+
 pub struct Ram8k {
   ram: [u8; 0x2000],
 }
