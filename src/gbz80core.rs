@@ -406,16 +406,6 @@ fn rst(cpustate: &mut Gbz80state, mmu: &mut impl MemDevice, vec: u8) -> (u64, u8
 mod tests {
     use super::*;
 
-    impl MemDevice for [u8; 0x10000] {
-        fn read(&self, addr: u16) -> u8 {
-            self[addr as usize]
-        }
-
-        fn write(&mut self, addr: u16, value: u8) {
-            self[addr as usize] = value;
-        }
-    }
-
     #[test]
     fn test_loads_and_alu() {
         let mut cpustate: Gbz80state = Gbz80state::new();

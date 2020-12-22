@@ -280,6 +280,7 @@ macro_rules! mem_array {
 mem_array!(160);
 mem_array!(127);
 mem_array!(0x2000);
+mem_array!(0x10000);
 
 /// Memory device connecting memory mapped IO.
 pub struct MemMappedIo {
