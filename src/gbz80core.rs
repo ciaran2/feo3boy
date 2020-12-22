@@ -9,17 +9,24 @@ const FCARRY: u8 = 0x10;
 const FNONE: u8 = 0x00;
 const FALL: u8 = 0xf0;
 
+/// CPU registers.
 #[derive(Debug)]
 struct Regs816 {
+    /// 8bit registers.
     regs8: [u8; 8],
 }
 impl Regs816 {
+    /// Read the 8-bit register with the specified register number.
     fn read8(&self, regnum: u8) -> u8 {
         self.regs8[regnum as usize]
     }
+
+    /// Write the 8-bit register with the specified register number.
     fn write8(&mut self, regnum: u8, value: u8) {
         self.regs8[regnum as usize] = value
     }
+
+    /// Read the 16-bit register with the specified register number.
     fn read16(&self, regnum: u8) -> u16 {
         let (mut highreg, mut lowreg) = (regnum << 1, regnum << 1);
         if regnum == 0b11 {
@@ -30,6 +37,7 @@ impl Regs816 {
 
         (self.regs8[highreg as usize] as u16) << 8 + self.regs8[lowreg as usize] as u16
     }
+
     fn write16(&mut self, regnum: u8, value: u16) {
         let (mut highreg, mut lowreg) = (regnum << 1, regnum << 1);
         if regnum == 0b11 {
@@ -69,7 +77,7 @@ impl Gbz80state {
     }
 }
 
-pub fn tick(cpustate: &mut Gbz80state, mmu: &mut dyn MemDevice) -> u64 {
+pub fn tick(cpustate: &mut Gbz80state, mmu: &mut impl MemDevice) -> u64 {
     println!("tick: pc @ 0x{:X}", cpustate.regs.pc);
     let opcode = pcload(cpustate, mmu);
     match dispatch(cpustate, mmu, opcode) {
@@ -89,7 +97,7 @@ pub fn tick(cpustate: &mut Gbz80state, mmu: &mut dyn MemDevice) -> u64 {
 
 fn dispatch(
     cpustate: &mut Gbz80state,
-    mmu: &mut dyn MemDevice,
+    mmu: &mut impl MemDevice,
     opcode: u8,
 ) -> Option<(u64, u8, u8)> {
     let z = opcode & 7;
@@ -151,24 +159,24 @@ fn dispatch(
 /**
  ** Memory tasks
  **/
-fn pcload(cpustate: &mut Gbz80state, mmu: &mut dyn MemDevice) -> u8 {
-    let value = mmu.read(cpustate.regs.pc.0);
+fn pcload(cpustate: &mut Gbz80state, mmu: &mut impl MemDevice) -> u8 {
+    let value = mmu.read(cpustate.regs.pc.0.into());
     cpustate.regs.pc += Wrapping(1u16);
     value
 }
 
-fn push16(cpustate: &mut Gbz80state, mmu: &mut dyn MemDevice, value: u16) {
+fn push16(cpustate: &mut Gbz80state, mmu: &mut impl MemDevice, value: u16) {
     cpustate.regs.sp -= Wrapping(1u16);
-    mmu.write(cpustate.regs.sp.0, (value >> 8) as u8);
+    mmu.write(cpustate.regs.sp.0.into(), (value >> 8) as u8);
     cpustate.regs.sp -= Wrapping(1u16);
-    mmu.write(cpustate.regs.sp.0, (value & 0xFF) as u8);
+    mmu.write(cpustate.regs.sp.0.into(), (value & 0xFF) as u8);
 }
 
-fn pop16(cpustate: &mut Gbz80state, mmu: &mut dyn MemDevice) -> u16 {
+fn pop16(cpustate: &mut Gbz80state, mmu: &mut impl MemDevice) -> u16 {
     let mut ret = 0u16;
-    ret |= mmu.read(cpustate.regs.sp.0) as u16;
+    ret |= mmu.read(cpustate.regs.sp.0.into()) as u16;
     cpustate.regs.sp += Wrapping(1u16);
-    ret |= (mmu.read(cpustate.regs.sp.0) as u16) << 8;
+    ret |= (mmu.read(cpustate.regs.sp.0.into()) as u16) << 8;
     cpustate.regs.sp += Wrapping(1u16);
     ret
 }
@@ -176,17 +184,17 @@ fn pop16(cpustate: &mut Gbz80state, mmu: &mut dyn MemDevice) -> u16 {
 /**
  ** Register tasks
  **/
-fn reg_fetch8(cpustate: &mut Gbz80state, mmu: &mut dyn MemDevice, regnum: u8) -> (u8, u64) {
+fn reg_fetch8(cpustate: &mut Gbz80state, mmu: &mut impl MemDevice, regnum: u8) -> (u8, u64) {
     if regnum == 0o6 {
-        (mmu.read(cpustate.regs.regs816.read16(0b10)), 4)
+        (mmu.read(cpustate.regs.regs816.read16(0b10).into()), 4)
     } else {
         (cpustate.regs.regs816.read8(regnum), 0)
     }
 }
 
-fn reg_write8(cpustate: &mut Gbz80state, mmu: &mut dyn MemDevice, regnum: u8, value: u8) -> u64 {
+fn reg_write8(cpustate: &mut Gbz80state, mmu: &mut impl MemDevice, regnum: u8, value: u8) -> u64 {
     if regnum == 0o6 {
-        mmu.write(cpustate.regs.regs816.read16(0b10), value);
+        mmu.write(cpustate.regs.regs816.read16(0b10).into(), value);
         4
     } else {
         cpustate.regs.regs816.write8(regnum, value);
@@ -205,7 +213,7 @@ fn nop() -> (u64, u8, u8) {
     (4, FNONE, FNONE)
 }
 
-fn load16imm(cpustate: &mut Gbz80state, mmu: &mut dyn MemDevice, p: u8) -> (u64, u8, u8) {
+fn load16imm(cpustate: &mut Gbz80state, mmu: &mut impl MemDevice, p: u8) -> (u64, u8, u8) {
     let toload = pcload(cpustate, mmu) as u16 + (pcload(cpustate, mmu) as u16) << 8;
 
     match p {
@@ -217,7 +225,7 @@ fn load16imm(cpustate: &mut Gbz80state, mmu: &mut dyn MemDevice, p: u8) -> (u64,
     (12, FNONE, FNONE)
 }
 
-fn load8imm(cpustate: &mut Gbz80state, mmu: &mut dyn MemDevice, regnum: u8) -> (u64, u8, u8) {
+fn load8imm(cpustate: &mut Gbz80state, mmu: &mut impl MemDevice, regnum: u8) -> (u64, u8, u8) {
     let toload = pcload(cpustate, mmu);
 
     let cycle_offset = reg_write8(cpustate, mmu, regnum, toload);
@@ -227,7 +235,7 @@ fn load8imm(cpustate: &mut Gbz80state, mmu: &mut dyn MemDevice, regnum: u8) -> (
 
 fn load8reg(
     cpustate: &mut Gbz80state,
-    mmu: &mut dyn MemDevice,
+    mmu: &mut impl MemDevice,
     toregnum: u8,
     fromregnum: u8,
 ) -> (u64, u8, u8) {
@@ -236,7 +244,7 @@ fn load8reg(
     (4 + cycle_offset1 + cycle_offset2, FNONE, FNONE)
 }
 
-fn add(cpustate: &mut Gbz80state, mmu: &mut dyn MemDevice, regnum: u8) -> (u64, u8, u8) {
+fn add(cpustate: &mut Gbz80state, mmu: &mut impl MemDevice, regnum: u8) -> (u64, u8, u8) {
     let a = cpustate.regs.regs816.read8(0o7);
     let (reg, cycle_offset) = reg_fetch8(cpustate, mmu, regnum);
 
@@ -259,7 +267,7 @@ fn add(cpustate: &mut Gbz80state, mmu: &mut dyn MemDevice, regnum: u8) -> (u64, 
     (4 + cycle_offset, flags, FALL)
 }
 
-fn addc(cpustate: &mut Gbz80state, mmu: &mut dyn MemDevice, regnum: u8) -> (u64, u8, u8) {
+fn addc(cpustate: &mut Gbz80state, mmu: &mut impl MemDevice, regnum: u8) -> (u64, u8, u8) {
     let a = cpustate.regs.regs816.read8(0o7);
     let (reg, cycle_offset) = reg_fetch8(cpustate, mmu, regnum);
 
@@ -282,7 +290,7 @@ fn addc(cpustate: &mut Gbz80state, mmu: &mut dyn MemDevice, regnum: u8) -> (u64,
     (4 + cycle_offset, flags, FALL)
 }
 
-fn sub(cpustate: &mut Gbz80state, mmu: &mut dyn MemDevice, regnum: u8) -> (u64, u8, u8) {
+fn sub(cpustate: &mut Gbz80state, mmu: &mut impl MemDevice, regnum: u8) -> (u64, u8, u8) {
     let a = cpustate.regs.regs816.read8(0o7);
     let (reg, cycle_offset) = reg_fetch8(cpustate, mmu, regnum);
 
@@ -305,7 +313,7 @@ fn sub(cpustate: &mut Gbz80state, mmu: &mut dyn MemDevice, regnum: u8) -> (u64, 
     (4 + cycle_offset, flags, FALL)
 }
 
-fn subc(cpustate: &mut Gbz80state, mmu: &mut dyn MemDevice, regnum: u8) -> (u64, u8, u8) {
+fn subc(cpustate: &mut Gbz80state, mmu: &mut impl MemDevice, regnum: u8) -> (u64, u8, u8) {
     let a = cpustate.regs.regs816.read8(0o7);
     let (reg, cycle_offset) = reg_fetch8(cpustate, mmu, regnum);
 
@@ -335,7 +343,7 @@ fn subc(cpustate: &mut Gbz80state, mmu: &mut dyn MemDevice, regnum: u8) -> (u64,
     (4 + cycle_offset, flags, FALL)
 }
 
-fn and(cpustate: &mut Gbz80state, mmu: &mut dyn MemDevice, regnum: u8) -> (u64, u8, u8) {
+fn and(cpustate: &mut Gbz80state, mmu: &mut impl MemDevice, regnum: u8) -> (u64, u8, u8) {
     let a = cpustate.regs.regs816.read8(0o7);
     let (reg, cycle_offset) = reg_fetch8(cpustate, mmu, regnum);
 
@@ -349,7 +357,7 @@ fn and(cpustate: &mut Gbz80state, mmu: &mut dyn MemDevice, regnum: u8) -> (u64, 
     (4 + cycle_offset, flags, FALL)
 }
 
-fn xor(cpustate: &mut Gbz80state, mmu: &mut dyn MemDevice, regnum: u8) -> (u64, u8, u8) {
+fn xor(cpustate: &mut Gbz80state, mmu: &mut impl MemDevice, regnum: u8) -> (u64, u8, u8) {
     let a = cpustate.regs.regs816.read8(0o7);
     let (reg, cycle_offset) = reg_fetch8(cpustate, mmu, regnum);
 
@@ -359,7 +367,7 @@ fn xor(cpustate: &mut Gbz80state, mmu: &mut dyn MemDevice, regnum: u8) -> (u64, 
     (4 + cycle_offset, flags, FALL)
 }
 
-fn or(cpustate: &mut Gbz80state, mmu: &mut dyn MemDevice, regnum: u8) -> (u64, u8, u8) {
+fn or(cpustate: &mut Gbz80state, mmu: &mut impl MemDevice, regnum: u8) -> (u64, u8, u8) {
     let a = cpustate.regs.regs816.read8(0o7);
     let (reg, cycle_offset) = reg_fetch8(cpustate, mmu, regnum);
 
@@ -369,7 +377,7 @@ fn or(cpustate: &mut Gbz80state, mmu: &mut dyn MemDevice, regnum: u8) -> (u64, u
     (4 + cycle_offset, flags, FALL)
 }
 
-fn cp(cpustate: &mut Gbz80state, mmu: &mut dyn MemDevice, regnum: u8) -> (u64, u8, u8) {
+fn cp(cpustate: &mut Gbz80state, mmu: &mut impl MemDevice, regnum: u8) -> (u64, u8, u8) {
     let a = cpustate.regs.regs816.read8(0o7);
     let (reg, cycle_offset) = reg_fetch8(cpustate, mmu, regnum);
 
@@ -388,7 +396,7 @@ fn cp(cpustate: &mut Gbz80state, mmu: &mut dyn MemDevice, regnum: u8) -> (u64, u
     (4 + cycle_offset, flags, FALL)
 }
 
-fn rst(cpustate: &mut Gbz80state, mmu: &mut dyn MemDevice, vec: u8) -> (u64, u8, u8) {
+fn rst(cpustate: &mut Gbz80state, mmu: &mut impl MemDevice, vec: u8) -> (u64, u8, u8) {
     push16(cpustate, mmu, cpustate.regs.pc.0);
     cpustate.regs.pc = Wrapping(vec as u16 * 8);
     (16, FNONE, FNONE)

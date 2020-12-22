@@ -1,11 +1,12 @@
-extern crate clap;
+use std::fs::File;
+use std::io::Read;
 
 use clap::{App, Arg};
-use std::fs::File;
 
-mod memdev;
-//mod rom;
+use memdev::{BiosRom, Cartridge, GbMmu};
+
 mod gbz80core;
+mod memdev;
 
 fn main() {
     println!("feo3boy");
@@ -29,18 +30,24 @@ fn main() {
         )
         .get_matches();
 
-    let mut mmu = memdev::GbMmu::new();
-    let mut cpustate = gbz80core::Gbz80state::new();
-
-    match argparser.value_of("bios") {
+    let bios = match argparser.value_of("bios") {
         Some(filename) => {
             let mut bios_file = File::open(filename).unwrap();
-            mmu.set_bios(memdev::BiosRom::new(&mut bios_file));
+            let mut bios = Vec::with_capacity(0x100);
+            bios_file.read_to_end(&mut bios);
+            assert!(bios.len() == 0x100, "Bios file was wrong length");
+            BiosRom::new(&bios)
         }
-        None => (),
-    }
+        None => BiosRom::default(),
+    };
+
+    let cart = Cartridge::default();
+
+    // Box to keep it off the stack.
+    let mut mmu = Box::new(GbMmu::new(bios, cart));
+    let mut cpustate = gbz80core::Gbz80state::new();
 
     loop {
-        gbz80core::tick(&mut cpustate, &mut mmu);
+        gbz80core::tick(&mut cpustate, &mut *mmu);
     }
 }
