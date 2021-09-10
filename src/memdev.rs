@@ -197,27 +197,14 @@ impl Default for Cartridge {
 impl MemDevice for Cartridge {
     fn read(&self, addr: Addr) -> u8 {
         match self {
-            Cartridge::None => {
-                assert!(
-                    addr.relative() <= 0x9fff,
-                    "Address {} out of range for cartridge",
-                    addr
-                );
-                0
-            }
+            Cartridge::None => NullRom::<0x10000>.read(addr),
             Cartridge::Mbc1(ref cart) => cart.read(addr),
         }
     }
 
     fn write(&mut self, addr: Addr, value: u8) {
         match self {
-            Cartridge::None => {
-                assert!(
-                    addr.relative() <= 0x9fff,
-                    "Address {} out of range for cartridge",
-                    addr
-                );
-            }
+            Cartridge::None => NullRom::<0x10000>.write(addr, value),
             Cartridge::Mbc1(ref mut cart) => cart.write(addr, value),
         }
     }
