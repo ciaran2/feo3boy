@@ -1,5 +1,5 @@
-use std::fmt;
 use std::convert::TryFrom;
+use std::fmt;
 
 use thiserror::Error;
 
@@ -103,12 +103,22 @@ pub struct NullRom<const N: usize>;
 
 impl<const N: usize> MemDevice for NullRom<N> {
     fn read(&self, addr: Addr) -> u8 {
-            assert!(addr.index() < N, "Address {}  out of range for {} byte nullrom", addr, N);
-            0
+        assert!(
+            addr.index() < N,
+            "Address {}  out of range for {} byte nullrom",
+            addr,
+            N
+        );
+        0
     }
 
     fn write(&mut self, addr: Addr, _value: u8) {
-            assert!(addr.index() < N, "Address {}  out of range for {} byte nullrom", addr, N);
+        assert!(
+            addr.index() < N,
+            "Address {}  out of range for {} byte nullrom",
+            addr,
+            N
+        );
     }
 }
 
@@ -118,6 +128,11 @@ impl<const N: usize> MemDevice for NullRom<N> {
 pub struct BiosRom(ReadOnly<[u8; 0x100]>);
 
 impl BiosRom {
+    /// Construct a `BiosRom` from an array of 256 bytes. Does not validate the contents.
+    pub fn new(data: [u8; 0x100]) -> Self {
+        Self(ReadOnly::new(data))
+    }
+
     /// Constructs a `BiosRom` from a slice of contained bytes. The slice must be exactly 256
     /// bytes. No other validation of the contents is performed.
     // TryFrom/TryInto aren't standard imports, so provide a convenience method that doesn't
@@ -162,7 +177,6 @@ impl TryFrom<&[u8]> for BiosRom {
         }
     }
 }
-
 
 /// Enum of different cartridge types.
 #[derive(Clone, Debug)]
@@ -302,7 +316,7 @@ impl MemDevice for Mbc1Rom {
                 self.rom_bank = (value & 0x1f).max(1);
             }
             0x4000..=0x5fff => {
-                // Take the 3 bottom bits as the bank set. These will be applied based on whether 
+                // Take the 3 bottom bits as the bank set. These will be applied based on whether
                 // the mode is ram mode or rom mode when used.
                 self.bank_set = value & 0x3;
             }
