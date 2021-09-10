@@ -257,30 +257,21 @@ impl MemDevice for Mbc1Rom {
     }
 }
 
-macro_rules! mem_array {
-    ($len:literal) => {
-        impl MemDevice for [u8; $len] {
-            fn read(&self, addr: Addr) -> u8 {
-                match self.get(addr.index()) {
-                    Some(val) => *val,
-                    None => panic!("Address {}  out of range for memory array", addr),
-                }
-            }
-
-            fn write(&mut self, addr: Addr, value: u8) {
-                match self.get_mut(addr.index()) {
-                    Some(val) => *val = value,
-                    None => panic!("Address {}  out of range for memory array", addr),
-                }
-            }
+impl<const N: usize> MemDevice for [u8; N] {
+    fn read(&self, addr: Addr) -> u8 {
+        match self.get(addr.index()) {
+            Some(val) => *val,
+            None => panic!("Address {}  out of range for memory array", addr),
         }
-    };
-}
+    }
 
-mem_array!(160);
-mem_array!(127);
-mem_array!(0x2000);
-mem_array!(0x10000);
+    fn write(&mut self, addr: Addr, value: u8) {
+        match self.get_mut(addr.index()) {
+            Some(val) => *val = value,
+            None => panic!("Address {}  out of range for memory array", addr),
+        }
+    }
+}
 
 /// Memory device connecting memory mapped IO.
 pub struct MemMappedIo {
