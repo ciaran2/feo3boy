@@ -35,8 +35,7 @@ fn main() {
             let mut bios_file = File::open(filename).unwrap();
             let mut bios = Vec::with_capacity(0x100);
             bios_file.read_to_end(&mut bios);
-            assert!(bios.len() == 0x100, "Bios file was wrong length");
-            BiosRom::new(&bios)
+            BiosRom::try_from_slice(&bios).expect("Bios file was wrong length")
         }
         None => BiosRom::default(),
     };

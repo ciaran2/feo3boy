@@ -1,4 +1,7 @@
 use std::fmt;
+use std::convert::TryFrom;
+
+use thiserror::Error;
 
 /// A memory address within system memory. Provides both the raw address and relative address so
 /// that devices can report both raw and relative addresses in error messages.
@@ -66,44 +69,105 @@ pub trait MemDevice {
     fn write(&mut self, addr: Addr, data: u8);
 }
 
-/// Rom for the bios, which is swapped out once started. Since it is rom, writes are ignored.
-pub struct BiosRom([u8; 0x100]);
+/// Wraps a memory device to make it read-only.
+#[repr(transparent)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct ReadOnly<M>(M);
+
+impl<M> ReadOnly<M> {
+    /// Constructs a ReadOnly memory device that wraps the given underlying memory.
+    pub fn new(mem: M) -> Self {
+        Self(mem)
+    }
+
+    /// Unwraps the inner memory device and returns it. This allows mutable access again.
+    pub fn into_inner(self) -> M {
+        self.0
+    }
+}
+
+impl<M: MemDevice> MemDevice for ReadOnly<M> {
+    fn read(&self, addr: Addr) -> u8 {
+        self.0.read(addr)
+    }
+
+    fn write(&mut self, addr: Addr, _value: u8) {
+        // Read the address to allow the wrapped device to validate the address range.
+        self.0.read(addr);
+    }
+}
+
+/// A rom which does bounds checks, but contains no actual memory (always returns 0, ignores
+/// writes).
+pub struct NullRom<const N: usize>;
+
+impl<const N: usize> MemDevice for NullRom<N> {
+    fn read(&self, addr: Addr) -> u8 {
+            assert!(addr.index() < N, "Address {}  out of range for {} byte nullrom", addr, N);
+            0
+    }
+
+    fn write(&mut self, addr: Addr, _value: u8) {
+            assert!(addr.index() < N, "Address {}  out of range for {} byte nullrom", addr, N);
+    }
+}
+
+/// Rom for the bios, which is swapped out once started.
+#[repr(transparent)]
+#[derive(Copy, Clone, Debug)]
+pub struct BiosRom(ReadOnly<[u8; 0x100]>);
 
 impl BiosRom {
-    /// Create a new BiosRom from a slice of bytes. The slice must have length == 256.
-    pub fn new(source: &[u8]) -> BiosRom {
-        let mut rom = [0; 0x100];
-        rom.copy_from_slice(source);
-        BiosRom(rom)
+    /// Constructs a `BiosRom` from a slice of contained bytes. The slice must be exactly 256
+    /// bytes. No other validation of the contents is performed.
+    // TryFrom/TryInto aren't standard imports, so provide a convenience method that doesn't
+    // require a TryFrom/TryInto import for the caller.
+    pub fn try_from_slice(data: &[u8]) -> Result<Self, BiosSizeError> {
+        Self::try_from(data)
     }
 }
 
 impl Default for BiosRom {
     fn default() -> Self {
-        BiosRom([0; 0x100])
+        Self(ReadOnly::new([0; 0x100]))
     }
 }
 
 impl MemDevice for BiosRom {
     fn read(&self, addr: Addr) -> u8 {
-        match self.0.get(addr.index()) {
-            Some(val) => *val,
-            None => panic!("Address {} out of range for bios", addr),
-        }
+        self.0.read(addr)
     }
 
-    fn write(&mut self, addr: Addr, _value: u8) {
-        assert!(
-            addr.index() < self.0.len(),
-            "Address {} out of range for bios",
-            addr
-        );
+    fn write(&mut self, addr: Addr, value: u8) {
+        self.0.write(addr, value)
     }
 }
 
+/// Error when converting a slice to a [`BiosRom`]. Contains the number of bytes of the given
+/// slice.
+#[derive(Copy, Clone, Debug, Error)]
+#[error("Expected exactly 256 bytes, got {0}")]
+pub struct BiosSizeError(pub usize);
+
+impl TryFrom<&[u8]> for BiosRom {
+    type Error = BiosSizeError;
+
+    fn try_from(data: &[u8]) -> Result<Self, BiosSizeError> {
+        if data.len() != 0x100 {
+            Err(BiosSizeError(data.len()))
+        } else {
+            let mut arr = [0; 0x100];
+            arr.copy_from_slice(data);
+            Ok(Self(ReadOnly::new(arr)))
+        }
+    }
+}
+
+
 /// Enum of different cartridge types.
+#[derive(Clone, Debug)]
 pub enum Cartridge {
-    /// No cartridge. All reads return 0 and all writes
+    /// No cartridge. All reads return 0 and all writes are ignored.
     None,
     /// An [`Mbc1Rom`]. This is boxed so that Cartridge doesn't always take up the full size of an
     /// Mbc1Rom even when it is set to None.
@@ -150,10 +214,11 @@ impl MemDevice for Cartridge {
 /// portion, and one after for the RAM. In this implementation, this split is ignored, and the two
 /// memory spaces are squished together. It is the responsibility of the caller to remap the memory
 /// spaces as needed to insert the GPU ram.
+#[derive(Clone, Debug)]
 pub struct Mbc1Rom {
     /// Set of rom banks loaded from the cartridge. Banks 32, 64, and 96 are unreachable but left
     /// in place for convenient addressing.
-    rom_banks: [[u8; 16384]; 128],
+    rom_banks: [ReadOnly<[u8; 16384]>; 128],
     /// Set of ram banks on this Mbc1Rom, if any. If none, this will just be zeros.
     ram_banks: [[u8; 8192]; 4],
     /// Whether this cartridge type has external ram support. If not, ram cannot be enabled, and
@@ -178,12 +243,12 @@ pub struct Mbc1Rom {
 
 impl Mbc1Rom {
     /// Convenient access to the fixed rom bank.
-    fn fixed_bank(&self) -> &[u8; 16384] {
+    fn fixed_bank(&self) -> &ReadOnly<[u8; 16384]> {
         &self.rom_banks[0]
     }
 
     /// Get the currently selected rom bank. This will never be bank 0, 32, 64, or 96.
-    fn rom_bank(&self) -> &[u8; 16384] {
+    fn rom_bank(&self) -> &ReadOnly<[u8; 16384]> {
         let low_order = self.rom_bank;
         // In RAM mode, bank_set is not used.
         let high_order = if self.ram_mode { 0 } else { self.bank_set << 5 };
@@ -210,13 +275,12 @@ impl Mbc1Rom {
 
 impl MemDevice for Mbc1Rom {
     fn read(&self, addr: Addr) -> u8 {
-        let idx = addr.index();
-        match idx {
-            0..=0x3fff => self.fixed_bank()[idx],
-            0x4000..=0x7fff => self.rom_bank()[idx - 0x4000],
+        match addr.relative() {
+            0..=0x3fff => self.fixed_bank().read(addr),
+            0x4000..=0x7fff => self.rom_bank().read(addr.offset_by(0x4000)),
             0x8000..=0x9fff => {
                 if self.ram_enable {
-                    self.ram_bank()[idx - 0x8000]
+                    self.ram_bank().read(addr.offset_by(0x8000))
                 } else {
                     0
                 }
@@ -238,8 +302,8 @@ impl MemDevice for Mbc1Rom {
                 self.rom_bank = (value & 0x1f).max(1);
             }
             0x4000..=0x5fff => {
-                // Take the 3 bottom bits as either the bank set. These will be applied based on
-                // whether the mode is ram mode or rom mode when used.
+                // Take the 3 bottom bits as the bank set. These will be applied based on whether 
+                // the mode is ram mode or rom mode when used.
                 self.bank_set = value & 0x3;
             }
             0x6000..=0x7fff => {
@@ -249,7 +313,7 @@ impl MemDevice for Mbc1Rom {
             0x8000..=0x9fff => {
                 if self.has_ram && self.ram_enable {
                     // Write to ram, if ram exists and is enable.
-                    self.ram_bank_mut()[addr.index() - 0x8000] = value;
+                    self.ram_bank_mut().write(addr.offset_by(0x8000), value);
                 }
             }
             _ => panic!("Address {} out of range for Mbc1Rom", addr),
@@ -261,14 +325,14 @@ impl<const N: usize> MemDevice for [u8; N] {
     fn read(&self, addr: Addr) -> u8 {
         match self.get(addr.index()) {
             Some(val) => *val,
-            None => panic!("Address {}  out of range for memory array", addr),
+            None => panic!("Address {}  out of range for {} byte memory array", addr, N),
         }
     }
 
     fn write(&mut self, addr: Addr, value: u8) {
         match self.get_mut(addr.index()) {
             Some(val) => *val = value,
-            None => panic!("Address {}  out of range for memory array", addr),
+            None => panic!("Address {}  out of range for {} byte memory array", addr, N),
         }
     }
 }
@@ -286,6 +350,7 @@ impl<D: MemDevice + ?Sized> MemDevice for Box<D> {
 }
 
 /// Memory device connecting memory mapped IO.
+#[derive(Clone, Debug)]
 pub struct MemMappedIo {
     bios_enabled: bool,
 }
@@ -333,6 +398,7 @@ impl MemDevice for MemMappedIo {
 }
 
 /// MemoryDevice which configures the standard memory mapping of the real GameBoy.
+#[derive(Clone, Debug)]
 pub struct GbMmu {
     /// The bios. Mapped to 0..0x100 while bios is enabled.
     bios: BiosRom,
@@ -353,6 +419,7 @@ pub struct GbMmu {
 
 impl GbMmu {
     /// Construct a new MMU with the given bios and cartridge.
+    /// Panics if the given bios data is not exactly 256 bytes.
     pub fn new(bios: BiosRom, cart: Cartridge) -> GbMmu {
         GbMmu {
             bios,
