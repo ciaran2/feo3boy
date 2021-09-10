@@ -273,6 +273,18 @@ impl<const N: usize> MemDevice for [u8; N] {
     }
 }
 
+// This makes sure that Box<dyn MemDevice> implements MemDevice (as well as Box<Anything that
+// implements MemDevice>).
+impl<D: MemDevice + ?Sized> MemDevice for Box<D> {
+    fn read(&self, addr: Addr) -> u8 {
+        (**self).read(addr)
+    }
+
+    fn write(&mut self, addr: Addr, value: u8) {
+        (**self).write(addr, value)
+    }
+}
+
 /// Memory device connecting memory mapped IO.
 pub struct MemMappedIo {
     bios_enabled: bool,
