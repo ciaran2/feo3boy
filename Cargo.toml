@@ -1,9 +1,5 @@
-[package]
-name = "feo3boy"
-version = "0.1.0"
-authors = ["ciaran"]
-edition = "2018"
-
-[dependencies]
-clap = "2"
-thiserror = "1"
+[workspace]
+members = [
+  "feo3boy",
+  "feo3boy-player",
+]
