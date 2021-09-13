@@ -3,10 +3,8 @@ use std::io::Read;
 
 use clap::{App, Arg};
 
-use memdev::{BiosRom, Cartridge, GbMmu};
-
-mod gbz80core;
-mod memdev;
+use feo3boy::gbz80core;
+use feo3boy::memdev::{BiosRom, Cartridge, GbMmu};
 
 fn main() {
     println!("feo3boy");
@@ -34,7 +32,9 @@ fn main() {
         Some(filename) => {
             let mut bios_file = File::open(filename).unwrap();
             let mut bios = Vec::with_capacity(0x100);
-            bios_file.read_to_end(&mut bios);
+            bios_file
+                .read_to_end(&mut bios)
+                .expect("Unable to read bios file");
             BiosRom::try_from_slice(&bios).expect("Bios file was wrong length")
         }
         None => BiosRom::default(),
