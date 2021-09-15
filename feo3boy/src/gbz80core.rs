@@ -2,6 +2,8 @@ use crate::memdev::MemDevice;
 
 use std::num::Wrapping;
 
+pub mod opcode;
+
 const FZERO: u8 = 0x80;
 const FSUB: u8 = 0x40;
 const FHALFCARRY: u8 = 0x20;
