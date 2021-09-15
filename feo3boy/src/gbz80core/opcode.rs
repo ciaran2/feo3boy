@@ -37,6 +37,9 @@ pub enum Opcode {
     /// Run the given operation on the ALU. The source is given by the operand, the destination is
     /// always `A`, the accumulator register.
     AluOp { op: AluOp, operand: Operand8 },
+    /// Run the given unary operation on the ALU. These ops all affect only the accumulator and
+    /// flags, or just the flags.
+    AluUnary(AluUnaryOp),
     /// Conditional call. Load unsigned 16 bit immediate, check condtion, then if condition matches
     /// push current PC and jump to the loaded address.
     Call(ConditionCode),
@@ -45,16 +48,35 @@ pub enum Opcode {
     Jump(ConditionCode),
     /// Conditional return. Check the condition, then pop the stack and jump to the address.
     Ret(ConditionCode),
+    /// Push a 16 bit register pair to the stack, moving the stack pointer.
+    Push(Operand16),
+    /// Pop a 16 bit register pair from the stack, moving the stack pointer.
+    Pop(Operand16),
     /// Loads and executes a prefixed instruction code.
     PrefixCB,
+    /// Disable interrupt handling.
+    DisableInterrupts,
+    /// Enable Interrupt handling.
+    EnableInterrupts,
+    /// Interrupt return, similar to unconditional return but also enables interrupts.
+    RetInterrupt,
+    /// Load an 8 bit *signed* immediate and add it to the stack pointer.
+    OffsetSp,
+    /// Load an 8 bit *signed* immediate and add it to the stack pointer, storing the result in HL.
+    AddressOfOffsetSp,
+    /// Jump to the address stored in HL.
+    JumpHL,
+    /// Reset with numeric arg.
+    Reset(u8),
     /// The instruction decoded to an opcode the processor doesn't actually have. This functions
     /// equivalently to Nop (I think????). Contained value is the raw opcode.
     MissingInstruction(u8),
 }
 
 impl Opcode {
-    /// Parse an opcode.
-    pub fn parse(opcode: u8) -> Self {
+    /// Decodes a u8 to an `Opcode`. All possible u8 values are valid `Opcode`s, so this cannot
+    /// fail.
+    pub fn decode(opcode: u8) -> Self {
         // Based on www.z80.info/decoding.htm, but adjusted based on codes which don't exist on the
         // GB Z80, using https://izik1.github.io/gbops/. Also referencing
         let x = (opcode & 0b11000000) >> 6;
@@ -101,7 +123,7 @@ impl Opcode {
                     dest: Operand8::from_regcode(y),
                     source: Operand8::Immediate,
                 },
-                7 => unimplemented!(),
+                7 => Self::AluUnary(AluUnaryOp::from_ycode(y)),
                 _ => unreachable!(),
             },
             1 => match (z, y) {
@@ -124,12 +146,26 @@ impl Opcode {
                         dest: Operand8::AddrRelImmediate,
                         source: Operand8::A,
                     },
+                    5 => Self::OffsetSp,
                     6 => Self::Load8 {
                         dest: Operand8::A,
                         source: Operand8::AddrRelImmediate,
                     },
-                    5 | 7 => unimplemented!(),
+                    7 => Self::AddressOfOffsetSp,
                     _ => unreachable!(),
+                },
+                1 => match q {
+                    false => Opcode::Pop(Operand16::from_pair_code_af(p)),
+                    true => match p {
+                        0 => Opcode::Ret(ConditionCode::Unconditional),
+                        1 => Opcode::RetInterrupt,
+                        2 => Opcode::JumpHL,
+                        3 => Opcode::Load16 {
+                            dest: Operand16::Sp,
+                            source: Operand16::HL,
+                        },
+                        _ => unreachable!(),
+                    },
                 },
                 2 => match y {
                     0..=3 => Self::Jump(ConditionCode::from_absolute_cond_code(y)),
@@ -158,7 +194,8 @@ impl Opcode {
                     1 => Self::PrefixCB,
                     // In, Out and EX insturctions are missing on GB Z80.
                     2..=5 => Self::MissingInstruction(opcode),
-                    6 | 7 => unimplemented!(),
+                    6 => Self::DisableInterrupts,
+                    7 => Self::EnableInterrupts,
                     _ => unreachable!(),
                 },
                 4 => match y {
@@ -168,7 +205,7 @@ impl Opcode {
                     _ => unreachable!(),
                 },
                 5 => match q {
-                    false => unimplemented!(),
+                    false => Opcode::Push(Operand16::from_pair_code_af(p)),
                     true => match p {
                         0 => Opcode::Call(ConditionCode::Unconditional),
                         // These are prefix instructions for prefixes the GB Z80 doesn't support.
@@ -180,7 +217,7 @@ impl Opcode {
                     op: AluOp::from_ycode(y),
                     operand: Operand8::Immediate,
                 },
-                1 | 7 => unimplemented!(),
+                7 => Opcode::Reset(y * 8),
                 _ => unreachable!(),
             },
             _ => unreachable!(),
@@ -204,13 +241,23 @@ impl fmt::Display for Opcode {
             Self::Add16(operand) => write!(f, "ADD HL,{}", operand),
             Self::Halt => f.write_str("HALT"),
             Self::AluOp { op, operand } => write!(f, "{} A,{}", op, operand),
-            Self::PrefixCB => f.write_str("PREFIX CB"),
+            Self::AluUnary(op) => fmt::Display::fmt(&op, f),
             Self::Call(ConditionCode::Unconditional) => f.write_str("CALL u16"),
             Self::Call(code) => write!(f, "CALL {},u16", code),
             Self::Jump(ConditionCode::Unconditional) => f.write_str("JP u16"),
             Self::Jump(code) => write!(f, "JP {},u16", code),
             Self::Ret(ConditionCode::Unconditional) => f.write_str("RET"),
             Self::Ret(code) => write!(f, "RET {}", code),
+            Self::Pop(operand) => write!(f, "POP {}", operand),
+            Self::Push(operand) => write!(f, "PUSH {}", operand),
+            Self::PrefixCB => f.write_str("PREFIX CB"),
+            Self::DisableInterrupts => f.write_str("DI"),
+            Self::EnableInterrupts => f.write_str("EI"),
+            Self::RetInterrupt => f.write_str("RETI"),
+            Self::OffsetSp => f.write_str("ADD SP,i8"),
+            Self::AddressOfOffsetSp => f.write_str("LD HL,SP+i8"),
+            Self::JumpHL => f.write_str("JP HL"),
+            Self::Reset(target) => write!(f, "RST {:02X}h", target),
             Self::MissingInstruction(opcode) => write!(f, "<Missing Instruction {:2X}>", opcode),
         }
     }
@@ -220,13 +267,13 @@ impl fmt::Display for Opcode {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum AluOp {
     Add,
-    Adc,
+    AddCarry,
     Sub,
-    Sbc,
+    SubCarry,
     And,
     Xor,
     Or,
-    Cp,
+    Compare,
 }
 
 impl AluOp {
@@ -234,13 +281,13 @@ impl AluOp {
     fn from_ycode(code: u8) -> Self {
         match code {
             0 => Self::Add,
-            1 => Self::Adc,
+            1 => Self::AddCarry,
             2 => Self::Sub,
-            3 => Self::Sbc,
+            3 => Self::SubCarry,
             4 => Self::And,
             5 => Self::Xor,
             6 => Self::Or,
-            7 => Self::Cp,
+            7 => Self::Compare,
             _ => panic!("Unrecognized ALU operation type (y code) {}", code),
         }
     }
@@ -250,13 +297,67 @@ impl fmt::Display for AluOp {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             Self::Add => f.write_str("ADD"),
-            Self::Adc => f.write_str("ADC"),
+            Self::AddCarry => f.write_str("ADC"),
             Self::Sub => f.write_str("SUB"),
-            Self::Sbc => f.write_str("SBC"),
+            Self::SubCarry => f.write_str("SBC"),
             Self::And => f.write_str("AND"),
             Self::Xor => f.write_str("XOR"),
             Self::Or => f.write_str("OR"),
-            Self::Cp => f.write_str("CP"),
+            Self::Compare => f.write_str("CP"),
+        }
+    }
+}
+
+/// Type of unary ALU operation. All ops here apply only to A and Flags.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum AluUnaryOp {
+    /// 8-bit left rotate. Bit 7 goes to both the carry and bit 0.
+    RotateLeft8,
+    /// 9-bit left rotate. Bit 7 goes to carry and carry goes to bit 0.
+    RotateLeft9,
+    /// 8-bit right rotate. Bit 0 goes to both the carry and bit 7.
+    RotateRight8,
+    /// 9-bit left rotate. Bit 0 goes to carry and carry goes to bit 7.
+    RotateRight9,
+    /// Helper for doing binary-coded-decimal. Adjusts the hex didgits to keep both nybbles in range
+    /// 0..=9 by adding 0x06 and/or 0x60 to push the digit to the next nybble.
+    DecimalAdjust,
+    /// Sets the carry flag.
+    SetCarryFlag,
+    /// Inverts the Accumulator.
+    Compliment,
+    /// Inverts the carry flag.
+    ComplimentCarryFlag,
+}
+
+impl AluUnaryOp {
+    /// Get the ALU unary operation type for the given opcode. Panics if the code is greater than 7.
+    fn from_ycode(code: u8) -> Self {
+        match code {
+            0 => Self::RotateLeft8,
+            1 => Self::RotateRight8,
+            2 => Self::RotateLeft9,
+            3 => Self::RotateRight9,
+            4 => Self::DecimalAdjust,
+            5 => Self::Compliment,
+            6 => Self::SetCarryFlag,
+            7 => Self::ComplimentCarryFlag,
+            _ => panic!("Unrecognized ALU unary operation type (y code) {}", code),
+        }
+    }
+}
+
+impl fmt::Display for AluUnaryOp {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Self::RotateLeft8 => f.write_str("RLCA"),
+            Self::RotateLeft9 => f.write_str("RLA"),
+            Self::RotateRight8 => f.write_str("RRCA"),
+            Self::RotateRight9 => f.write_str("RRA"),
+            Self::DecimalAdjust => f.write_str("DAA"),
+            Self::SetCarryFlag => f.write_str("SCF"),
+            Self::Compliment => f.write_str("CPL"),
+            Self::ComplimentCarryFlag => f.write_str("CCF"),
         }
     }
 }
@@ -460,6 +561,18 @@ impl fmt::Display for ConditionCode {
             Self::Zero => f.write_str("Z"),
             Self::NoCarry => f.write_str("NC"),
             Self::Carry => f.write_str("C"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn can_decode_any_opcode() {
+        for op in 0u8..=0xff {
+            Opcode::decode(op);
         }
     }
 }
