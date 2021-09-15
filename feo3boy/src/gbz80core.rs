@@ -80,7 +80,7 @@ impl Gbz80state {
 }
 
 pub fn tick(cpustate: &mut Gbz80state, mmu: &mut impl MemDevice) -> u64 {
-    println!("tick: pc @ 0x{:X}", cpustate.regs.pc);
+    println!("tick: pc @ {:#X}", cpustate.regs.pc);
     let opcode = pcload(cpustate, mmu);
     match dispatch(cpustate, mmu, opcode) {
         None => {

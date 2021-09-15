@@ -16,30 +16,28 @@ pub enum Opcode {
     /// Decrement the given 8 bit operand.
     Dec8(Operand8),
     /// Load a value from on 8 bit operand to another.
-    Load8 {
-        dest: Operand8,
-        source: Operand8,
-    },
+    Load8 { dest: Operand8, source: Operand8 },
     /// Increment the given 16 bit operand.
     Inc16(Operand16),
     /// Decrement the given 16 bit operand.
     Dec16(Operand16),
     /// Load a 16 bit value from one operand to another.
-    Load16 {
-        dest: Operand16,
-        source: Operand16,
-    },
+    Load16 { dest: Operand16, source: Operand16 },
     /// Add the given 16 bit operand to HL.
     Add16(Operand16),
     /// Halt instruction. Pauses but still accepts interrupts I think?
     Halt,
     /// Run the given operation on the ALU. The source is given by the operand, the destination is
     /// always `A`, the accumulator register.
-    AluOp {
-        op: AluOp,
-        operand: Operand8,
-    },
+    AluOp { op: AluOp, operand: Operand8 },
+    /// Conditional call. Load unsigned 16 bit immediate, check condtion, then if condition matches
+    /// push current PC and jump to the loaded address.
+    Call(ConditionCode),
+    /// Loads and executes a prefixed instruction code.
     PrefixCB,
+    /// The instruction decoded to an opcode the processor doesn't actually have. This functions
+    /// equivalently to Nop (I think????). Contained value is the raw opcode.
+    MissingInstruction(u8),
 }
 
 impl Opcode {
@@ -58,7 +56,9 @@ impl Opcode {
                     0 => Self::Nop,
                     1 => unimplemented!(),
                     2 => Self::Stop,
-                    code @ 3..=7 => Self::JumpRelative(ConditionCode::from_jrcode(code)),
+                    code @ 3..=7 => {
+                        Self::JumpRelative(ConditionCode::from_relative_cond_code(code))
+                    }
                     _ => unreachable!(),
                 },
                 1 => match q {
@@ -105,14 +105,31 @@ impl Opcode {
             3 => match z {
                 3 => match y {
                     1 => Opcode::PrefixCB,
-                    0 | 2 | 3 | 4 | 5 | 6 | 7 => unimplemented!(),
+                    // In, Out and EX insturctions are missing on GB Z80.
+                    2 | 3 | 4 | 5 => Opcode::MissingInstruction(opcode),
+                    0 | 6 | 7 => unimplemented!(),
                     _ => unreachable!(),
+                },
+                4 => match y {
+                    0..=3 => Opcode::Call(ConditionCode::from_absolute_cond_code(y)),
+                    // These are conditional calls for conditions the GB Z80 doesn't have.
+                    4..=7 => Opcode::MissingInstruction(opcode),
+                    _ => unreachable!(),
+                },
+                5 => match q {
+                    false => unimplemented!(),
+                    true => match p {
+                        0 => Opcode::Call(ConditionCode::Unconditional),
+                        // These are prefix instructions for prefixes the GB Z80 doesn't support.
+                        1..=3 => Opcode::MissingInstruction(opcode),
+                        _ => unreachable!(),
+                    },
                 },
                 6 => Self::AluOp {
                     op: AluOp::from_ycode(y),
                     operand: Operand8::Immediate,
                 },
-                0 | 1 | 2 | 4 | 5 | 7 => unimplemented!(),
+                0 | 1 | 2 | 7 => unimplemented!(),
                 _ => unreachable!(),
             },
             _ => unreachable!(),
@@ -137,6 +154,9 @@ impl fmt::Display for Opcode {
             Self::Halt => f.write_str("HALT"),
             Self::AluOp { op, operand } => write!(f, "{} A,{}", op, operand),
             Self::PrefixCB => f.write_str("PREFIX CB"),
+            Self::Call(ConditionCode::Unconditional) => f.write_str("CALL u16"),
+            Self::Call(code) => write!(f, "CALL {},u16", code),
+            Self::MissingInstruction(opcode) => write!(f, "<Missing Instruction {:2X}>", opcode),
         }
     }
 }
@@ -343,14 +363,23 @@ impl ConditionCode {
     /// Get the condition code for the given relative-jump condition code. Relative jump condition
     /// codes are for x = 0, z = 0, y = 3..=7 (the value given should be y). Panics if the given
     /// value is not in range 3..=7.
-    fn from_jrcode(code: u8) -> Self {
+    fn from_relative_cond_code(code: u8) -> Self {
         match code {
             3 => Self::Unconditional,
-            4 => Self::NonZero,
-            5 => Self::Zero,
-            6 => Self::NoCarry,
-            7 => Self::Carry,
+            4..=7 => Self::from_absolute_cond_code(code - 4),
             _ => panic!("Unrecognized Relative-Jump condtion code {}", code),
+        }
+    }
+
+    /// Get the condition code for the given jump, return, or call condition code. This never
+    /// returns `Unconditional`. The value must be in range 0..=3, otherwise this will panic.
+    fn from_absolute_cond_code(code: u8) -> Self {
+        match code {
+            0 => Self::NonZero,
+            1 => Self::Zero,
+            2 => Self::NoCarry,
+            3 => Self::Carry,
+            _ => panic!("Unrecognized Absolute-Jump condtion code {}", code),
         }
     }
 }
