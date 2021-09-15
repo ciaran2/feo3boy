@@ -80,11 +80,13 @@ impl Gbz80state {
 }
 
 pub fn tick(cpustate: &mut Gbz80state, mmu: &mut impl MemDevice) -> u64 {
-    println!("tick: pc @ {:#4X}", cpustate.regs.pc);
+    let expc = cpustate.regs.pc;
     let opcode = pcload(cpustate, mmu);
+    let decoded = opcode::Opcode::decode(opcode);
+    println!("tick: pc @ {:#06X}: {}", expc, decoded);
     match dispatch(cpustate, mmu, opcode) {
         None => {
-            println!("Unknown opcode {:#4X}. Skipping.", opcode);
+            println!("Unknown opcode {:#06X}. Skipping.", opcode);
             0
         }
         Some((cycles, flags, flagmask)) => {
