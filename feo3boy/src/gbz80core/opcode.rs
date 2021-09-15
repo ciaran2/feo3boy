@@ -1,8 +1,15 @@
 use std::fmt;
 
+// Opcode References:
+// - Decoding: www.z80.info/decoding.htm
+// - GB Z80 Opcode Table: https://izik1.github.io/gbops/
+// - Regular Z80 Opcode Table: http://z80-heaven.wikidot.com/opcode-reference-chart
+// - Regular Z80 Flag Reference: http://www.z80.info/z80sflag.htm
+// - GB Z80 Instruction Reference: https://rgbds.gbdev.io/docs/v0.4.1/gbz80.7
+
 /// Parsed Opcode, not including any arguments that may be loaded from immediates, nor any follow-up
 /// ops if the operation is a prefixed op.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Opcode {
     /// No operation.
     Nop,
@@ -33,6 +40,11 @@ pub enum Opcode {
     /// Conditional call. Load unsigned 16 bit immediate, check condtion, then if condition matches
     /// push current PC and jump to the loaded address.
     Call(ConditionCode),
+    /// Conditional absolute jump. Load unsigned 16 bit immediate, check condition, then if
+    /// condition matches, jump to the loaded address.
+    Jump(ConditionCode),
+    /// Conditional return. Check the condition, then pop the stack and jump to the address.
+    Ret(ConditionCode),
     /// Loads and executes a prefixed instruction code.
     PrefixCB,
     /// The instruction decoded to an opcode the processor doesn't actually have. This functions
@@ -44,7 +56,7 @@ impl Opcode {
     /// Parse an opcode.
     pub fn parse(opcode: u8) -> Self {
         // Based on www.z80.info/decoding.htm, but adjusted based on codes which don't exist on the
-        // GB Z80.
+        // GB Z80, using https://izik1.github.io/gbops/. Also referencing
         let x = (opcode & 0b11000000) >> 6;
         let p = (opcode & 0b00110000) >> 4;
         let y = (opcode & 0b00111000) >> 3;
@@ -54,11 +66,12 @@ impl Opcode {
             0 => match z {
                 0 => match y {
                     0 => Self::Nop,
-                    1 => unimplemented!(),
+                    1 => Self::Load16 {
+                        dest: Operand16::AddrImmediate,
+                        source: Operand16::Sp,
+                    },
                     2 => Self::Stop,
-                    code @ 3..=7 => {
-                        Self::JumpRelative(ConditionCode::from_relative_cond_code(code))
-                    }
+                    3..=7 => Self::JumpRelative(ConditionCode::from_relative_cond_code(y)),
                     _ => unreachable!(),
                 },
                 1 => match q {
@@ -103,17 +116,55 @@ impl Opcode {
                 operand: Operand8::from_regcode(z),
             },
             3 => match z {
+                0 => match y {
+                    0..=3 => Self::Ret(ConditionCode::from_absolute_cond_code(y)),
+                    // On normal Z80 these are more conditionals, which are replaced with extra load
+                    // ops on GB Z80.
+                    4 => Self::Load8 {
+                        dest: Operand8::AddrRelImmediate,
+                        source: Operand8::A,
+                    },
+                    6 => Self::Load8 {
+                        dest: Operand8::A,
+                        source: Operand8::AddrRelImmediate,
+                    },
+                    5 | 7 => unimplemented!(),
+                    _ => unreachable!(),
+                },
+                2 => match y {
+                    0..=3 => Self::Jump(ConditionCode::from_absolute_cond_code(y)),
+                    // On normal Z80 these are more conditionals, which are replaced with extra load
+                    // ops on GB Z80.
+                    4 => Self::Load8 {
+                        dest: Operand8::AddrRelC,
+                        source: Operand8::A,
+                    },
+                    5 => Self::Load8 {
+                        dest: Operand8::AddrImmediate,
+                        source: Operand8::A,
+                    },
+                    6 => Self::Load8 {
+                        dest: Operand8::A,
+                        source: Operand8::AddrRelC,
+                    },
+                    7 => Self::Load8 {
+                        dest: Operand8::A,
+                        source: Operand8::AddrImmediate,
+                    },
+                    _ => unreachable!(),
+                },
                 3 => match y {
-                    1 => Opcode::PrefixCB,
+                    0 => Self::Jump(ConditionCode::Unconditional),
+                    1 => Self::PrefixCB,
                     // In, Out and EX insturctions are missing on GB Z80.
-                    2 | 3 | 4 | 5 => Opcode::MissingInstruction(opcode),
-                    0 | 6 | 7 => unimplemented!(),
+                    2..=5 => Self::MissingInstruction(opcode),
+                    6 | 7 => unimplemented!(),
                     _ => unreachable!(),
                 },
                 4 => match y {
-                    0..=3 => Opcode::Call(ConditionCode::from_absolute_cond_code(y)),
+                    0..=3 => Self::Call(ConditionCode::from_absolute_cond_code(y)),
                     // These are conditional calls for conditions the GB Z80 doesn't have.
-                    4..=7 => Opcode::MissingInstruction(opcode),
+                    4..=7 => Self::MissingInstruction(opcode),
                     _ => unreachable!(),
                 },
                 5 => match q {
@@ -129,7 +180,7 @@ impl Opcode {
                     op: AluOp::from_ycode(y),
                     operand: Operand8::Immediate,
                 },
-                0 | 1 | 2 | 7 => unimplemented!(),
+                1 | 7 => unimplemented!(),
                 _ => unreachable!(),
             },
             _ => unreachable!(),
@@ -156,13 +207,17 @@ impl fmt::Display for Opcode {
             Self::PrefixCB => f.write_str("PREFIX CB"),
             Self::Call(ConditionCode::Unconditional) => f.write_str("CALL u16"),
             Self::Call(code) => write!(f, "CALL {},u16", code),
+            Self::Jump(ConditionCode::Unconditional) => f.write_str("JP u16"),
+            Self::Jump(code) => write!(f, "JP {},u16", code),
+            Self::Ret(ConditionCode::Unconditional) => f.write_str("RET"),
+            Self::Ret(code) => write!(f, "RET {}", code),
             Self::MissingInstruction(opcode) => write!(f, "<Missing Instruction {:2X}>", opcode),
         }
     }
 }
 
 /// ALU Operation type.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum AluOp {
     Add,
     Adc,
@@ -207,7 +262,7 @@ impl fmt::Display for AluOp {
 }
 
 /// 8 bit operand. Either the source or destination of an 8 bit operation.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Operand8 {
     // 8 bit registers.
     /// Normal register B.
@@ -224,6 +279,7 @@ pub enum Operand8 {
     L,
     /// Accumulator register.
     A,
+
     // Indirections of 16 bit register pairs.
     /// Dereference HL.
     AddrHL,
@@ -235,11 +291,18 @@ pub enum Operand8 {
     AddrHLInc,
     /// Dereference HL then decrement HL.
     AddrHLDec,
+    // Immediates
     /// Load value from immediate (and advance program counter). Cannot be used to store. Will
     /// panic if used as the destination operand.
     Immediate,
     /// Dereference a 16 bit immediate value.
     AddrImmediate,
+
+    // Offsets from 0xff00.
+    /// Dereference 0xff00 + register C.
+    AddrRelC,
+    /// Dereference 0xff00 + 8 bit immediate.
+    AddrRelImmediate,
 }
 
 impl Operand8 {
@@ -288,12 +351,14 @@ impl fmt::Display for Operand8 {
             Self::AddrHLDec => f.write_str("(HL-)"),
             Self::Immediate => f.write_str("u8"),
             Self::AddrImmediate => f.write_str("(u16)"),
+            Self::AddrRelC => f.write_str("(FF00+C)"),
+            Self::AddrRelImmediate => f.write_str("(FF00+u8)"),
         }
     }
 }
 
 /// 16 bit operand.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Operand16 {
     /// Register pair BC.
     BC,
@@ -308,6 +373,8 @@ pub enum Operand16 {
     /// Load value from immediate (and advance program counter). Cannot be used to store. Will
     /// panic if used as the destination operand.
     Immediate,
+    /// Load a 16 bit immediate (and advance program counter), then dereference that address.
+    AddrImmediate,
 }
 
 impl Operand16 {
@@ -345,12 +412,13 @@ impl fmt::Display for Operand16 {
             Operand16::AF => f.write_str("AF"),
             Operand16::Sp => f.write_str("SP"),
             Operand16::Immediate => f.write_str("u16"),
+            Operand16::AddrImmediate => f.write_str("(u16)"),
         }
     }
 }
 
 /// Conditional for conditional jump/conditional ret.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ConditionCode {
     Unconditional,
     NonZero,
