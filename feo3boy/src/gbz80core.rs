@@ -3,10 +3,11 @@ use std::borrow::BorrowMut;
 use bitflags::bitflags;
 
 use crate::memdev::MemDevice;
+pub use opcode::{CBOpcode, CBOperation, Opcode};
+pub use opcode_args::{AluOp, AluUnaryOp, ConditionCode, Operand16, Operand8};
 
-use self::opcode::Opcode;
-
-pub mod opcode;
+mod opcode;
+mod opcode_args;
 
 bitflags! {
     /// operation flags set after various operations.
@@ -150,10 +151,11 @@ pub trait CpuContext {
 }
 
 /// Runs a single instruction on the CPU.
-pub fn tick<B, C>(mut ctx: B) 
+pub fn tick<B, C>(mut ctx: B)
 // Using BorrowMut here allows both `&mut (Gbz80State, M)` and `(&mut Gbz80State, &mut M)` to be
 // passed as the argument.
-where B: BorrowMut<C>,
+where
+    B: BorrowMut<C>,
     C: CpuContext,
 {
     Opcode::load_and_execute(ctx.borrow_mut());
@@ -165,7 +167,7 @@ where B: BorrowMut<C>,
 //     cpustate.regs.sp -= Wrapping(1u16);
 //     mmu.write(cpustate.regs.sp.0.into(), (value & 0xFF) as u8);
 // }
-// 
+//
 // fn pop16(cpustate: &mut Gbz80State, mmu: &mut impl MemDevice) -> u16 {
 //     let mut ret = 0u16;
 //     ret |= mmu.read(cpustate.regs.sp.0.into()) as u16;
@@ -174,7 +176,7 @@ where B: BorrowMut<C>,
 //     cpustate.regs.sp += Wrapping(1u16);
 //     ret
 // }
-// 
+//
 // /**
 //  ** Register tasks
 //  **/
@@ -185,7 +187,7 @@ where B: BorrowMut<C>,
 //         (cpustate.regs.regs816.read8(regnum), 0)
 //     }
 // }
-// 
+//
 // fn reg_write8(cpustate: &mut Gbz80State, mmu: &mut impl MemDevice, regnum: u8, value: u8) -> u64 {
 //     if regnum == 0o6 {
 //         mmu.write(cpustate.regs.regs816.read16(0b10).into(), value);
@@ -195,38 +197,38 @@ where B: BorrowMut<C>,
 //         0
 //     }
 // }
-// 
+//
 // fn check_flag(cpustate: &Gbz80State, flag: u8) -> bool {
 //     0 != flag & cpustate.regs.regs816.read8(0b110)
 // }
-// 
+//
 // /*
 //  * Instruction implementations
 //  */
 // fn nop() -> (u64, u8, u8) {
 //     (4, FNONE, FNONE)
 // }
-// 
+//
 // fn load16imm(cpustate: &mut Gbz80State, mmu: &mut impl MemDevice, p: u8) -> (u64, u8, u8) {
 //     let toload = pcload(cpustate, mmu) as u16 + (pcload(cpustate, mmu) as u16) << 8;
-// 
+//
 //     match p {
 //         0..=2 => cpustate.regs.regs816.write16(p, toload),
 //         3 => cpustate.regs.sp = Wrapping(toload),
 //         _ => panic!("Error in instruction decoding at load16imm"),
 //     }
-// 
+//
 //     (12, FNONE, FNONE)
 // }
-// 
+//
 // fn load8imm(cpustate: &mut Gbz80State, mmu: &mut impl MemDevice, regnum: u8) -> (u64, u8, u8) {
 //     let toload = pcload(cpustate, mmu);
-// 
+//
 //     let cycle_offset = reg_write8(cpustate, mmu, regnum, toload);
-// 
+//
 //     (8 + cycle_offset, FNONE, FNONE)
 // }
-// 
+//
 // fn load8reg(
 //     cpustate: &mut Gbz80State,
 //     mmu: &mut impl MemDevice,
@@ -237,15 +239,15 @@ where B: BorrowMut<C>,
 //     let cycle_offset2 = reg_write8(cpustate, mmu, toregnum, toload);
 //     (4 + cycle_offset1 + cycle_offset2, FNONE, FNONE)
 // }
-// 
+//
 // fn add(cpustate: &mut Gbz80State, mmu: &mut impl MemDevice, regnum: u8) -> (u64, u8, u8) {
 //     let a = cpustate.regs.regs816.read8(0o7);
 //     let (reg, cycle_offset) = reg_fetch8(cpustate, mmu, regnum);
-// 
+//
 //     let result = a as u16 + reg as u16;
-// 
+//
 //     let mut flags = FNONE;
-// 
+//
 //     if 0 == result {
 //         flags |= FZERO;
 //     }
@@ -255,20 +257,20 @@ where B: BorrowMut<C>,
 //     if 0 != (((a & 0xf) + (reg & 0xf)) & 0x10) {
 //         flags |= FHALFCARRY;
 //     }
-// 
+//
 //     cpustate.regs.regs816.write8(0o7, (result & 0xff) as u8);
-// 
+//
 //     (4 + cycle_offset, flags, FALL)
 // }
-// 
+//
 // fn addc(cpustate: &mut Gbz80State, mmu: &mut impl MemDevice, regnum: u8) -> (u64, u8, u8) {
 //     let a = cpustate.regs.regs816.read8(0o7);
 //     let (reg, cycle_offset) = reg_fetch8(cpustate, mmu, regnum);
-// 
+//
 //     let result = a as u16 + reg as u16 + if check_flag(cpustate, FCARRY) { 1 } else { 0 };
-// 
+//
 //     let mut flags = FNONE;
-// 
+//
 //     if 0 == result {
 //         flags |= FZERO;
 //     }
@@ -278,20 +280,20 @@ where B: BorrowMut<C>,
 //     if 0 != (((a & 0xf) + (reg & 0xf)) & 0x10) {
 //         flags |= FHALFCARRY;
 //     }
-// 
+//
 //     cpustate.regs.regs816.write8(0o7, (result & 0xff) as u8);
-// 
+//
 //     (4 + cycle_offset, flags, FALL)
 // }
-// 
+//
 // fn sub(cpustate: &mut Gbz80State, mmu: &mut impl MemDevice, regnum: u8) -> (u64, u8, u8) {
 //     let a = cpustate.regs.regs816.read8(0o7);
 //     let (reg, cycle_offset) = reg_fetch8(cpustate, mmu, regnum);
-// 
+//
 //     let result = (Wrapping(a) - Wrapping(reg)).0;
-// 
+//
 //     let mut flags = FSUB;
-// 
+//
 //     if 0 == result {
 //         flags |= FZERO;
 //     }
@@ -301,16 +303,16 @@ where B: BorrowMut<C>,
 //     if (reg & 0xf) > (a & 0xf) {
 //         flags |= FHALFCARRY;
 //     }
-// 
+//
 //     cpustate.regs.regs816.write8(0o7, result);
-// 
+//
 //     (4 + cycle_offset, flags, FALL)
 // }
-// 
+//
 // fn subc(cpustate: &mut Gbz80State, mmu: &mut impl MemDevice, regnum: u8) -> (u64, u8, u8) {
 //     let a = cpustate.regs.regs816.read8(0o7);
 //     let (reg, cycle_offset) = reg_fetch8(cpustate, mmu, regnum);
-// 
+//
 //     let result = (Wrapping(a)
 //         - Wrapping(reg)
 //         - Wrapping(if check_flag(cpustate, FCARRY) {
@@ -319,9 +321,9 @@ where B: BorrowMut<C>,
 //             0u8
 //         }))
 //     .0;
-// 
+//
 //     let mut flags = FSUB;
-// 
+//
 //     if 0 == result {
 //         flags |= FZERO;
 //     }
@@ -331,16 +333,16 @@ where B: BorrowMut<C>,
 //     if (reg & 0xf) > (a & 0xf) {
 //         flags |= FHALFCARRY;
 //     }
-// 
+//
 //     cpustate.regs.regs816.write8(0o7, result);
-// 
+//
 //     (4 + cycle_offset, flags, FALL)
 // }
-// 
+//
 // fn and(cpustate: &mut Gbz80State, mmu: &mut impl MemDevice, regnum: u8) -> (u64, u8, u8) {
 //     let a = cpustate.regs.regs816.read8(0o7);
 //     let (reg, cycle_offset) = reg_fetch8(cpustate, mmu, regnum);
-// 
+//
 //     let result = a & reg;
 //     let flags = if 0 == result {
 //         FZERO | FHALFCARRY
@@ -350,33 +352,33 @@ where B: BorrowMut<C>,
 //     cpustate.regs.regs816.write8(0o7, result);
 //     (4 + cycle_offset, flags, FALL)
 // }
-// 
+//
 // fn xor(cpustate: &mut Gbz80State, mmu: &mut impl MemDevice, regnum: u8) -> (u64, u8, u8) {
 //     let a = cpustate.regs.regs816.read8(0o7);
 //     let (reg, cycle_offset) = reg_fetch8(cpustate, mmu, regnum);
-// 
+//
 //     let result = a ^ reg;
 //     let flags = if 0 == result { FZERO } else { FNONE };
 //     cpustate.regs.regs816.write8(0o7, result);
 //     (4 + cycle_offset, flags, FALL)
 // }
-// 
+//
 // fn or(cpustate: &mut Gbz80State, mmu: &mut impl MemDevice, regnum: u8) -> (u64, u8, u8) {
 //     let a = cpustate.regs.regs816.read8(0o7);
 //     let (reg, cycle_offset) = reg_fetch8(cpustate, mmu, regnum);
-// 
+//
 //     let result = a | reg;
 //     let flags = if 0 == result { FZERO } else { FNONE };
 //     cpustate.regs.regs816.write8(0o7, result);
 //     (4 + cycle_offset, flags, FALL)
 // }
-// 
+//
 // fn cp(cpustate: &mut Gbz80State, mmu: &mut impl MemDevice, regnum: u8) -> (u64, u8, u8) {
 //     let a = cpustate.regs.regs816.read8(0o7);
 //     let (reg, cycle_offset) = reg_fetch8(cpustate, mmu, regnum);
-// 
+//
 //     let mut flags = FSUB;
-// 
+//
 //     if a == reg {
 //         flags |= FZERO;
 //     }
@@ -386,133 +388,135 @@ where B: BorrowMut<C>,
 //     if (reg & 0xf) > (a & 0xf) {
 //         flags |= FHALFCARRY;
 //     }
-// 
+//
 //     (4 + cycle_offset, flags, FALL)
 // }
-// 
+//
 // fn rst(cpustate: &mut Gbz80State, mmu: &mut impl MemDevice, vec: u8) -> (u64, u8, u8) {
 //     push16(cpustate, mmu, cpustate.regs.pc.0);
 //     cpustate.regs.pc = Wrapping(vec as u16 * 8);
 //     (16, FNONE, FNONE)
 // }
 
+/////////////////////////////////////////
 // Utility implementations of CpuContext.
-mod contexts {
-    use crate::memdev::MemDevice;
-    use super::{Gbz80State, CpuContext};
+/////////////////////////////////////////
 
-    /// Allows a tuple of Gbz80State and any MemDevice to be used as CpuContext.
-    impl<M: MemDevice> CpuContext for (Gbz80State, M) {
-        type Mem = M;
-    
-        fn cpustate(&self) -> &Gbz80State { &self.0 }
-    
-        fn cpustate_mut(&mut self) -> &mut Gbz80State {
-            &mut self.0
-        }
-    
-        fn mem(&self) -> &Self::Mem {
-            &self.1
-        }
-    
-        fn mem_mut(&mut self) -> &mut Self::Mem {
-            &mut self.1
-        }
-    
-        /// With just a Gbz80State and arbitrary MemDevice, yielding actually does nothing.
-        fn yield1m(&mut self) {}
+/// Allows a tuple of Gbz80State and any MemDevice to be used as CpuContext.
+impl<M: MemDevice> CpuContext for (Gbz80State, M) {
+    type Mem = M;
+
+    fn cpustate(&self) -> &Gbz80State {
+        &self.0
     }
 
-    /// Allows a tuple of references to Gbz80State and any MemDevice to be used as CpuContext.
-    impl<M: MemDevice> CpuContext for (&mut Gbz80State, &mut M) {
-        type Mem = M;
-    
-        fn cpustate(&self) -> &Gbz80State { self.0 }
-    
-        fn cpustate_mut(&mut self) -> &mut Gbz80State {
-            self.0
-        }
-    
-        fn mem(&self) -> &Self::Mem {
-            self.1
-        }
-    
-        fn mem_mut(&mut self) -> &mut Self::Mem {
-            self.1
-        }
-    
-        /// With just a Gbz80State and arbitrary MemDevice, yielding actually does nothing.
-        fn yield1m(&mut self) {}
+    fn cpustate_mut(&mut self) -> &mut Gbz80State {
+        &mut self.0
     }
+
+    fn mem(&self) -> &Self::Mem {
+        &self.1
+    }
+
+    fn mem_mut(&mut self) -> &mut Self::Mem {
+        &mut self.1
+    }
+
+    /// With just a Gbz80State and arbitrary MemDevice, yielding actually does nothing.
+    fn yield1m(&mut self) {}
+}
+
+/// Allows a tuple of references to Gbz80State and any MemDevice to be used as CpuContext.
+impl<M: MemDevice> CpuContext for (&mut Gbz80State, &mut M) {
+    type Mem = M;
+
+    fn cpustate(&self) -> &Gbz80State {
+        self.0
+    }
+
+    fn cpustate_mut(&mut self) -> &mut Gbz80State {
+        self.0
+    }
+
+    fn mem(&self) -> &Self::Mem {
+        self.1
+    }
+
+    fn mem_mut(&mut self) -> &mut Self::Mem {
+        self.1
+    }
+
+    /// With just a Gbz80State and arbitrary MemDevice, yielding actually does nothing.
+    fn yield1m(&mut self) {}
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-//     #[test]
-//     fn test_loads_and_alu() {
-//         let mut cpustate = Gbz80State::new();
-//         let mut testmem = [0u8; 0x10000];
-// 
-//         testmem[0] = 0x3e;
-//         testmem[1] = 0x80;
-//         testmem[2] = 0x06;
-//         testmem[3] = 0x01;
-//         testmem[4] = 0x80;
-//         testmem[5] = 0x0e;
-//         testmem[6] = 0x85;
-//         testmem[7] = 0x81;
-// 
-//         tick((&mut cpustate, &mut testmem));
-// 
-//         assert_eq!(
-//             cpustate.regs.regs816.read8(0b111),
-//             0x80,
-//             "{:?}",
-//             cpustate.regs.regs816
-//         );
-// 
-//         tick(&mut cpustate, &mut testmem);
-// 
-//         assert_eq!(
-//             cpustate.regs.regs816.read8(0x0),
-//             0x01,
-//             "{:?}",
-//             cpustate.regs.regs816
-//         );
-// 
-//         tick(&mut cpustate, &mut testmem);
-// 
-//         assert_eq!(
-//             cpustate.regs.regs816.read8(0b111),
-//             0x81,
-//             "{:?}",
-//             cpustate.regs.regs816
-//         );
-// 
-//         tick(&mut cpustate, &mut testmem);
-// 
-//         assert_eq!(
-//             cpustate.regs.regs816.read8(0b001),
-//             0x85,
-//             "{:?}",
-//             cpustate.regs.regs816
-//         );
-// 
-//         tick(&mut cpustate, &mut testmem);
-// 
-//         assert_eq!(
-//             cpustate.regs.regs816.read8(0b111),
-//             0x6,
-//             "{:?}",
-//             cpustate.regs.regs816
-//         );
-//         assert_eq!(
-//             check_flag(&cpustate, FCARRY),
-//             true,
-//             "{:?}",
-//             cpustate.regs.regs816
-//         );
-//     }
+    //     #[test]
+    //     fn test_loads_and_alu() {
+    //         let mut cpustate = Gbz80State::new();
+    //         let mut testmem = [0u8; 0x10000];
+    //
+    //         testmem[0] = 0x3e;
+    //         testmem[1] = 0x80;
+    //         testmem[2] = 0x06;
+    //         testmem[3] = 0x01;
+    //         testmem[4] = 0x80;
+    //         testmem[5] = 0x0e;
+    //         testmem[6] = 0x85;
+    //         testmem[7] = 0x81;
+    //
+    //         tick((&mut cpustate, &mut testmem));
+    //
+    //         assert_eq!(
+    //             cpustate.regs.regs816.read8(0b111),
+    //             0x80,
+    //             "{:?}",
+    //             cpustate.regs.regs816
+    //         );
+    //
+    //         tick(&mut cpustate, &mut testmem);
+    //
+    //         assert_eq!(
+    //             cpustate.regs.regs816.read8(0x0),
+    //             0x01,
+    //             "{:?}",
+    //             cpustate.regs.regs816
+    //         );
+    //
+    //         tick(&mut cpustate, &mut testmem);
+    //
+    //         assert_eq!(
+    //             cpustate.regs.regs816.read8(0b111),
+    //             0x81,
+    //             "{:?}",
+    //             cpustate.regs.regs816
+    //         );
+    //
+    //         tick(&mut cpustate, &mut testmem);
+    //
+    //         assert_eq!(
+    //             cpustate.regs.regs816.read8(0b001),
+    //             0x85,
+    //             "{:?}",
+    //             cpustate.regs.regs816
+    //         );
+    //
+    //         tick(&mut cpustate, &mut testmem);
+    //
+    //         assert_eq!(
+    //             cpustate.regs.regs816.read8(0b111),
+    //             0x6,
+    //             "{:?}",
+    //             cpustate.regs.regs816
+    //         );
+    //         assert_eq!(
+    //             check_flag(&cpustate, FCARRY),
+    //             true,
+    //             "{:?}",
+    //             cpustate.regs.regs816
+    //         );
+    //     }
 }
