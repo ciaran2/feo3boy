@@ -2,8 +2,8 @@ use std::fmt;
 
 use log::{debug, trace};
 
+use super::oputils::{add8_flags, offset_addr, sub8_flags};
 use super::{AluOp, AluUnaryOp, ConditionCode, CpuContext, Flags, Operand16, Operand8};
-use crate::memdev::MemDevice;
 
 // Opcode References:
 // - Decoding: www.z80.info/decoding.htm
@@ -245,6 +245,8 @@ impl Opcode {
             Self::Nop => {}
             Self::JumpRelative(cond) => jump_relative(ctx, cond),
             Self::Inc8(operand) => inc8(ctx, operand),
+            Self::Dec8(operand) => dec8(ctx, operand),
+            Self::AluOp { operand, op } => alu_op(ctx, operand, op),
             Self::MissingInstruction(_) => {}
             _ => panic!("Opcode {} Not Implemented", self),
         }
@@ -293,14 +295,6 @@ impl fmt::Display for Opcode {
 // Opcode Implementations:
 //////////////////////////
 
-/// Get the result of applying an 8 bit offset to a 16 bit address.
-fn offset_addr(addr: u16, offset: i8) -> u16 {
-    // Perform sign-extension, then treat as u16.
-    let offset = offset as i16 as u16;
-    // In two's compliment, adding a negative is the same as adding with wraparound.
-    addr.wrapping_add(offset)
-}
-
 /// Implements the relative jump instruction.
 fn jump_relative(ctx: &mut impl CpuContext, cond: ConditionCode) {
     // Loading the offset also moves the program counter over the next instruction, which is
@@ -318,7 +312,32 @@ fn jump_relative(ctx: &mut impl CpuContext, cond: ConditionCode) {
 
 /// Implements 8 bit increment instruction.
 fn inc8(ctx: &mut impl CpuContext, operand: Operand8) {
-    unimplemented!()
+    // Inc doesn't set the carry flag.
+    const MASK: Flags = Flags::all().difference(Flags::CARRY);
+
+    let val = operand.load(ctx);
+    let (res, flags) = add8_flags(val, 1);
+    trace!("Evaluating INC {} ({} => {})", operand, val, res);
+    ctx.cpustate_mut().regs.flags.merge(flags, MASK);
+    operand.store(ctx, res);
+}
+
+/// Implements 8 bit decrement instruction.
+fn dec8(ctx: &mut impl CpuContext, operand: Operand8) {
+    // Dec doesn't set the carry flag.
+    const MASK: Flags = Flags::all().difference(Flags::CARRY);
+
+    let val = operand.load(ctx);
+    let (res, flags) = sub8_flags(val, 1);
+    trace!("Evaluating DEC {} ({} => {})", operand, val, res);
+    ctx.cpustate_mut().regs.flags.merge(flags, MASK);
+    operand.store(ctx, res);
+}
+
+/// Runs an ALU operation.
+fn alu_op(ctx: &mut impl CpuContext, operand: Operand8, op: AluOp) {
+    let arg = operand.load(ctx);
+    op.eval(ctx, arg);
 }
 
 //////////////////////

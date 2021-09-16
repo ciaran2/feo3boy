@@ -8,6 +8,7 @@ pub use opcode_args::{AluOp, AluUnaryOp, ConditionCode, Operand16, Operand8};
 
 mod opcode;
 mod opcode_args;
+mod oputils;
 
 bitflags! {
     /// operation flags set after various operations.
@@ -22,6 +23,32 @@ bitflags! {
         /// there was a carry out of the top of the number (bit 7 -> carry for u8, presumably bit 15
         /// -> carry for u16, though not sure).
         const CARRY = 0x10;
+    }
+}
+
+impl Flags {
+    /// Merge the given flags into the current flags by applying the given mask to set only flags in
+    /// that mask.
+    pub fn merge(&mut self, flags: Flags, mask: Flags) {
+        *self = (*self & !mask) | (flags & mask);
+    }
+
+    /// If the value is zero, returns `Flags::ZERO`, otherwise returns `Flags::empty()`.
+    pub fn check_zero(val: u8) -> Flags {
+        if val == 0 {
+            Flags::ZERO
+        } else {
+            Flags::empty()
+        }
+    }
+
+    /// If carry is true, returns `Flags::CARRY` otherwise returns `Flags::empty()`.
+    pub fn check_carry(carry: bool) -> Flags {
+        if carry {
+            Flags::CARRY
+        } else {
+            Flags::empty()
+        }
     }
 }
 

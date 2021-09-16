@@ -2,6 +2,7 @@ use std::fmt;
 
 use log::trace;
 
+use super::oputils::{add8_flags, sub8_flags};
 use super::{CpuContext, Flags};
 use crate::memdev::MemDevice;
 
@@ -31,6 +32,63 @@ impl AluOp {
             6 => Self::Or,
             7 => Self::Compare,
             _ => panic!("Unrecognized ALU operation type (y code) {}", code),
+        }
+    }
+
+    /// Evaluate this ALU operation, updating the accumulator and flags. The argument to the
+    /// operation should already have been loaded by the caller and passed as `arg`.
+    pub(super) fn eval(self, ctx: &mut impl CpuContext, arg: u8) {
+        trace!("Evaluating {} A,{}", self, arg);
+        match self {
+            Self::Add => {
+                let (res, flags) = add8_flags(ctx.cpustate().regs.acc, arg);
+                ctx.cpustate_mut().regs.acc = res;
+                ctx.cpustate_mut().regs.flags = flags;
+            }
+            Self::AddCarry => {
+                let (mut res, mut flags) = add8_flags(ctx.cpustate().regs.acc, arg);
+                if ctx.cpustate().regs.flags.contains(Flags::CARRY) {
+                    let (res2, flags2) = add8_flags(res, 1);
+                    res = res2;
+                    flags |= flags2;
+                }
+                ctx.cpustate_mut().regs.acc = res;
+                ctx.cpustate_mut().regs.flags = flags;
+            }
+            Self::Sub => {
+                let (res, flags) = sub8_flags(ctx.cpustate().regs.acc, arg);
+                ctx.cpustate_mut().regs.acc = res;
+                ctx.cpustate_mut().regs.flags = flags;
+            }
+            Self::SubCarry => {
+                let (mut res, mut flags) = sub8_flags(ctx.cpustate().regs.acc, arg);
+                if ctx.cpustate().regs.flags.contains(Flags::CARRY) {
+                    let (res2, flags2) = sub8_flags(res, 1);
+                    res = res2;
+                    flags |= flags2;
+                }
+                ctx.cpustate_mut().regs.acc = res;
+                ctx.cpustate_mut().regs.flags = flags;
+            }
+            Self::And => {
+                let res = ctx.cpustate().regs.acc & arg;
+                ctx.cpustate_mut().regs.acc = res;
+                ctx.cpustate_mut().regs.flags = Flags::HALFCARRY | Flags::check_zero(res);
+            }
+            Self::Or => {
+                let res = ctx.cpustate().regs.acc | arg;
+                ctx.cpustate_mut().regs.acc = res;
+                ctx.cpustate_mut().regs.flags = Flags::check_zero(res);
+            }
+            Self::Xor => {
+                let res = ctx.cpustate().regs.acc ^ arg;
+                ctx.cpustate_mut().regs.acc = res;
+                ctx.cpustate_mut().regs.flags = Flags::check_zero(res);
+            }
+            Self::Compare => {
+                let (_, flags) = sub8_flags(ctx.cpustate().regs.acc, arg);
+                ctx.cpustate_mut().regs.flags = flags;
+            }
         }
     }
 }
@@ -233,6 +291,63 @@ impl Operand8 {
                 let addr = 0xFF00 + Self::Immediate.load(ctx) as u16;
                 ctx.yield1m();
                 ctx.mem().read(addr.into())
+            }
+        }
+    }
+
+    /// Store this operand from on the CPU context, yielding for memory access if needed.
+    pub(super) fn store(self, ctx: &mut impl CpuContext, val: u8) {
+        trace!("Operand8::store {} -> {}", val, self);
+        match self {
+            Self::A => ctx.cpustate_mut().regs.acc = val,
+            Self::B => ctx.cpustate_mut().regs.b = val,
+            Self::C => ctx.cpustate_mut().regs.c = val,
+            Self::D => ctx.cpustate_mut().regs.d = val,
+            Self::E => ctx.cpustate_mut().regs.e = val,
+            Self::H => ctx.cpustate_mut().regs.h = val,
+            Self::L => ctx.cpustate_mut().regs.l = val,
+            Self::AddrHL => {
+                let addr = ctx.cpustate().regs.hl();
+                ctx.yield1m();
+                ctx.mem_mut().write(addr.into(), val)
+            }
+            Self::AddrBC => {
+                let addr = ctx.cpustate().regs.bc();
+                ctx.yield1m();
+                ctx.mem_mut().write(addr.into(), val)
+            }
+            Self::AddrDE => {
+                let addr = ctx.cpustate().regs.de();
+                ctx.yield1m();
+                ctx.mem_mut().write(addr.into(), val)
+            }
+            Self::AddrHLInc => {
+                let addr = ctx.cpustate().regs.hl();
+                ctx.yield1m();
+                ctx.cpustate_mut().regs.set_hl(addr.wrapping_add(1));
+                ctx.mem_mut().write(addr.into(), val)
+            }
+            Self::AddrHLDec => {
+                let addr = ctx.cpustate().regs.hl();
+                ctx.yield1m();
+                ctx.cpustate_mut().regs.set_hl(addr.wrapping_sub(1));
+                ctx.mem_mut().write(addr.into(), val)
+            }
+            Self::Immediate => panic!("Immediates cannot be used as store destinations"),
+            Self::AddrImmediate => {
+                let addr = Operand16::Immediate.load(ctx);
+                ctx.yield1m();
+                ctx.mem_mut().write(addr.into(), val)
+            }
+            Self::AddrRelC => {
+                let addr = 0xFF00 + ctx.cpustate().regs.c as u16;
+                ctx.yield1m();
+                ctx.mem_mut().write(addr.into(), val)
+            }
+            Self::AddrRelImmediate => {
+                let addr = 0xFF00 + Self::Immediate.load(ctx) as u16;
+                ctx.yield1m();
+                ctx.mem_mut().write(addr.into(), val)
             }
         }
     }
