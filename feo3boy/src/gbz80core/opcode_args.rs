@@ -1,4 +1,5 @@
 use std::fmt;
+use std::num::Wrapping;
 
 use log::trace;
 
@@ -234,9 +235,9 @@ impl Operand8 {
         }
     }
 
-    /// Load this operand from the CPU context, yielding for memory access if needed.
-    pub(super) fn load(self, ctx: &mut impl CpuContext) -> u8 {
-        trace!("Operand8::load {}", self);
+    /// Read this operand from the CPU context, yielding for memory access if needed.
+    pub(super) fn read(self, ctx: &mut impl CpuContext) -> u8 {
+        trace!("Operand8::read {}", self);
         match self {
             Self::A => ctx.cpustate().regs.acc,
             Self::B => ctx.cpustate().regs.b,
@@ -278,7 +279,7 @@ impl Operand8 {
                 ctx.mem().read(addr.into())
             }
             Self::AddrImmediate => {
-                let addr = Operand16::Immediate.load(ctx);
+                let addr = Operand16::Immediate.read(ctx);
                 ctx.yield1m();
                 ctx.mem().read(addr.into())
             }
@@ -288,16 +289,16 @@ impl Operand8 {
                 ctx.mem().read(addr.into())
             }
             Self::AddrRelImmediate => {
-                let addr = 0xFF00 + Self::Immediate.load(ctx) as u16;
+                let addr = 0xFF00 + Self::Immediate.read(ctx) as u16;
                 ctx.yield1m();
                 ctx.mem().read(addr.into())
             }
         }
     }
 
-    /// Store this operand from on the CPU context, yielding for memory access if needed.
-    pub(super) fn store(self, ctx: &mut impl CpuContext, val: u8) {
-        trace!("Operand8::store {} -> {}", val, self);
+    /// Write this operand to the CPU context, yielding for memory access if needed.
+    pub(super) fn write(self, ctx: &mut impl CpuContext, val: u8) {
+        trace!("Operand8::write {} -> {}", val, self);
         match self {
             Self::A => ctx.cpustate_mut().regs.acc = val,
             Self::B => ctx.cpustate_mut().regs.b = val,
@@ -335,7 +336,7 @@ impl Operand8 {
             }
             Self::Immediate => panic!("Immediates cannot be used as store destinations"),
             Self::AddrImmediate => {
-                let addr = Operand16::Immediate.load(ctx);
+                let addr = Operand16::Immediate.read(ctx);
                 ctx.yield1m();
                 ctx.mem_mut().write(addr.into(), val)
             }
@@ -345,7 +346,7 @@ impl Operand8 {
                 ctx.mem_mut().write(addr.into(), val)
             }
             Self::AddrRelImmediate => {
-                let addr = 0xFF00 + Self::Immediate.load(ctx) as u16;
+                let addr = 0xFF00 + Self::Immediate.read(ctx) as u16;
                 ctx.yield1m();
                 ctx.mem_mut().write(addr.into(), val)
             }
@@ -423,22 +424,44 @@ impl Operand16 {
         }
     }
 
-    /// Load this operand from the CPU context, yielding for memory access if needed.
-    pub(super) fn load(self, ctx: &mut impl CpuContext) -> u16 {
-        trace!("Operand16::load {}", self);
+    /// Read this operand from the CPU context, yielding for memory access if needed.
+    pub(super) fn read(self, ctx: &mut impl CpuContext) -> u16 {
+        trace!("Operand16::read {}", self);
         match self {
             Self::BC => ctx.cpustate().regs.bc(),
-            Self::DE => ctx.cpustate().regs.bc(),
-            Self::HL => ctx.cpustate().regs.bc(),
-            Self::AF => ctx.cpustate().regs.bc(),
+            Self::DE => ctx.cpustate().regs.de(),
+            Self::HL => ctx.cpustate().regs.hl(),
+            Self::AF => ctx.cpustate().regs.af(),
             Self::Sp => ctx.cpustate().regs.sp,
             Self::Immediate => {
-                let low = Operand8::Immediate.load(ctx);
-                let high = Operand8::Immediate.load(ctx);
+                let low = Operand8::Immediate.read(ctx);
+                let high = Operand8::Immediate.read(ctx);
                 u16::from_le_bytes([low, high])
             }
             Self::AddrImmediate => {
                 panic!("No actual operation uses (u16) as the source for a 16 bit load")
+            }
+        }
+    }
+
+    /// Write this operand to the CPU context, yielding for memory access if needed.
+    pub(super) fn write(self, ctx: &mut impl CpuContext, val: u16) {
+        trace!("Operand16::write {} -> {}", val, self);
+        match self {
+            Self::BC => ctx.cpustate_mut().regs.set_bc(val),
+            Self::DE => ctx.cpustate_mut().regs.set_de(val),
+            Self::HL => ctx.cpustate_mut().regs.set_hl(val),
+            Self::AF => ctx.cpustate_mut().regs.set_af(val),
+            Self::Sp => ctx.cpustate_mut().regs.sp = val,
+            Self::Immediate => panic!("Immediates cannot be used as store destinations"),
+            Self::AddrImmediate => {
+                let [low, high] = val.to_le_bytes();
+                let mut addr = Wrapping(Self::Immediate.read(ctx));
+                ctx.yield1m();
+                ctx.mem_mut().write(addr.0.into(), low);
+                addr += Wrapping(1u16);
+                ctx.yield1m();
+                ctx.mem_mut().write(addr.0.into(), high);
             }
         }
     }

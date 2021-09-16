@@ -233,7 +233,7 @@ impl Opcode {
     pub(super) fn load_and_execute(ctx: &mut impl CpuContext) {
         let pc = ctx.cpustate().regs.pc;
         trace!("Loading opcode at {:#6X}", pc);
-        let opcode = Operand8::Immediate.load(ctx);
+        let opcode = Operand8::Immediate.read(ctx);
         let opcode = Self::decode(opcode);
         debug!("Executing @ {:#6X}: {}", pc, opcode);
         opcode.execute(ctx);
@@ -246,6 +246,11 @@ impl Opcode {
             Self::JumpRelative(cond) => jump_relative(ctx, cond),
             Self::Inc8(operand) => inc8(ctx, operand),
             Self::Dec8(operand) => dec8(ctx, operand),
+            Self::Load8 { dest, source } => load8(ctx, dest, source),
+            Self::Inc16(operand) => inc16(ctx, operand),
+            Self::Dec16(operand) => dec16(ctx, operand),
+            Self::Load16 { dest, source } => load16(ctx, dest, source),
+            Self::Add16(operand) => add16(ctx, operand),
             Self::AluOp { operand, op } => alu_op(ctx, operand, op),
             Self::MissingInstruction(_) => {}
             _ => panic!("Opcode {} Not Implemented", self),
@@ -299,7 +304,7 @@ impl fmt::Display for Opcode {
 fn jump_relative(ctx: &mut impl CpuContext, cond: ConditionCode) {
     // Loading the offset also moves the program counter over the next instruction, which is
     // good because the jump is relative to the following instruction.
-    let offset = Operand8::Immediate.load(ctx) as i8;
+    let offset = Operand8::Immediate.read(ctx) as i8;
     let base = ctx.cpustate().regs.pc;
     let dest = offset_addr(base, offset);
     if cond.evaluate(ctx) {
@@ -315,11 +320,11 @@ fn inc8(ctx: &mut impl CpuContext, operand: Operand8) {
     // Inc doesn't set the carry flag.
     const MASK: Flags = Flags::all().difference(Flags::CARRY);
 
-    let val = operand.load(ctx);
+    let val = operand.read(ctx);
     let (res, flags) = add8_flags(val, 1);
     trace!("Evaluating INC {} ({} => {})", operand, val, res);
     ctx.cpustate_mut().regs.flags.merge(flags, MASK);
-    operand.store(ctx, res);
+    operand.write(ctx, res);
 }
 
 /// Implements 8 bit decrement instruction.
@@ -327,16 +332,81 @@ fn dec8(ctx: &mut impl CpuContext, operand: Operand8) {
     // Dec doesn't set the carry flag.
     const MASK: Flags = Flags::all().difference(Flags::CARRY);
 
-    let val = operand.load(ctx);
+    let val = operand.read(ctx);
     let (res, flags) = sub8_flags(val, 1);
     trace!("Evaluating DEC {} ({} => {})", operand, val, res);
     ctx.cpustate_mut().regs.flags.merge(flags, MASK);
-    operand.store(ctx, res);
+    operand.write(ctx, res);
+}
+
+/// Implements 8 bit load operations.
+fn load8(ctx: &mut impl CpuContext, dest: Operand8, source: Operand8) {
+    let val = source.read(ctx);
+    trace!("Evaluating LD {},{} (<- {})", dest, source, val);
+    dest.write(ctx, val);
+}
+
+/// Implements 16 bit increment instruction.
+fn inc16(ctx: &mut impl CpuContext, operand: Operand16) {
+    // 16 bit inc doesn't set any flags, and all actual operands are always registers, but it does
+    // delay by 1 additional M cycle, probably because it has to operate on two bytes.
+    let val = operand.read(ctx);
+    let res = val.wrapping_add(1);
+    trace!("Evaluating INC {} ({} => {})", operand, val, res);
+    ctx.yield1m();
+    operand.write(ctx, res);
+}
+
+/// Implements 16 bit decrement instruction.
+fn dec16(ctx: &mut impl CpuContext, operand: Operand16) {
+    // 16 bit dec doesn't set any flags, and all actual operands are always registers, but it does
+    // delay by 1 additional M cycle, probably because it has to operate on two bytes.
+    let val = operand.read(ctx);
+    let res = val.wrapping_sub(1);
+    trace!("Evaluating DEC {} ({} => {})", operand, val, res);
+    ctx.yield1m();
+    operand.write(ctx, res);
+}
+
+/// Implements 16 bit load operations.
+fn load16(ctx: &mut impl CpuContext, dest: Operand16, source: Operand16) {
+    let val = source.read(ctx);
+    if (dest, source) == (Operand16::Sp, Operand16::HL) {
+        // Most of the 16 bit loads are <Pair>,<Immediate> and take time based on number of memory
+        // accesses. There are two exceptions. LD (u16),SP, which is also just timed based on the
+        // number of memory accesses, and LD SP,HL, which is all registers but still takes an extra
+        // 1m cycle, which isn't automatically provided by Operand16 register interactions, so we
+        // insert it here.
+        ctx.yield1m();
+    }
+    trace!("Evaluating LD {},{} (<- {})", dest, source, val);
+    dest.write(ctx, val);
+}
+
+/// Implements 16 bit register add into HL. Never sets the zero flag and clears the subtract flag,
+/// but does set carry and half-carry based on the upper byte of the operation (as if it was
+/// performed by running the pseudo-instructions `add l,<arg-low>; adc h,<arg-high>`.
+fn add16(ctx: &mut impl CpuContext, arg: Operand16) {
+    // 16 bit add never modifies the zero flag.
+    const MASK: Flags = Flags::all().difference(Flags::ZERO);
+
+    let lhs = ctx.cpustate().regs.hl();
+    let rhs = arg.read(ctx); // This will always be a register in practice.
+
+    let mut flags = Flags::empty();
+    if (lhs & 0x7ff) + (rhs & 0x7ff) > 0x7ff {
+        flags |= Flags::HALFCARRY;
+    }
+    let (res, carry) = lhs.overflowing_add(rhs);
+    flags |= Flags::check_carry(carry);
+
+    ctx.cpustate_mut().regs.set_hl(res);
+    ctx.cpustate_mut().regs.flags.merge(flags, MASK);
 }
 
 /// Runs an ALU operation.
 fn alu_op(ctx: &mut impl CpuContext, operand: Operand8, op: AluOp) {
-    let arg = operand.load(ctx);
+    let arg = operand.read(ctx);
     op.eval(ctx, arg);
 }
 
