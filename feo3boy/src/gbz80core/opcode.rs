@@ -1,5 +1,10 @@
 use std::fmt;
 
+use log::{trace, debug};
+
+use crate::memdev::MemDevice;
+use super::CpuContext;
+
 // Opcode References:
 // - Decoding: www.z80.info/decoding.htm
 // - GB Z80 Opcode Table: https://izik1.github.io/gbops/
@@ -223,6 +228,25 @@ impl Opcode {
             _ => unreachable!(),
         }
     }
+
+    /// Load and execute a single opcode from the given context.
+    pub(super) fn load_and_execute(ctx: &mut impl CpuContext) {
+        let pc = ctx.cpustate().regs.pc;
+        trace!("Loading opcode at {:#6X}", pc);
+        let opcode = Operand8::Immediate.load(ctx);
+        let opcode = Self::decode(opcode);
+        debug!("Executing @ {:#6X}: {}", pc, opcode);
+        opcode.execute(ctx);
+    }
+
+    /// Execute this opcode on the given context.
+    fn execute(self, ctx: &mut impl CpuContext) {
+        match self {
+            Self::Nop => {}
+            Self::MissingInstruction(_) => {}
+            _ => panic!("Opcode {} Not Implemented", self),
+        }
+    }
 }
 
 impl fmt::Display for Opcode {
@@ -433,6 +457,67 @@ impl Operand8 {
             _ => panic!("Unrecognized indirection code {}", code),
         }
     }
+
+    /// Load this operand from the CPU context, yielding for memory access if needed.
+    fn load(self, ctx: &mut impl CpuContext) -> u8 {
+        trace!("Operand8::load {}", self);
+        match self {
+            Self::A => ctx.cpustate().regs.acc,
+            Self::B => ctx.cpustate().regs.b,
+            Self::C => ctx.cpustate().regs.c,
+            Self::D => ctx.cpustate().regs.d,
+            Self::E => ctx.cpustate().regs.e,
+            Self::H => ctx.cpustate().regs.h,
+            Self::L => ctx.cpustate().regs.l,
+            Self::AddrHL => {
+                let addr = ctx.cpustate().regs.hl();
+                ctx.yield1m();
+                ctx.mem().read(addr.into())
+            }
+            Self::AddrBC => {
+                let addr = ctx.cpustate().regs.bc();
+                ctx.yield1m();
+                ctx.mem().read(addr.into())
+            }
+            Self::AddrDE => {
+                let addr = ctx.cpustate().regs.de();
+                ctx.yield1m();
+                ctx.mem().read(addr.into())
+            }
+            Self::AddrHLInc => {
+                let addr = ctx.cpustate().regs.hl();
+                ctx.yield1m();
+                ctx.cpustate_mut().regs.set_hl(addr.wrapping_add(1));
+                ctx.mem().read(addr.into())
+            }
+            Self::AddrHLDec => {
+                let addr = ctx.cpustate().regs.hl();
+                ctx.yield1m();
+                ctx.cpustate_mut().regs.set_hl(addr.wrapping_sub(1));
+                ctx.mem().read(addr.into())
+            }
+            Self::Immediate => {
+                let addr = ctx.cpustate_mut().regs.inc_pc();
+                ctx.yield1m();
+                ctx.mem().read(addr.into())
+            }
+            Self::AddrImmediate => {
+                let addr = Operand16::Immediate.load(ctx);
+                ctx.yield1m();
+                ctx.mem().read(addr.into())
+            }
+            Self::AddrRelC => {
+                let addr = 0xFF00 + ctx.cpustate().regs.c as u16;
+                ctx.yield1m();
+                ctx.mem().read(addr.into())
+            }
+            Self::AddrRelImmediate => {
+                let addr = 0xFF00 + Self::Immediate.load(ctx) as u16;
+                ctx.yield1m();
+                ctx.mem().read(addr.into())
+            }
+        }
+    }
 }
 
 impl fmt::Display for Operand8 {
@@ -474,7 +559,9 @@ pub enum Operand16 {
     /// Load value from immediate (and advance program counter). Cannot be used to store. Will
     /// panic if used as the destination operand.
     Immediate,
-    /// Load a 16 bit immediate (and advance program counter), then dereference that address.
+    /// Load a 16 bit immediate (and advance program counter), then dereference that address. Note:
+    /// since no actual opcode uses `(u16)` as the source for a 16 bit read, this will panic if used
+    /// to load.
     AddrImmediate,
 }
 
@@ -500,6 +587,25 @@ impl Operand16 {
             2 => Operand16::HL,
             3 => Operand16::AF,
             _ => panic!("Unrecognized register pair code {}", code),
+        }
+    }
+
+
+    /// Load this operand from the CPU context, yielding for memory access if needed.
+    fn load(self, ctx: &mut impl CpuContext) -> u16 {
+        trace!("Operand16::load {}", self);
+        match self {
+            Self::BC => ctx.cpustate().regs.bc(),
+            Self::DE => ctx.cpustate().regs.bc(),
+            Self::HL => ctx.cpustate().regs.bc(),
+            Self::AF => ctx.cpustate().regs.bc(),
+            Self::Sp => ctx.cpustate().regs.sp,
+            Self::Immediate => {
+                let low = Operand8::Immediate.load(ctx);
+                let high = Operand8::Immediate.load(ctx);
+                u16::from_le_bytes([low, high])
+            }
+            Self::AddrImmediate => panic!("No actual operation uses (u16) as the source for a 16 bit load"),
         }
     }
 }
