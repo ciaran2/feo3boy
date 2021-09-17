@@ -4,6 +4,7 @@ use crate::memdev::{Addr, MemDevice};
 
 bitflags! {
     /// Available set of interrupt flags.
+    #[derive(Default)]
     pub struct InterruptFlags: u8 {
         /// Vertical blanking of the display.
         const VBLANK = 0b00001;
@@ -34,12 +35,6 @@ impl InterruptFlags {
     /// interrupt enable register.
     pub fn set_interrupt_enable(self, mem: &mut impl MemDevice) {
         mem.write(0xffff.into(), self.bits);
-    }
-}
-
-impl Default for InterruptFlags {
-    fn default() -> Self {
-        Self::empty()
     }
 }
 

@@ -12,7 +12,8 @@ mod opcode_args;
 mod oputils;
 
 bitflags! {
-    /// operation flags set after various operations.
+    /// Flags set after various operations.
+    #[derive(Default)]
     pub struct Flags: u8 {
         /// result was zero.
         const ZERO = 0x80;
@@ -53,12 +54,9 @@ impl Flags {
     }
 }
 
-impl Default for Flags {
-    fn default() -> Flags {
-        Flags::empty()
-    }
-}
-
+/// CPU registers on the GB Z80 processor.
+///
+/// Note that there are a few other registers on a GameBoy, but those are memory mapped.
 #[derive(Default, Debug)]
 pub struct Regs {
     // Registers are paired in little-endian order (though we aren't using any specific #[repr], so
