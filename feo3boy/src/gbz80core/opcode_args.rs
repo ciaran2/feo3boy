@@ -3,7 +3,7 @@ use std::num::Wrapping;
 
 use log::trace;
 
-use super::oputils::{add8_flags, sub8_flags};
+use super::oputils::{add8_flags, rotate_left9, rotate_right9, sub8_flags};
 use super::{CpuContext, Flags};
 use crate::memdev::MemDevice;
 
@@ -38,7 +38,7 @@ impl AluOp {
 
     /// Evaluate this ALU operation, updating the accumulator and flags. The argument to the
     /// operation should already have been loaded by the caller and passed as `arg`.
-    pub(super) fn eval(self, ctx: &mut impl CpuContext, arg: u8) {
+    pub(super) fn exec(self, ctx: &mut impl CpuContext, arg: u8) {
         trace!("Evaluating {} A,{}", self, arg);
         match self {
             Self::Add => {
@@ -144,6 +144,78 @@ impl AluUnaryOp {
             6 => Self::SetCarryFlag,
             7 => Self::ComplimentCarryFlag,
             _ => panic!("Unrecognized ALU unary operation type (y code) {}", code),
+        }
+    }
+
+    /// Evaluate this ALU unary op.
+    pub(super) fn exec(self, ctx: &mut impl CpuContext) {
+        let regs = &mut ctx.cpustate_mut().regs;
+        match self {
+            Self::RotateLeft8 => {
+                let res = regs.acc.rotate_left(1);
+                regs.flags = Flags::check_carry(res & 1 != 0);
+                regs.acc = res;
+            }
+            Self::RotateLeft9 => {
+                let (res, flags) = rotate_left9(regs.acc, regs.flags);
+                // Clear the zero flag.
+                regs.flags = flags - Flags::ZERO;
+                regs.acc = res;
+            }
+            Self::RotateRight8 => {
+                let res = regs.acc.rotate_right(1);
+                regs.flags = Flags::check_carry(res & 0x80 != 0);
+                regs.acc = res;
+            }
+            Self::RotateRight9 => {
+                let (res, flags) = rotate_right9(regs.acc, regs.flags);
+                // Clear the zero flag.
+                regs.flags = flags - Flags::ZERO;
+                regs.acc = res;
+            }
+            Self::DecimalAdjust => {
+                // Does not modify SUB.
+                const MASK: Flags = Flags::all().difference(Flags::SUB);
+
+                // Always clears HALFCARRY.
+                let mut resflags = Flags::empty();
+                if regs.flags.contains(Flags::SUB) {
+                    if regs.flags.contains(Flags::CARRY) {
+                        resflags |= Flags::CARRY;
+                        regs.acc = regs.acc.wrapping_sub(0x60);
+                    }
+                    if regs.flags.contains(Flags::HALFCARRY) {
+                        regs.acc = regs.acc.wrapping_sub(0x06);
+                    }
+                } else {
+                    if regs.flags.contains(Flags::CARRY) || regs.acc > 0x99 {
+                        resflags |= Flags::CARRY;
+                        regs.acc = regs.acc.wrapping_add(0x60);
+                    }
+                    if regs.flags.contains(Flags::HALFCARRY) || regs.acc & 0xf > 9 {
+                        regs.acc = regs.acc.wrapping_add(0x06);
+                    }
+                }
+                resflags |= Flags::check_zero(regs.acc);
+                regs.flags.merge(resflags, MASK);
+            }
+            Self::Compliment => {
+                // Always sets only SUB and HALFCARRY to 1.
+                const FLAGS: Flags = Flags::SUB.union(Flags::HALFCARRY);
+                regs.acc = !regs.acc;
+                regs.flags.merge(FLAGS, FLAGS);
+            }
+            Self::SetCarryFlag => {
+                // Set all but zero.
+                const MASK: Flags = Flags::all().difference(Flags::ZERO);
+                regs.flags.merge(Flags::CARRY, MASK);
+            }
+            Self::ComplimentCarryFlag => {
+                // Set all but zero.
+                const MASK: Flags = Flags::all().difference(Flags::ZERO);
+                regs.flags
+                    .merge(Flags::check_carry(!regs.flags.contains(Flags::CARRY)), MASK);
+            }
         }
     }
 }

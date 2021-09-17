@@ -2,8 +2,10 @@ use std::fmt;
 
 use log::{debug, trace};
 
-use super::oputils::{add8_flags, offset_addr, sub8_flags};
+use super::oputils::{add8_flags, offset_addr, rotate_left9, rotate_right9, sub8_flags};
 use super::{AluOp, AluUnaryOp, ConditionCode, CpuContext, Flags, Operand16, Operand8};
+use crate::interrupts::InterruptFlags;
+use crate::memdev::MemDevice;
 
 // Opcode References:
 // - Decoding: www.z80.info/decoding.htm
@@ -37,7 +39,7 @@ pub enum Opcode {
     Load16 { dest: Operand16, source: Operand16 },
     /// Add the given 16 bit operand to HL.
     Add16(Operand16),
-    /// Halt instruction. Pauses but still accepts interrupts I think?
+    /// Halt instruction. Pauses but still accepts interrupts.
     Halt,
     /// Run the given operation on the ALU. The source is given by the operand, the destination is
     /// always `A`, the accumulator register.
@@ -243,6 +245,7 @@ impl Opcode {
     fn execute(self, ctx: &mut impl CpuContext) {
         match self {
             Self::Nop => {}
+            Self::Stop => panic!("STOP is bizarre and complicated and not implemented."),
             Self::JumpRelative(cond) => jump_relative(ctx, cond),
             Self::Inc8(operand) => inc8(ctx, operand),
             Self::Dec8(operand) => dec8(ctx, operand),
@@ -251,9 +254,23 @@ impl Opcode {
             Self::Dec16(operand) => dec16(ctx, operand),
             Self::Load16 { dest, source } => load16(ctx, dest, source),
             Self::Add16(operand) => add16(ctx, operand),
+            Self::Halt => halt(ctx),
             Self::AluOp { operand, op } => alu_op(ctx, operand, op),
+            Self::AluUnary(op) => op.exec(ctx),
+            Self::Call(cond) => call(ctx, cond),
+            Self::Jump(cond) => jump(ctx, cond),
+            Self::Ret(cond) => ret(ctx, cond),
+            Self::Push(operand) => push(ctx, operand),
+            Self::Pop(operand) => pop(ctx, operand),
+            Self::PrefixCB => CBOpcode::load_and_execute(ctx),
+            Self::DisableInterrupts => disable_interrupts(ctx),
+            Self::EnableInterrupts => enable_interrupts(ctx),
+            Self::RetInterrupt => interrupt_return(ctx),
+            Self::OffsetSp => offset_sp(ctx),
+            Self::AddressOfOffsetSp => address_of_offset_sp(ctx),
+            Self::JumpHL => jump_hl(ctx),
+            Self::Reset(dest) => reset(ctx, dest),
             Self::MissingInstruction(_) => {}
-            _ => panic!("Opcode {} Not Implemented", self),
         }
     }
 }
@@ -306,7 +323,8 @@ fn jump_relative(ctx: &mut impl CpuContext, cond: ConditionCode) {
     // good because the jump is relative to the following instruction.
     let offset = Operand8::Immediate.read(ctx) as i8;
     let base = ctx.cpustate().regs.pc;
-    let dest = offset_addr(base, offset);
+    // JR doesn't set any flags.
+    let (dest, _) = offset_addr(base, offset);
     if cond.evaluate(ctx) {
         trace!("Relative jump by {} from {} to {}", offset, base, dest);
         ctx.cpustate_mut().regs.pc = dest;
@@ -404,10 +422,192 @@ fn add16(ctx: &mut impl CpuContext, arg: Operand16) {
     ctx.cpustate_mut().regs.flags.merge(flags, MASK);
 }
 
+/// If `IME` is set, just halts the CPU until there is an interrupt available to be serviced. If
+/// there's already an interrupt to be serviced, `HALT` is effectively a `NOP` and excution moved
+/// directly to the interrupt handler then to the next instruction.
+///
+/// If `IME` is not set, there's a possibility of triggering a CPU bug:
+/// *   If no interrupt is pending, the CPU still halts and resumes the next time an interrupt
+///     becomes pending, but the interrupt just isn't handled because IME is off.
+/// *   If there are enabled interrupts pending (`[IE] & [IF] != 0`), the bug is triggered:
+///     *   In the normal case, the bug just prevents the program counter from incrementing
+///         properly, so the byte after `HALT` will be read twice. (This presumably means that any
+///         1-byte instruction will execute twice, and any two-byte instruction will read itself as
+///         the following value, but that's somewhat unclear. Its also not clear what happens if an
+///         `RST` is executed, since that's a 1 byte jump. Does overwritting the `PC` avert the bug?
+///         Note that with any normal `CALL`, `JP`, or `JR`, the repeat byte would be used as the
+///         jump target or offset instead.)
+///     *   If `EI` executed just before `HALT` such that `IME` would become true after the `HALT`,
+///         the bug is even weirder: the interrupt is serviced as normal, but then the interrupt
+///         returns to `halt` which is executed again.
+///
+/// Implementing the behavior of preventing PC increment would require a bunch of complex extra
+/// state which would have to be checked in a bunch of places, so for now this just panics if the
+/// bug would be encountered.
+fn halt(ctx: &mut impl CpuContext) {
+    if ctx.cpustate().interrupt_master_enable.enabled() {
+        // No need to special-case interrupts here, since the next `tick` call will un-halt anyway.
+        ctx.cpustate_mut().halted = true;
+    } else {
+        let enabled_interrupts = InterruptFlags::get_interrupt_enable(ctx.mem());
+        let pending_interrupts = ctx.cpustate().interrupt_vector;
+        if enabled_interrupts.intersects(pending_interrupts) {
+            panic!("Halt-Bug encountered (see method description).");
+        } else {
+            // `tick` will un-halt next time ([IE] & [IF] != 0), but will not service the interrupt.
+            ctx.cpustate_mut().halted = true;
+        }
+    }
+}
+
 /// Runs an ALU operation.
 fn alu_op(ctx: &mut impl CpuContext, operand: Operand8, op: AluOp) {
     let arg = operand.read(ctx);
-    op.eval(ctx, arg);
+    op.exec(ctx, arg);
+}
+
+/// Performs a conditional call.
+fn call(ctx: &mut impl CpuContext, cond: ConditionCode) {
+    // Conveniently, unconditional call behaves exactly the same as a conditional call with a true
+    // value, down to the timing.
+    let dest = Operand16::Immediate.read(ctx);
+    if cond.evaluate(ctx) {
+        // Conditional jump has an extra internal delay if the condition is true.
+        ctx.yield1m();
+        push_helper(ctx, ctx.cpustate().regs.pc);
+        ctx.cpustate_mut().regs.pc = dest;
+    }
+}
+
+/// Performs a conditional absolute jump.
+fn jump(ctx: &mut impl CpuContext, cond: ConditionCode) {
+    // Conveniently, unconditional call behaves exactly the same as a conditional call with a true
+    // value, down to the timing.
+    let dest = Operand16::Immediate.read(ctx);
+    if cond.evaluate(ctx) {
+        // Branching adds an extra cycle despite not accessing memory.
+        ctx.yield1m();
+        ctx.cpustate_mut().regs.pc = dest;
+    }
+}
+
+/// Performs a conditional return.
+fn ret(ctx: &mut impl CpuContext, cond: ConditionCode) {
+    // Unlike Jump and Call, Ret is different depending on whether it is conditional or unconditional.
+    if cond == ConditionCode::Unconditional {
+        let dest = pop_helper(ctx);
+        // There's an extra 1m delay after loading SP.
+        ctx.yield1m();
+        ctx.cpustate_mut().regs.pc = dest;
+    } else {
+        // Conditional branch always has this extra delay before evaluating.
+        ctx.yield1m();
+        if cond.evaluate(ctx) {
+            let dest = pop_helper(ctx);
+            // But there's also an extra delay after reading.
+            ctx.yield1m();
+            ctx.cpustate_mut().regs.pc = dest;
+        }
+    }
+}
+
+/// Implements push instruction.
+fn push(ctx: &mut impl CpuContext, operand: Operand16) {
+    // In practice, operand is always a register.
+    let val = operand.read(ctx);
+    // Push has an extra delay before writing.
+    ctx.yield1m();
+    push_helper(ctx, val);
+}
+
+/// Implements pop instruction.
+fn pop(ctx: &mut impl CpuContext, operand: Operand16) {
+    let val = pop_helper(ctx);
+    // In practice, operand is always a register.
+    operand.write(ctx, val)
+}
+
+/// Push helper, shared between push and call. Pushes a caller-supplied 16 bit value onto the stack,
+/// waiting 1m between each byte and decrementing the stack pointer by 2.
+fn push_helper(ctx: &mut impl CpuContext, val: u16) {
+    let [low, high] = val.to_le_bytes();
+    ctx.yield1m();
+    let addr = ctx.cpustate_mut().regs.dec_sp();
+    ctx.mem_mut().write(addr.into(), high);
+
+    ctx.yield1m();
+    let addr = ctx.cpustate_mut().regs.dec_sp();
+    ctx.mem_mut().write(addr.into(), low);
+}
+
+/// Pop helper, shared between pop and ret. Pops value from the stack, waiting 1m between each byte
+/// and incrementing the stack pointer by 2.
+fn pop_helper(ctx: &mut impl CpuContext) -> u16 {
+    ctx.yield1m();
+    let addr = ctx.cpustate_mut().regs.inc_sp();
+    let low = ctx.mem().read(addr.into());
+
+    ctx.yield1m();
+    let addr = ctx.cpustate_mut().regs.inc_sp();
+    let high = ctx.mem().read(addr.into());
+
+    u16::from_le_bytes([low, high])
+}
+
+/// DI instruction (applies immediately).
+fn disable_interrupts(ctx: &mut impl CpuContext) {
+    ctx.cpustate_mut().interrupt_master_enable.clear();
+}
+
+/// EI instruction (applies after the following instruction).
+fn enable_interrupts(ctx: &mut impl CpuContext) {
+    ctx.cpustate_mut()
+        .interrupt_master_enable
+        .set_next_instruction();
+}
+
+/// Enabled interrupts and returns.
+fn interrupt_return(ctx: &mut impl CpuContext) {
+    let dest = pop_helper(ctx);
+    // Theres an extra 1m of delay in here.
+    ctx.yield1m();
+    ctx.cpustate_mut().regs.pc = dest;
+    ctx.cpustate_mut().interrupt_master_enable.set();
+}
+
+/// Offsets the stack pointer by an immediate value.
+fn offset_sp(ctx: &mut impl CpuContext) {
+    let offset = Operand8::Immediate.read(ctx) as i8;
+    let (res, flags) = offset_addr(ctx.cpustate().regs.sp, offset);
+    // This instruction takes two more cycles after loading the offset.
+    ctx.yield1m();
+    ctx.yield1m();
+    ctx.cpustate_mut().regs.sp = res;
+    ctx.cpustate_mut().regs.flags = flags;
+}
+
+/// Loads the result of offsetting the stack pointer by an immediate value into HL.
+fn address_of_offset_sp(ctx: &mut impl CpuContext) {
+    let offset = Operand8::Immediate.read(ctx) as i8;
+    let (res, flags) = offset_addr(ctx.cpustate().regs.sp, offset);
+    // Interestingly, this instruction is actually faster than `ADD SP,i8`.
+    ctx.yield1m();
+    ctx.cpustate_mut().regs.set_hl(res);
+    ctx.cpustate_mut().regs.flags = flags;
+}
+
+// Similar to unconditional jump, but using HL as the target address.
+fn jump_hl(ctx: &mut impl CpuContext) {
+    let regs = &mut ctx.cpustate_mut().regs;
+    regs.sp = regs.hl();
+}
+
+/// Executes the reset instruction. Similar to call with a fixed destination.
+fn reset(ctx: &mut impl CpuContext, dest: u8) {
+    // There's an extra delay at the start of an RST instruction.
+    ctx.yield1m();
+    push_helper(ctx, ctx.cpustate().regs.pc);
+    ctx.cpustate_mut().regs.pc = dest as u16;
 }
 
 //////////////////////
@@ -448,6 +648,76 @@ impl CBOpcode {
             _ => unreachable!(),
         };
         Self { operand, op }
+    }
+
+    /// Load and execute a single CB-prefixed opcode from the given context.
+    fn load_and_execute(ctx: &mut impl CpuContext) {
+        let pc = ctx.cpustate().regs.pc;
+        trace!("Loading CB-opcode at {:#6X}", pc);
+        let opcode = Operand8::Immediate.read(ctx);
+        let opcode = Self::decode(opcode);
+        debug!("Executing CB @ {:#6X}: {}", pc, opcode);
+        opcode.execute(ctx);
+    }
+
+    /// Execute this opcode on the given context.
+    fn execute(self, ctx: &mut impl CpuContext) {
+        let arg = self.operand.read(ctx);
+        match self.op {
+            CBOperation::RotateLeft8 => {
+                let res = arg.rotate_left(1);
+                ctx.cpustate_mut().regs.flags =
+                    Flags::check_zero(res) | Flags::check_carry(res & 1 != 0);
+                self.operand.write(ctx, res);
+            }
+            CBOperation::RotateLeft9 => {
+                let (res, flags) = rotate_left9(arg, ctx.cpustate().regs.flags);
+                ctx.cpustate_mut().regs.flags = flags;
+                self.operand.write(ctx, res);
+            }
+            CBOperation::RotateRight8 => {
+                let res = arg.rotate_right(1);
+                ctx.cpustate_mut().regs.flags =
+                    Flags::check_zero(res) | Flags::check_carry(res & 0x80 != 0);
+                self.operand.write(ctx, res);
+            }
+            CBOperation::RotateRight9 => {
+                let (res, flags) = rotate_right9(arg, ctx.cpustate().regs.flags);
+                ctx.cpustate_mut().regs.flags = flags;
+                self.operand.write(ctx, res);
+            }
+            CBOperation::ShiftLeft => {
+                let res = arg << 1;
+                ctx.cpustate_mut().regs.flags =
+                    Flags::check_zero(res) | Flags::check_carry(arg & 0x80 != 0);
+                self.operand.write(ctx, res);
+            }
+            CBOperation::ShiftRightSignExt => {
+                let res = ((arg as i8) >> 1) as u8;
+                ctx.cpustate_mut().regs.flags =
+                    Flags::check_zero(res) | Flags::check_carry(arg & 1 != 0);
+                self.operand.write(ctx, res);
+            }
+            CBOperation::ShiftRight => {
+                let res = arg >> 1;
+                ctx.cpustate_mut().regs.flags =
+                    Flags::check_zero(res) | Flags::check_carry(arg & 1 != 0);
+                self.operand.write(ctx, res);
+            }
+            CBOperation::Swap => {
+                let res = ((arg & 0x0f) << 4) | ((arg & 0xf0) >> 4);
+                ctx.cpustate_mut().regs.flags = Flags::check_zero(res);
+                self.operand.write(ctx, res);
+            }
+            CBOperation::TestBit(bit) => {
+                // Doesn't affect the carry flag.
+                const MASK: Flags = Flags::all().difference(Flags::CARRY);
+                let flags = Flags::check_zero(arg & (1 << bit)) | Flags::HALFCARRY;
+                ctx.cpustate_mut().regs.flags.merge(flags, MASK);
+            }
+            CBOperation::ResetBit(bit) => self.operand.write(ctx, arg & !(1 << bit)),
+            CBOperation::SetBit(bit) => self.operand.write(ctx, arg | (1 << bit)),
+        }
     }
 }
 

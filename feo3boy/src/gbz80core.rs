@@ -2,6 +2,7 @@ use std::borrow::BorrowMut;
 
 use bitflags::bitflags;
 
+use crate::interrupts::InterruptFlags;
 use crate::memdev::MemDevice;
 pub use opcode::{CBOpcode, CBOperation, Opcode};
 pub use opcode_args::{AluOp, AluUnaryOp, ConditionCode, Operand16, Operand8};
@@ -139,12 +140,67 @@ impl Regs {
     }
 }
 
+/// State of interrupts on the CPU.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum InterruptMasterState {
+    /// Interrupts are disabled.
+    Disabled,
+    /// EI was just run, but the effect is delayed until after the next instruction.
+    Pending,
+    /// Interrupts are enabled.
+    Enabled,
+}
+
+impl InterruptMasterState {
+    /// Sets interrupts immediately.
+    pub fn set(&mut self) {
+        *self = Self::Enabled;
+    }
+
+    /// Disables interrupts immediately.
+    pub fn clear(&mut self) {
+        *self = Self::Disabled;
+    }
+
+    /// Sets interrupts after the next instruction. If interrupts are already enabled, does nothing.
+    pub fn set_next_instruction(&mut self) {
+        if *self != Self::Enabled {
+            *self = Self::Pending;
+        }
+    }
+
+    /// Returns true if IME is enabled.
+    pub fn enabled(self) -> bool {
+        self == Self::Enabled
+    }
+
+    /// Ticks the interrupt master state after an instruction has executed.
+    fn tick(&mut self, previous_state: Self) {
+        // If it was pending, and was not disabled by the instruction run in the mean time, set to
+        // enabled.
+        if previous_state == Self::Pending && *self != Self::Disabled {
+            *self = Self::Enabled;
+        }
+    }
+}
+
+impl Default for InterruptMasterState {
+    fn default() -> Self {
+        Self::Disabled
+    }
+}
+
 /// Internal state of the CPU.
 #[derive(Default, Debug)]
 pub struct Gbz80State {
     /// Cpu registers.
     pub regs: Regs,
-    halted: bool,
+    /// Interrupt master enable flag, controlled by EI, DI, RETI, and interrupts.
+    pub interrupt_master_enable: InterruptMasterState,
+    /// Current pending interrupts. Often referred to as register `IF`.
+    pub interrupt_vector: InterruptFlags,
+    /// Whether the CPU is halted.
+    pub halted: bool,
 }
 
 impl Gbz80State {
@@ -185,50 +241,19 @@ where
     B: BorrowMut<C>,
     C: CpuContext,
 {
-    Opcode::load_and_execute(ctx.borrow_mut());
-}
+    let ctx = ctx.borrow_mut();
 
-// fn push16(cpustate: &mut Gbz80State, mmu: &mut impl MemDevice, value: u16) {
-//     cpustate.regs.sp -= Wrapping(1u16);
-//     mmu.write(cpustate.regs.sp.0.into(), (value >> 8) as u8);
-//     cpustate.regs.sp -= Wrapping(1u16);
-//     mmu.write(cpustate.regs.sp.0.into(), (value & 0xFF) as u8);
-// }
-//
-// fn pop16(cpustate: &mut Gbz80State, mmu: &mut impl MemDevice) -> u16 {
-//     let mut ret = 0u16;
-//     ret |= mmu.read(cpustate.regs.sp.0.into()) as u16;
-//     cpustate.regs.sp += Wrapping(1u16);
-//     ret |= (mmu.read(cpustate.regs.sp.0.into()) as u16) << 8;
-//     cpustate.regs.sp += Wrapping(1u16);
-//     ret
-// }
-// fn load16imm(cpustate: &mut Gbz80State, mmu: &mut impl MemDevice, p: u8) -> (u64, u8, u8) {
-//     let toload = pcload(cpustate, mmu) as u16 + (pcload(cpustate, mmu) as u16) << 8;
-//
-//     match p {
-//         0..=2 => cpustate.regs.regs816.write16(p, toload),
-//         3 => cpustate.regs.sp = Wrapping(toload),
-//         _ => panic!("Error in instruction decoding at load16imm"),
-//     }
-//
-//     (12, FNONE, FNONE)
-// }
-//
-// fn load8imm(cpustate: &mut Gbz80State, mmu: &mut impl MemDevice, regnum: u8) -> (u64, u8, u8) {
-//     let toload = pcload(cpustate, mmu);
-//
-//     let cycle_offset = reg_write8(cpustate, mmu, regnum, toload);
-//
-//     (8 + cycle_offset, FNONE, FNONE)
-// }
-//
-//
-// fn rst(cpustate: &mut Gbz80State, mmu: &mut impl MemDevice, vec: u8) -> (u64, u8, u8) {
-//     push16(cpustate, mmu, cpustate.regs.pc.0);
-//     cpustate.regs.pc = Wrapping(vec as u16 * 8);
-//     (16, FNONE, FNONE)
-// }
+    // TODO: check interrupt state.
+    if ctx.cpustate().halted {
+        return;
+    }
+
+    let previous_ime = ctx.cpustate().interrupt_master_enable;
+    Opcode::load_and_execute(ctx);
+    ctx.cpustate_mut()
+        .interrupt_master_enable
+        .tick(previous_ime);
+}
 
 /////////////////////////////////////////
 // Utility implementations of CpuContext.
@@ -286,69 +311,38 @@ impl<M: MemDevice> CpuContext for (&mut Gbz80State, &mut M) {
 mod tests {
     use super::*;
 
-    //     #[test]
-    //     fn test_loads_and_alu() {
-    //         let mut cpustate = Gbz80State::new();
-    //         let mut testmem = [0u8; 0x10000];
-    //
-    //         testmem[0] = 0x3e;
-    //         testmem[1] = 0x80;
-    //         testmem[2] = 0x06;
-    //         testmem[3] = 0x01;
-    //         testmem[4] = 0x80;
-    //         testmem[5] = 0x0e;
-    //         testmem[6] = 0x85;
-    //         testmem[7] = 0x81;
-    //
-    //         tick((&mut cpustate, &mut testmem));
-    //
-    //         assert_eq!(
-    //             cpustate.regs.regs816.read8(0b111),
-    //             0x80,
-    //             "{:?}",
-    //             cpustate.regs.regs816
-    //         );
-    //
-    //         tick(&mut cpustate, &mut testmem);
-    //
-    //         assert_eq!(
-    //             cpustate.regs.regs816.read8(0x0),
-    //             0x01,
-    //             "{:?}",
-    //             cpustate.regs.regs816
-    //         );
-    //
-    //         tick(&mut cpustate, &mut testmem);
-    //
-    //         assert_eq!(
-    //             cpustate.regs.regs816.read8(0b111),
-    //             0x81,
-    //             "{:?}",
-    //             cpustate.regs.regs816
-    //         );
-    //
-    //         tick(&mut cpustate, &mut testmem);
-    //
-    //         assert_eq!(
-    //             cpustate.regs.regs816.read8(0b001),
-    //             0x85,
-    //             "{:?}",
-    //             cpustate.regs.regs816
-    //         );
-    //
-    //         tick(&mut cpustate, &mut testmem);
-    //
-    //         assert_eq!(
-    //             cpustate.regs.regs816.read8(0b111),
-    //             0x6,
-    //             "{:?}",
-    //             cpustate.regs.regs816
-    //         );
-    //         assert_eq!(
-    //             check_flag(&cpustate, FCARRY),
-    //             true,
-    //             "{:?}",
-    //             cpustate.regs.regs816
-    //         );
-    //     }
+    #[test]
+    fn test_loads_and_alu() {
+        let mut cpustate = Gbz80State::new();
+        let mut testmem = [0u8; 0x10000];
+
+        testmem[0] = 0x3e;
+        testmem[1] = 0x80;
+        testmem[2] = 0x06;
+        testmem[3] = 0x01;
+        testmem[4] = 0x80;
+        testmem[5] = 0x0e;
+        testmem[6] = 0x85;
+        testmem[7] = 0x81;
+
+        tick((&mut cpustate, &mut testmem));
+        assert_eq!(cpustate.regs.acc, 0x80, "{:?}", cpustate.regs);
+
+        tick((&mut cpustate, &mut testmem));
+        assert_eq!(cpustate.regs.b, 0x01, "{:?}", cpustate.regs);
+
+        tick((&mut cpustate, &mut testmem));
+        assert_eq!(cpustate.regs.acc, 0x81, "{:?}", cpustate.regs);
+
+        tick((&mut cpustate, &mut testmem));
+        assert_eq!(cpustate.regs.c, 0x85, "{:?}", cpustate.regs);
+
+        tick((&mut cpustate, &mut testmem));
+        assert_eq!(cpustate.regs.acc, 0x6, "{:?}", cpustate.regs);
+        assert!(
+            cpustate.regs.flags.contains(Flags::CARRY),
+            "{:?}",
+            cpustate.regs
+        );
+    }
 }
