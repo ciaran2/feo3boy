@@ -40,7 +40,13 @@ fn main() {
         None => BiosRom::default(),
     };
 
-    let cart = Cartridge::default();
+    let cart = match argparser.value_of("rom") {
+        Some(filename) => {
+            let cart_file = File::open(filename).unwrap();
+            Cartridge::parse(cart_file).unwrap()
+        }
+        None => Cartridge::None,
+    };
 
     // Box to keep it off the stack.
     let mut mmu = Box::new(GbMmu::new(bios, cart));
