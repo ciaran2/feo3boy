@@ -155,10 +155,15 @@ impl Cartridge {
         // Load the first bank in order to read the cartridge header.
         reader.read_exact(&mut header[..])?;
 
-        let computed_checksum = header[0x134..=0x14c].iter().fold(0u8, |x, &h| x.wrapping_sub(h).wrapping_sub(1));
+        let computed_checksum = header[0x134..=0x14c]
+            .iter()
+            .fold(0u8, |x, &h| x.wrapping_sub(h).wrapping_sub(1));
         let header_checksum = header[HEADER_CHECKSUM];
         if computed_checksum != header_checksum {
-            warn!("Header checksum {} did not match computed checksum {}", header_checksum, computed_checksum);
+            warn!(
+                "Header checksum {} did not match computed checksum {}",
+                header_checksum, computed_checksum
+            );
         }
 
         match header[CART_TYPE] {
@@ -191,7 +196,7 @@ impl Cartridge {
             rom_type @ 1..=3 => {
                 let rom_size = rom_size(&header)?;
                 if rom_size > 128 {
-                    return Err(ParseCartridgeError::UnsupportedRomSize { rom_type, rom_size, });
+                    return Err(ParseCartridgeError::UnsupportedRomSize { rom_type, rom_size });
                 }
                 let ram_size = match (rom_type, ram_size(&header)) {
                     (0, Err(e)) => {
@@ -205,10 +210,9 @@ impl Cartridge {
                     }
                     (2 | 3, Err(e)) => return Err(e),
                     (2 | 3, Ok(size @ (8 | 32))) => size,
-                    (2 | 3, Ok(ram_size)) => return Err(ParseCartridgeError::UnsupportedRamSize {
-                        rom_type,
-                        ram_size,
-                    }),
+                    (2 | 3, Ok(ram_size)) => {
+                        return Err(ParseCartridgeError::UnsupportedRamSize { rom_type, ram_size })
+                    }
                     _ => unreachable!(),
                 };
 
@@ -221,7 +225,11 @@ impl Cartridge {
                 }
                 ensure_eof(reader)?;
 
-                Ok(Cartridge::Mbc1(Mbc1Rom::new(rom_banks, ram_size, rom_type == 3)))
+                Ok(Cartridge::Mbc1(Mbc1Rom::new(
+                    rom_banks,
+                    ram_size,
+                    rom_type == 3,
+                )))
             }
             code @ (5..=6 | 0xb..=0xd | 0xf..=0x13 | 0x19..=0x1e | 0x20 | 0x22 | 0xfc..=0xff) => {
                 Err(ParseCartridgeError::UnsupportedMbcType(code))
@@ -348,10 +356,19 @@ impl Mbc1Rom {
     /// Construct a new Mbc1Rom with the given rom banks and number of ram banks.
     fn new(rom_banks: Vec<RomBank>, num_ram_banks: usize, save_ram: bool) -> Self {
         assert!(rom_banks.len() >= 2, "Must have at least 2 rom banks.");
-        assert!(rom_banks.len() <= 128, "MBC1 Rom can have at most 128 rom banks.");
-        assert!(rom_banks.len().count_ones() == 1, "Number of rom banks must be a power of 2.");
+        assert!(
+            rom_banks.len() <= 128,
+            "MBC1 Rom can have at most 128 rom banks."
+        );
+        assert!(
+            rom_banks.len().count_ones() == 1,
+            "Number of rom banks must be a power of 2."
+        );
         assert!(num_ram_banks <= 4, "MBC1 Rom can have at most 4 ram banks.");
-        assert!(num_ram_banks == 0 || num_ram_banks.count_ones() == 1, "Number of ram banks must be a power of 2.");
+        assert!(
+            num_ram_banks == 0 || num_ram_banks.count_ones() == 1,
+            "Number of ram banks must be a power of 2."
+        );
         if rom_banks.len() > 32 && num_ram_banks > 1 {
             // It is unclear to me what happens if a cartridge has both > 32 rom banks and > 1 ram
             // bank.  This doc https://gbdev.io/pandocs/MBC1.html describes the situation with > 1
@@ -400,7 +417,7 @@ impl Mbc1Rom {
         if self.ram_banks.is_empty() || !self.ram_enable {
             None
         } else if self.advanced_banking_mode {
-            let bank  = self.bank_set as usize % self.ram_banks.len();
+            let bank = self.bank_set as usize % self.ram_banks.len();
             Some(&self.ram_banks[bank])
         } else {
             Some(&self.ram_banks[0])
@@ -412,7 +429,7 @@ impl Mbc1Rom {
         if self.ram_banks.is_empty() || !self.ram_enable {
             None
         } else if self.advanced_banking_mode {
-            let bank  = self.bank_set as usize % self.ram_banks.len();
+            let bank = self.bank_set as usize % self.ram_banks.len();
             Some(&mut self.ram_banks[bank])
         } else {
             Some(&mut self.ram_banks[0])
@@ -428,7 +445,7 @@ impl MemDevice for Mbc1Rom {
             0x8000..=0x9fff => match self.ram_bank() {
                 Some(bank) => bank.read(addr.offset_by(0x8000)),
                 None => 0,
-            }
+            },
             _ => panic!("Address {} out of range for Mbc1Rom", addr),
         }
     }
@@ -447,7 +464,7 @@ impl MemDevice for Mbc1Rom {
             0x8000..=0x9fff => match self.ram_bank_mut() {
                 Some(bank) => bank.write(addr.offset_by(0x8000), value),
                 None => {}
-            }
+            },
             _ => panic!("Address {} out of range for Mbc1Rom", addr),
         }
     }
