@@ -209,6 +209,10 @@ impl Gbz80State {
 }
 
 /// Trait which encapsulates everything that the CPU needs in order to execute.
+///
+/// The purpose of this trait is to encapsulate the components needed to run the GB Z80 CPU,
+/// independently of any other component of the GameBoy system. That allows the CPU to be run for
+/// other purposes, by swapping in a memory controller that behaves differently.
 pub trait CpuContext {
     /// Type of MemDevice in this context.
     type Mem: MemDevice;
