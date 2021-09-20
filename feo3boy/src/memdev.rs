@@ -213,13 +213,15 @@ impl<D: MemDevice + ?Sized> MemDevice for Box<D> {
 /// Memory device connecting memory mapped IO.
 #[derive(Clone, Debug)]
 pub struct MemMappedIo {
+    serial_data: u8,
+    serial_control: u8,
     bios_enabled: bool,
 }
 
 impl MemMappedIo {
     /// Construct new memory-mapped IO manager.
     pub fn new() -> Self {
-        MemMappedIo { bios_enabled: true }
+        MemMappedIo { serial_data: 0x00, serial_control: 0x00, bios_enabled: true }
     }
 
     /// Returns true if bios is enabled.
@@ -237,7 +239,10 @@ impl Default for MemMappedIo {
 impl MemDevice for MemMappedIo {
     fn read(&self, addr: Addr) -> u8 {
         match addr.relative() {
-            0x00..=0x4f => 0xff,
+            0x00 => 0xff,
+            0x01 => self.serial_data,
+            0x02 => self.serial_control,
+            0x03..=0x4f => 0xff,
             0x50 => self.bios_enabled as u8,
             0x51..=0x7f => 0xff,
             _ => panic!("Address {} out of range for Mem Mapped IO", addr),
