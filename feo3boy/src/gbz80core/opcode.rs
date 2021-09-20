@@ -1,6 +1,6 @@
 use std::fmt;
 
-use log::{debug, trace};
+use log::{debug, trace, warn};
 
 use super::oputils::{add8_flags, offset_addr, rotate_left9, rotate_right9, sub8_flags};
 use super::{AluOp, AluUnaryOp, ConditionCode, CpuContext, Flags, Operand16, Operand8};
@@ -270,7 +270,16 @@ impl Opcode {
             Self::AddressOfOffsetSp => address_of_offset_sp(ctx),
             Self::JumpHL => jump_hl(ctx),
             Self::Reset(dest) => reset(ctx, dest),
-            Self::MissingInstruction(_) => {}
+            // A brief note on this doc page:
+            // https://gbdev.io/pandocs/CPU_Comparison_with_Z80.html
+            // says that the unused opcodes will lock up the CPU, rather than behave as a
+            // no-op.
+            Self::MissingInstruction(opcode) => {
+                warn!(
+                    "Missing instruction {:#04X} encountered. Treating as NOP instead of locking.",
+                    opcode
+                );
+            }
         }
     }
 }

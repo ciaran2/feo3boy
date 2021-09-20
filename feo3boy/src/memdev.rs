@@ -223,7 +223,11 @@ pub struct MemMappedIo {
 impl MemMappedIo {
     /// Construct new memory-mapped IO manager.
     pub fn new() -> Self {
-        MemMappedIo { serial_data: 0x00, serial_control: 0x00, bios_enabled: true }
+        MemMappedIo {
+            serial_data: 0x00,
+            serial_control: 0x00,
+            bios_enabled: true,
+        }
     }
 
     /// Returns true if bios is enabled.
