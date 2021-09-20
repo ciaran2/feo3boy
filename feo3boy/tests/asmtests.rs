@@ -31,6 +31,34 @@ fn fibonacci() {
 }
 
 #[test]
+fn fibonacci16() {
+    const OUTPUT: usize = 0xC000;
+
+    let mut mem = ExtendMem::from(include_bytes!("fibonacci16.bin"));
+    let mut cpu = Gbz80State::default();
+    while !cpu.halted {
+        gbz80core::tick((&mut cpu, &mut mem));
+    }
+
+    let (mut f1, mut f2) = (0, 1);
+    for (i, fib) in iter::from_fn(move || {
+        let res = f1;
+        f1 += f2;
+        mem::swap(&mut f1, &mut f2);
+        Some(res)
+    })
+    .enumerate()
+    {
+        if fib > u16::MAX as u32 {
+            assert_eq!(mem.0.len(), OUTPUT + i * 2);
+            break;
+        }
+        let val = u16::from_le_bytes([mem.0[OUTPUT + i * 2], mem.0[OUTPUT + 1 + i * 2]]);
+        assert_eq!(val, fib as u16);
+    }
+}
+
+#[test]
 fn squares() {
     const OUTPUT: usize = 0xC000;
 
