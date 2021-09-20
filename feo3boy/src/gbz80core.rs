@@ -2,6 +2,8 @@ use crate::memdev::MemDevice;
 
 use std::num::Wrapping;
 
+pub mod opcode;
+
 const FZERO: u8 = 0x80;
 const FSUB: u8 = 0x40;
 const FHALFCARRY: u8 = 0x20;
@@ -78,11 +80,13 @@ impl Gbz80state {
 }
 
 pub fn tick(cpustate: &mut Gbz80state, mmu: &mut impl MemDevice) -> u64 {
-    println!("tick: pc @ 0x{:X}", cpustate.regs.pc);
+    let expc = cpustate.regs.pc;
     let opcode = pcload(cpustate, mmu);
+    let decoded = opcode::Opcode::decode(opcode);
+    println!("tick: pc @ {:#06X}: {}", expc, decoded);
     match dispatch(cpustate, mmu, opcode) {
         None => {
-            println!("Unknown opcode 0x{:X}. Skipping.", opcode);
+            println!("Unknown opcode {:#06X}. Skipping.", opcode);
             0
         }
         Some((cycles, flags, flagmask)) => {
