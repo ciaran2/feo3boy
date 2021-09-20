@@ -22,10 +22,30 @@ fn fibonacci() {
     })
     .enumerate()
     {
-        if fib > u8::MAX as usize {
+        if fib > u8::MAX as u32 {
+            assert_eq!(mem.0.len(), OUTPUT + i);
             break;
         }
         assert_eq!(mem.0[OUTPUT + i], fib as u8);
+    }
+}
+
+#[test]
+fn squares() {
+    const OUTPUT: usize = 0xC000;
+
+    let mut mem = ExtendMem::from(include_bytes!("squares.bin"));
+    let mut cpu = Gbz80State::default();
+    while !cpu.halted {
+        gbz80core::tick((&mut cpu, &mut mem));
+    }
+
+    for (i, square) in (1..).map(|x| x * x).enumerate() {
+        if square > u8::MAX as u32 {
+            assert_eq!(mem.0.len(), OUTPUT + i);
+            break;
+        }
+        assert_eq!(mem.0[OUTPUT + i], square as u8);
     }
 }
 

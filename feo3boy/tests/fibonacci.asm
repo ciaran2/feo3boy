@@ -1,3 +1,4 @@
+;; Compute all 8 bit fibonacci numbers.
 SECTION "Main", ROM0
 Fibonacci:
 	ld hl, Output
