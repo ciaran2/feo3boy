@@ -3,6 +3,8 @@ use std::fmt;
 
 use thiserror::Error;
 
+use crate::interrupts::{InterruptEnable, InterruptFlags};
+
 pub use cartridge::{Cartridge, Mbc1Rom, ParseCartridgeError, RamBank, RomBank};
 
 mod cartridge;
@@ -221,7 +223,11 @@ pub struct MemMappedIo {
 impl MemMappedIo {
     /// Construct new memory-mapped IO manager.
     pub fn new() -> Self {
-        MemMappedIo { serial_data: 0x00, serial_control: 0x00, bios_enabled: true }
+        MemMappedIo {
+            serial_data: 0x00,
+            serial_control: 0x00,
+            bios_enabled: true,
+        }
     }
 
     /// Returns true if bios is enabled.
@@ -279,8 +285,10 @@ pub struct GbMmu {
     /// Memory mapped IO. Mapped to 0xff00..FF80.
     io: MemMappedIo,
     /// "Page Zero", memory primarily used for software-hardware interaction. Mapped to
-    /// 0xFF80..0x10000
+    /// 0xFF80..0xffff
     zram: [u8; 127],
+    /// Interrupt enable register. Mapped to 0xffff
+    interrupt_enable: InterruptEnable,
 }
 
 impl GbMmu {
@@ -295,6 +303,7 @@ impl GbMmu {
             oam: [0; 160],
             io: MemMappedIo::new(),
             zram: [0; 127],
+            interrupt_enable: InterruptEnable(InterruptFlags::empty()),
         }
     }
 }
@@ -328,8 +337,7 @@ impl MemDevice for GbMmu {
             0xfea0..=0xfeff => 0,
             0xff00..=0xff7f => self.io.read(addr.offset_by(0xff00)),
             0xff80..=0xfffe => self.zram.read(addr.offset_by(0xff80)),
-            // Last byte is un-mapped.
-            0xffff => 0,
+            0xffff => self.interrupt_enable.read(addr.offset_by(0xffff)),
         }
     }
 
@@ -355,8 +363,7 @@ impl MemDevice for GbMmu {
             0xfea0..=0xfeff => {}
             0xff00..=0xff7f => self.io.write(addr.offset_by(0xff00), value),
             0xff80..=0xfffe => self.zram.write(addr.offset_by(0xff80), value),
-            // Last byte is un-mapped.
-            0xffff => {}
+            0xffff => self.interrupt_enable.write(addr.offset_by(0xffff), value),
         }
     }
 }

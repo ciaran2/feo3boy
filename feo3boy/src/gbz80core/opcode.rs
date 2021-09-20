@@ -1,5 +1,12 @@
 use std::fmt;
 
+use log::{debug, trace, warn};
+
+use super::oputils::{add8_flags, offset_addr, rotate_left9, rotate_right9, sub8_flags};
+use super::{AluOp, AluUnaryOp, ConditionCode, CpuContext, Flags, Operand16, Operand8};
+use crate::interrupts::InterruptFlags;
+use crate::memdev::MemDevice;
+
 // Opcode References:
 // - Decoding: www.z80.info/decoding.htm
 // - GB Z80 Opcode Table: https://izik1.github.io/gbops/
@@ -32,7 +39,7 @@ pub enum Opcode {
     Load16 { dest: Operand16, source: Operand16 },
     /// Add the given 16 bit operand to HL.
     Add16(Operand16),
-    /// Halt instruction. Pauses but still accepts interrupts I think?
+    /// Halt instruction. Pauses but still accepts interrupts.
     Halt,
     /// Run the given operation on the ALU. The source is given by the operand, the destination is
     /// always `A`, the accumulator register.
@@ -223,6 +230,58 @@ impl Opcode {
             _ => unreachable!(),
         }
     }
+
+    /// Load and execute a single opcode from the given context.
+    pub(super) fn load_and_execute(ctx: &mut impl CpuContext) {
+        let pc = ctx.cpustate().regs.pc;
+        trace!("Loading opcode at {:#6X}", pc);
+        let opcode = Operand8::Immediate.read(ctx);
+        let opcode = Self::decode(opcode);
+        debug!("Executing @ {:#6X}: {}", pc, opcode);
+        opcode.execute(ctx);
+    }
+
+    /// Execute this opcode on the given context.
+    fn execute(self, ctx: &mut impl CpuContext) {
+        match self {
+            Self::Nop => {}
+            Self::Stop => panic!("STOP is bizarre and complicated and not implemented."),
+            Self::JumpRelative(cond) => jump_relative(ctx, cond),
+            Self::Inc8(operand) => inc8(ctx, operand),
+            Self::Dec8(operand) => dec8(ctx, operand),
+            Self::Load8 { dest, source } => load8(ctx, dest, source),
+            Self::Inc16(operand) => inc16(ctx, operand),
+            Self::Dec16(operand) => dec16(ctx, operand),
+            Self::Load16 { dest, source } => load16(ctx, dest, source),
+            Self::Add16(operand) => add16(ctx, operand),
+            Self::Halt => halt(ctx),
+            Self::AluOp { operand, op } => alu_op(ctx, operand, op),
+            Self::AluUnary(op) => op.exec(ctx),
+            Self::Call(cond) => call(ctx, cond),
+            Self::Jump(cond) => jump(ctx, cond),
+            Self::Ret(cond) => ret(ctx, cond),
+            Self::Push(operand) => push(ctx, operand),
+            Self::Pop(operand) => pop(ctx, operand),
+            Self::PrefixCB => CBOpcode::load_and_execute(ctx),
+            Self::DisableInterrupts => disable_interrupts(ctx),
+            Self::EnableInterrupts => enable_interrupts(ctx),
+            Self::RetInterrupt => interrupt_return(ctx),
+            Self::OffsetSp => offset_sp(ctx),
+            Self::AddressOfOffsetSp => address_of_offset_sp(ctx),
+            Self::JumpHL => jump_hl(ctx),
+            Self::Reset(dest) => reset(ctx, dest),
+            // A brief note on this doc page:
+            // https://gbdev.io/pandocs/CPU_Comparison_with_Z80.html
+            // says that the unused opcodes will lock up the CPU, rather than behave as a
+            // no-op.
+            Self::MissingInstruction(opcode) => {
+                warn!(
+                    "Missing instruction {:#04X} encountered. Treating as NOP instead of locking.",
+                    opcode
+                );
+            }
+        }
+    }
 }
 
 impl fmt::Display for Opcode {
@@ -263,307 +322,306 @@ impl fmt::Display for Opcode {
     }
 }
 
-/// ALU Operation type.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum AluOp {
-    Add,
-    AddCarry,
-    Sub,
-    SubCarry,
-    And,
-    Xor,
-    Or,
-    Compare,
+//////////////////////////
+// Opcode Implementations:
+//////////////////////////
+
+/// Implements the relative jump instruction.
+fn jump_relative(ctx: &mut impl CpuContext, cond: ConditionCode) {
+    // Loading the offset also moves the program counter over the next instruction, which is
+    // good because the jump is relative to the following instruction.
+    let offset = Operand8::Immediate.read(ctx) as i8;
+    let base = ctx.cpustate().regs.pc;
+    // JR doesn't set any flags.
+    let (dest, _) = offset_addr(base, offset);
+    if cond.evaluate(ctx) {
+        trace!("Relative jump by {} from {} to {}", offset, base, dest);
+        ctx.cpustate_mut().regs.pc = dest;
+    } else {
+        trace!("Skipping jump by {} from {} to {}", offset, base, dest);
+    }
 }
 
-impl AluOp {
-    /// Get the ALU operation type for the given opcode. Panics if the code is greater than 7.
-    fn from_ycode(code: u8) -> Self {
-        match code {
-            0 => Self::Add,
-            1 => Self::AddCarry,
-            2 => Self::Sub,
-            3 => Self::SubCarry,
-            4 => Self::And,
-            5 => Self::Xor,
-            6 => Self::Or,
-            7 => Self::Compare,
-            _ => panic!("Unrecognized ALU operation type (y code) {}", code),
+/// Implements 8 bit increment instruction.
+fn inc8(ctx: &mut impl CpuContext, operand: Operand8) {
+    // Inc doesn't set the carry flag.
+    const MASK: Flags = Flags::all().difference(Flags::CARRY);
+
+    let val = operand.read(ctx);
+    let (res, flags) = add8_flags(val, 1);
+    trace!("Evaluating INC {} ({} => {})", operand, val, res);
+    ctx.cpustate_mut().regs.flags.merge(flags, MASK);
+    operand.write(ctx, res);
+}
+
+/// Implements 8 bit decrement instruction.
+fn dec8(ctx: &mut impl CpuContext, operand: Operand8) {
+    // Dec doesn't set the carry flag.
+    const MASK: Flags = Flags::all().difference(Flags::CARRY);
+
+    let val = operand.read(ctx);
+    let (res, flags) = sub8_flags(val, 1);
+    trace!("Evaluating DEC {} ({} => {})", operand, val, res);
+    ctx.cpustate_mut().regs.flags.merge(flags, MASK);
+    operand.write(ctx, res);
+}
+
+/// Implements 8 bit load operations.
+fn load8(ctx: &mut impl CpuContext, dest: Operand8, source: Operand8) {
+    let val = source.read(ctx);
+    trace!("Evaluating LD {},{} (<- {})", dest, source, val);
+    dest.write(ctx, val);
+}
+
+/// Implements 16 bit increment instruction.
+fn inc16(ctx: &mut impl CpuContext, operand: Operand16) {
+    // 16 bit inc doesn't set any flags, and all actual operands are always registers, but it does
+    // delay by 1 additional M cycle, probably because it has to operate on two bytes.
+    let val = operand.read(ctx);
+    let res = val.wrapping_add(1);
+    trace!("Evaluating INC {} ({} => {})", operand, val, res);
+    ctx.yield1m();
+    operand.write(ctx, res);
+}
+
+/// Implements 16 bit decrement instruction.
+fn dec16(ctx: &mut impl CpuContext, operand: Operand16) {
+    // 16 bit dec doesn't set any flags, and all actual operands are always registers, but it does
+    // delay by 1 additional M cycle, probably because it has to operate on two bytes.
+    let val = operand.read(ctx);
+    let res = val.wrapping_sub(1);
+    trace!("Evaluating DEC {} ({} => {})", operand, val, res);
+    ctx.yield1m();
+    operand.write(ctx, res);
+}
+
+/// Implements 16 bit load operations.
+fn load16(ctx: &mut impl CpuContext, dest: Operand16, source: Operand16) {
+    let val = source.read(ctx);
+    if (dest, source) == (Operand16::Sp, Operand16::HL) {
+        // Most of the 16 bit loads are <Pair>,<Immediate> and take time based on number of memory
+        // accesses. There are two exceptions. LD (u16),SP, which is also just timed based on the
+        // number of memory accesses, and LD SP,HL, which is all registers but still takes an extra
+        // 1m cycle, which isn't automatically provided by Operand16 register interactions, so we
+        // insert it here.
+        ctx.yield1m();
+    }
+    trace!("Evaluating LD {},{} (<- {})", dest, source, val);
+    dest.write(ctx, val);
+}
+
+/// Implements 16 bit register add into HL. Never sets the zero flag and clears the subtract flag,
+/// but does set carry and half-carry based on the upper byte of the operation (as if it was
+/// performed by running the pseudo-instructions `add l,<arg-low>; adc h,<arg-high>`.
+fn add16(ctx: &mut impl CpuContext, arg: Operand16) {
+    // 16 bit add never modifies the zero flag.
+    const MASK: Flags = Flags::all().difference(Flags::ZERO);
+
+    let lhs = ctx.cpustate().regs.hl();
+    let rhs = arg.read(ctx); // This will always be a register in practice.
+
+    let mut flags = Flags::empty();
+    if (lhs & 0x7ff) + (rhs & 0x7ff) > 0x7ff {
+        flags |= Flags::HALFCARRY;
+    }
+    let (res, carry) = lhs.overflowing_add(rhs);
+    flags |= Flags::check_carry(carry);
+
+    ctx.cpustate_mut().regs.set_hl(res);
+    ctx.cpustate_mut().regs.flags.merge(flags, MASK);
+}
+
+/// If `IME` is set, just halts the CPU until there is an interrupt available to be serviced. If
+/// there's already an interrupt to be serviced, `HALT` is effectively a `NOP` and excution moved
+/// directly to the interrupt handler then to the next instruction.
+///
+/// If `IME` is not set, there's a possibility of triggering a CPU bug:
+/// *   If no interrupt is pending, the CPU still halts and resumes the next time an interrupt
+///     becomes pending, but the interrupt just isn't handled because IME is off.
+/// *   If there are enabled interrupts pending (`[IE] & [IF] != 0`), the bug is triggered:
+///     *   In the normal case, the bug just prevents the program counter from incrementing
+///         properly, so the byte after `HALT` will be read twice. (This presumably means that any
+///         1-byte instruction will execute twice, and any two-byte instruction will read itself as
+///         the following value, but that's somewhat unclear. Its also not clear what happens if an
+///         `RST` is executed, since that's a 1 byte jump. Does overwritting the `PC` avert the bug?
+///         Note that with any normal `CALL`, `JP`, or `JR`, the repeat byte would be used as the
+///         jump target or offset instead.)
+///     *   If `EI` executed just before `HALT` such that `IME` would become true after the `HALT`,
+///         the bug is even weirder: the interrupt is serviced as normal, but then the interrupt
+///         returns to `halt` which is executed again.
+///
+/// Implementing the behavior of preventing PC increment would require a bunch of complex extra
+/// state which would have to be checked in a bunch of places, so for now this just panics if the
+/// bug would be encountered.
+fn halt(ctx: &mut impl CpuContext) {
+    if ctx.cpustate().interrupt_master_enable.enabled() {
+        // No need to special-case interrupts here, since the next `tick` call will un-halt anyway.
+        ctx.cpustate_mut().halted = true;
+    } else {
+        let enabled_interrupts = InterruptFlags::get_interrupt_enable(ctx.mem());
+        let pending_interrupts = ctx.cpustate().interrupt_vector;
+        if enabled_interrupts.intersects(pending_interrupts) {
+            panic!("Halt-Bug encountered (see method description).");
+        } else {
+            // `tick` will un-halt next time ([IE] & [IF] != 0), but will not service the interrupt.
+            ctx.cpustate_mut().halted = true;
         }
     }
 }
 
-impl fmt::Display for AluOp {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            Self::Add => f.write_str("ADD"),
-            Self::AddCarry => f.write_str("ADC"),
-            Self::Sub => f.write_str("SUB"),
-            Self::SubCarry => f.write_str("SBC"),
-            Self::And => f.write_str("AND"),
-            Self::Xor => f.write_str("XOR"),
-            Self::Or => f.write_str("OR"),
-            Self::Compare => f.write_str("CP"),
+/// Runs an ALU operation.
+fn alu_op(ctx: &mut impl CpuContext, operand: Operand8, op: AluOp) {
+    let arg = operand.read(ctx);
+    op.exec(ctx, arg);
+}
+
+/// Performs a conditional call.
+fn call(ctx: &mut impl CpuContext, cond: ConditionCode) {
+    // Conveniently, unconditional call behaves exactly the same as a conditional call with a true
+    // value, down to the timing.
+    let dest = Operand16::Immediate.read(ctx);
+    if cond.evaluate(ctx) {
+        // Conditional jump has an extra internal delay if the condition is true.
+        ctx.yield1m();
+        push_helper(ctx, ctx.cpustate().regs.pc);
+        ctx.cpustate_mut().regs.pc = dest;
+    }
+}
+
+/// Performs a conditional absolute jump.
+fn jump(ctx: &mut impl CpuContext, cond: ConditionCode) {
+    // Conveniently, unconditional call behaves exactly the same as a conditional call with a true
+    // value, down to the timing.
+    let dest = Operand16::Immediate.read(ctx);
+    if cond.evaluate(ctx) {
+        // Branching adds an extra cycle despite not accessing memory.
+        ctx.yield1m();
+        ctx.cpustate_mut().regs.pc = dest;
+    }
+}
+
+/// Performs a conditional return.
+fn ret(ctx: &mut impl CpuContext, cond: ConditionCode) {
+    // Unlike Jump and Call, Ret is different depending on whether it is conditional or unconditional.
+    if cond == ConditionCode::Unconditional {
+        let dest = pop_helper(ctx);
+        // There's an extra 1m delay after loading SP.
+        ctx.yield1m();
+        ctx.cpustate_mut().regs.pc = dest;
+    } else {
+        // Conditional branch always has this extra delay before evaluating.
+        ctx.yield1m();
+        if cond.evaluate(ctx) {
+            let dest = pop_helper(ctx);
+            // But there's also an extra delay after reading.
+            ctx.yield1m();
+            ctx.cpustate_mut().regs.pc = dest;
         }
     }
 }
 
-/// Type of unary ALU operation. All ops here apply only to A and Flags.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum AluUnaryOp {
-    /// 8-bit left rotate. Bit 7 goes to both the carry and bit 0.
-    RotateLeft8,
-    /// 9-bit left rotate. Bit 7 goes to carry and carry goes to bit 0.
-    RotateLeft9,
-    /// 8-bit right rotate. Bit 0 goes to both the carry and bit 7.
-    RotateRight8,
-    /// 9-bit left rotate. Bit 0 goes to carry and carry goes to bit 7.
-    RotateRight9,
-    /// Helper for doing binary-coded-decimal. Adjusts the hex didgits to keep both nybbles in range
-    /// 0..=9 by adding 0x06 and/or 0x60 to push the digit to the next nybble.
-    DecimalAdjust,
-    /// Sets the carry flag.
-    SetCarryFlag,
-    /// Inverts the Accumulator.
-    Compliment,
-    /// Inverts the carry flag.
-    ComplimentCarryFlag,
+/// Implements push instruction.
+fn push(ctx: &mut impl CpuContext, operand: Operand16) {
+    // In practice, operand is always a register.
+    let val = operand.read(ctx);
+    // Push has an extra delay before writing.
+    ctx.yield1m();
+    push_helper(ctx, val);
 }
 
-impl AluUnaryOp {
-    /// Get the ALU unary operation type for the given opcode. Panics if the code is greater than 7.
-    fn from_ycode(code: u8) -> Self {
-        match code {
-            0 => Self::RotateLeft8,
-            1 => Self::RotateRight8,
-            2 => Self::RotateLeft9,
-            3 => Self::RotateRight9,
-            4 => Self::DecimalAdjust,
-            5 => Self::Compliment,
-            6 => Self::SetCarryFlag,
-            7 => Self::ComplimentCarryFlag,
-            _ => panic!("Unrecognized ALU unary operation type (y code) {}", code),
-        }
-    }
+/// Implements pop instruction.
+fn pop(ctx: &mut impl CpuContext, operand: Operand16) {
+    let val = pop_helper(ctx);
+    // In practice, operand is always a register.
+    operand.write(ctx, val)
 }
 
-impl fmt::Display for AluUnaryOp {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            Self::RotateLeft8 => f.write_str("RLCA"),
-            Self::RotateLeft9 => f.write_str("RLA"),
-            Self::RotateRight8 => f.write_str("RRCA"),
-            Self::RotateRight9 => f.write_str("RRA"),
-            Self::DecimalAdjust => f.write_str("DAA"),
-            Self::SetCarryFlag => f.write_str("SCF"),
-            Self::Compliment => f.write_str("CPL"),
-            Self::ComplimentCarryFlag => f.write_str("CCF"),
-        }
-    }
+/// Push helper, shared between push and call. Pushes a caller-supplied 16 bit value onto the stack,
+/// waiting 1m between each byte and decrementing the stack pointer by 2.
+fn push_helper(ctx: &mut impl CpuContext, val: u16) {
+    let [low, high] = val.to_le_bytes();
+    ctx.yield1m();
+    let addr = ctx.cpustate_mut().regs.dec_sp();
+    ctx.mem_mut().write(addr.into(), high);
+
+    ctx.yield1m();
+    let addr = ctx.cpustate_mut().regs.dec_sp();
+    ctx.mem_mut().write(addr.into(), low);
 }
 
-/// 8 bit operand. Either the source or destination of an 8 bit operation.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum Operand8 {
-    // 8 bit registers.
-    /// Normal register B.
-    B,
-    /// Normal register C.
-    C,
-    /// Normal register D.
-    D,
-    /// Normal register E.
-    E,
-    /// Normal register High.
-    H,
-    /// Normal register Low.
-    L,
-    /// Accumulator register.
-    A,
+/// Pop helper, shared between pop and ret. Pops value from the stack, waiting 1m between each byte
+/// and incrementing the stack pointer by 2.
+fn pop_helper(ctx: &mut impl CpuContext) -> u16 {
+    ctx.yield1m();
+    let addr = ctx.cpustate_mut().regs.inc_sp();
+    let low = ctx.mem().read(addr.into());
 
-    // Indirections of 16 bit register pairs.
-    /// Dereference HL.
-    AddrHL,
-    /// Dereference BC.
-    AddrBC,
-    /// Dereference DE.
-    AddrDE,
-    /// Dereference HL then increment HL.
-    AddrHLInc,
-    /// Dereference HL then decrement HL.
-    AddrHLDec,
-    // Immediates
-    /// Load value from immediate (and advance program counter). Cannot be used to store. Will
-    /// panic if used as the destination operand.
-    Immediate,
-    /// Dereference a 16 bit immediate value.
-    AddrImmediate,
+    ctx.yield1m();
+    let addr = ctx.cpustate_mut().regs.inc_sp();
+    let high = ctx.mem().read(addr.into());
 
-    // Offsets from 0xff00.
-    /// Dereference 0xff00 + register C.
-    AddrRelC,
-    /// Dereference 0xff00 + 8 bit immediate.
-    AddrRelImmediate,
+    u16::from_le_bytes([low, high])
 }
 
-impl Operand8 {
-    /// Get the 8 bit operand for the given register code. Panics if the code is greater than 7.
-    /// Note that register codes are mostly 8 bit registers but also include `(HL)`.
-    fn from_regcode(code: u8) -> Self {
-        match code {
-            0 => Self::B,
-            1 => Self::C,
-            2 => Self::D,
-            3 => Self::E,
-            4 => Self::H,
-            5 => Self::L,
-            6 => Self::AddrHL,
-            7 => Self::A,
-            _ => panic!("Unrecognized Operand type {}", code),
-        }
-    }
-
-    /// Get the 8 bit operand from the given `p` code for an indirection.
-    fn from_indirect(code: u8) -> Self {
-        match code {
-            0 => Self::AddrBC,
-            1 => Self::AddrDE,
-            2 => Self::AddrHLInc,
-            3 => Self::AddrHLDec,
-            _ => panic!("Unrecognized indirection code {}", code),
-        }
-    }
+/// DI instruction (applies immediately).
+fn disable_interrupts(ctx: &mut impl CpuContext) {
+    ctx.cpustate_mut().interrupt_master_enable.clear();
 }
 
-impl fmt::Display for Operand8 {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            Self::A => f.write_str("A"),
-            Self::B => f.write_str("B"),
-            Self::C => f.write_str("C"),
-            Self::D => f.write_str("D"),
-            Self::E => f.write_str("E"),
-            Self::H => f.write_str("H"),
-            Self::L => f.write_str("L"),
-            Self::AddrHL => f.write_str("(HL)"),
-            Self::AddrBC => f.write_str("(BC)"),
-            Self::AddrDE => f.write_str("(DE)"),
-            Self::AddrHLInc => f.write_str("(HL+)"),
-            Self::AddrHLDec => f.write_str("(HL-)"),
-            Self::Immediate => f.write_str("u8"),
-            Self::AddrImmediate => f.write_str("(u16)"),
-            Self::AddrRelC => f.write_str("(FF00+C)"),
-            Self::AddrRelImmediate => f.write_str("(FF00+u8)"),
-        }
-    }
+/// EI instruction (applies after the following instruction).
+fn enable_interrupts(ctx: &mut impl CpuContext) {
+    ctx.cpustate_mut()
+        .interrupt_master_enable
+        .set_next_instruction();
 }
 
-/// 16 bit operand.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum Operand16 {
-    /// Register pair BC.
-    BC,
-    /// Register pair DE.
-    DE,
-    /// Register pair HL.
-    HL,
-    /// Register pair of the accumulator + flags register.
-    AF,
-    /// Stack pointer.
-    Sp,
-    /// Load value from immediate (and advance program counter). Cannot be used to store. Will
-    /// panic if used as the destination operand.
-    Immediate,
-    /// Load a 16 bit immediate (and advance program counter), then dereference that address.
-    AddrImmediate,
+/// Enabled interrupts and returns.
+fn interrupt_return(ctx: &mut impl CpuContext) {
+    let dest = pop_helper(ctx);
+    // Theres an extra 1m of delay in here.
+    ctx.yield1m();
+    ctx.cpustate_mut().regs.pc = dest;
+    ctx.cpustate_mut().interrupt_master_enable.set();
 }
 
-impl Operand16 {
-    /// Get a 16 bit operand from a register pair code, using the table of register pairs that
-    /// includes the stack pointer. Panics if the code is greater than 3.
-    fn from_pair_code_sp(code: u8) -> Operand16 {
-        match code {
-            0 => Operand16::BC,
-            1 => Operand16::DE,
-            2 => Operand16::HL,
-            3 => Operand16::Sp,
-            _ => panic!("Unrecognized register pair code {}", code),
-        }
-    }
-
-    /// Get a 16 bit operand from a register pair code, using the table of register pairs that
-    /// includes the accumulator-flags pair. Panics if the code is greater than 3.
-    fn from_pair_code_af(code: u8) -> Operand16 {
-        match code {
-            0 => Operand16::BC,
-            1 => Operand16::DE,
-            2 => Operand16::HL,
-            3 => Operand16::AF,
-            _ => panic!("Unrecognized register pair code {}", code),
-        }
-    }
+/// Offsets the stack pointer by an immediate value.
+fn offset_sp(ctx: &mut impl CpuContext) {
+    let offset = Operand8::Immediate.read(ctx) as i8;
+    let (res, flags) = offset_addr(ctx.cpustate().regs.sp, offset);
+    // This instruction takes two more cycles after loading the offset.
+    ctx.yield1m();
+    ctx.yield1m();
+    ctx.cpustate_mut().regs.sp = res;
+    ctx.cpustate_mut().regs.flags = flags;
 }
 
-impl fmt::Display for Operand16 {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            Operand16::BC => f.write_str("BC"),
-            Operand16::DE => f.write_str("DE"),
-            Operand16::HL => f.write_str("HL"),
-            Operand16::AF => f.write_str("AF"),
-            Operand16::Sp => f.write_str("SP"),
-            Operand16::Immediate => f.write_str("u16"),
-            Operand16::AddrImmediate => f.write_str("(u16)"),
-        }
-    }
+/// Loads the result of offsetting the stack pointer by an immediate value into HL.
+fn address_of_offset_sp(ctx: &mut impl CpuContext) {
+    let offset = Operand8::Immediate.read(ctx) as i8;
+    let (res, flags) = offset_addr(ctx.cpustate().regs.sp, offset);
+    // Interestingly, this instruction is actually faster than `ADD SP,i8`.
+    ctx.yield1m();
+    ctx.cpustate_mut().regs.set_hl(res);
+    ctx.cpustate_mut().regs.flags = flags;
 }
 
-/// Conditional for conditional jump/conditional ret.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum ConditionCode {
-    Unconditional,
-    NonZero,
-    Zero,
-    NoCarry,
-    Carry,
+// Similar to unconditional jump, but using HL as the target address.
+fn jump_hl(ctx: &mut impl CpuContext) {
+    let regs = &mut ctx.cpustate_mut().regs;
+    regs.sp = regs.hl();
 }
 
-impl ConditionCode {
-    /// Get the condition code for the given relative-jump condition code. Relative jump condition
-    /// codes are for x = 0, z = 0, y = 3..=7 (the value given should be y). Panics if the given
-    /// value is not in range 3..=7.
-    fn from_relative_cond_code(code: u8) -> Self {
-        match code {
-            3 => Self::Unconditional,
-            4..=7 => Self::from_absolute_cond_code(code - 4),
-            _ => panic!("Unrecognized Relative-Jump condtion code {}", code),
-        }
-    }
-
-    /// Get the condition code for the given jump, return, or call condition code. This never
-    /// returns `Unconditional`. The value must be in range 0..=3, otherwise this will panic.
-    fn from_absolute_cond_code(code: u8) -> Self {
-        match code {
-            0 => Self::NonZero,
-            1 => Self::Zero,
-            2 => Self::NoCarry,
-            3 => Self::Carry,
-            _ => panic!("Unrecognized Absolute-Jump condtion code {}", code),
-        }
-    }
+/// Executes the reset instruction. Similar to call with a fixed destination.
+fn reset(ctx: &mut impl CpuContext, dest: u8) {
+    // There's an extra delay at the start of an RST instruction.
+    ctx.yield1m();
+    push_helper(ctx, ctx.cpustate().regs.pc);
+    ctx.cpustate_mut().regs.pc = dest as u16;
 }
 
-impl fmt::Display for ConditionCode {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            Self::Unconditional => Ok(()),
-            Self::NonZero => f.write_str("NZ"),
-            Self::Zero => f.write_str("Z"),
-            Self::NoCarry => f.write_str("NC"),
-            Self::Carry => f.write_str("C"),
-        }
-    }
-}
+//////////////////////
+// CB Prefixed Opcodes
+//////////////////////
 
 /// Opcodes that come after a CB prefix opcode.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -599,6 +657,76 @@ impl CBOpcode {
             _ => unreachable!(),
         };
         Self { operand, op }
+    }
+
+    /// Load and execute a single CB-prefixed opcode from the given context.
+    fn load_and_execute(ctx: &mut impl CpuContext) {
+        let pc = ctx.cpustate().regs.pc;
+        trace!("Loading CB-opcode at {:#6X}", pc);
+        let opcode = Operand8::Immediate.read(ctx);
+        let opcode = Self::decode(opcode);
+        debug!("Executing CB @ {:#6X}: {}", pc, opcode);
+        opcode.execute(ctx);
+    }
+
+    /// Execute this opcode on the given context.
+    fn execute(self, ctx: &mut impl CpuContext) {
+        let arg = self.operand.read(ctx);
+        match self.op {
+            CBOperation::RotateLeft8 => {
+                let res = arg.rotate_left(1);
+                ctx.cpustate_mut().regs.flags =
+                    Flags::check_zero(res) | Flags::check_carry(res & 1 != 0);
+                self.operand.write(ctx, res);
+            }
+            CBOperation::RotateLeft9 => {
+                let (res, flags) = rotate_left9(arg, ctx.cpustate().regs.flags);
+                ctx.cpustate_mut().regs.flags = flags;
+                self.operand.write(ctx, res);
+            }
+            CBOperation::RotateRight8 => {
+                let res = arg.rotate_right(1);
+                ctx.cpustate_mut().regs.flags =
+                    Flags::check_zero(res) | Flags::check_carry(res & 0x80 != 0);
+                self.operand.write(ctx, res);
+            }
+            CBOperation::RotateRight9 => {
+                let (res, flags) = rotate_right9(arg, ctx.cpustate().regs.flags);
+                ctx.cpustate_mut().regs.flags = flags;
+                self.operand.write(ctx, res);
+            }
+            CBOperation::ShiftLeft => {
+                let res = arg << 1;
+                ctx.cpustate_mut().regs.flags =
+                    Flags::check_zero(res) | Flags::check_carry(arg & 0x80 != 0);
+                self.operand.write(ctx, res);
+            }
+            CBOperation::ShiftRightSignExt => {
+                let res = ((arg as i8) >> 1) as u8;
+                ctx.cpustate_mut().regs.flags =
+                    Flags::check_zero(res) | Flags::check_carry(arg & 1 != 0);
+                self.operand.write(ctx, res);
+            }
+            CBOperation::ShiftRight => {
+                let res = arg >> 1;
+                ctx.cpustate_mut().regs.flags =
+                    Flags::check_zero(res) | Flags::check_carry(arg & 1 != 0);
+                self.operand.write(ctx, res);
+            }
+            CBOperation::Swap => {
+                let res = ((arg & 0x0f) << 4) | ((arg & 0xf0) >> 4);
+                ctx.cpustate_mut().regs.flags = Flags::check_zero(res);
+                self.operand.write(ctx, res);
+            }
+            CBOperation::TestBit(bit) => {
+                // Doesn't affect the carry flag.
+                const MASK: Flags = Flags::all().difference(Flags::CARRY);
+                let flags = Flags::check_zero(arg & (1 << bit)) | Flags::HALFCARRY;
+                ctx.cpustate_mut().regs.flags.merge(flags, MASK);
+            }
+            CBOperation::ResetBit(bit) => self.operand.write(ctx, arg & !(1 << bit)),
+            CBOperation::SetBit(bit) => self.operand.write(ctx, arg | (1 << bit)),
+        }
     }
 }
 

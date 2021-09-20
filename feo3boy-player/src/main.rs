@@ -2,12 +2,14 @@ use std::fs::File;
 use std::io::Read;
 
 use clap::{App, Arg};
+use log::info;
 
 use feo3boy::gbz80core;
 use feo3boy::memdev::{BiosRom, Cartridge, GbMmu};
 
 fn main() {
-    println!("feo3boy");
+    env_logger::init();
+    info!("feo3boy");
 
     let argparser = App::new("FEO3Boy")
         .version("0.1.0")
@@ -50,9 +52,9 @@ fn main() {
 
     // Box to keep it off the stack.
     let mut mmu = Box::new(GbMmu::new(bios, cart));
-    let mut cpustate = gbz80core::Gbz80state::new();
+    let mut cpustate = gbz80core::Gbz80State::new();
 
     loop {
-        gbz80core::tick(&mut cpustate, &mut *mmu);
+        gbz80core::tick((&mut cpustate, &mut *mmu));
     }
 }
