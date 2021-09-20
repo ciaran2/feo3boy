@@ -3,6 +3,10 @@ use std::fmt;
 
 use thiserror::Error;
 
+pub use cartridge::{Cartridge, Mbc1Rom, ParseCartridgeError, RamBank, RomBank};
+
+mod cartridge;
+
 /// A memory address within system memory. Provides both the raw address and relative address so
 /// that devices can report both raw and relative addresses in error messages.
 #[derive(Copy, Clone, Debug)]
@@ -178,150 +182,6 @@ impl TryFrom<&[u8]> for BiosRom {
     }
 }
 
-/// Enum of different cartridge types.
-#[derive(Clone, Debug)]
-pub enum Cartridge {
-    /// No cartridge. All reads return 0 and all writes are ignored.
-    None,
-    /// An [`Mbc1Rom`]. This is boxed so that Cartridge doesn't always take up the full size of an
-    /// Mbc1Rom even when it is set to None.
-    Mbc1(Box<Mbc1Rom>),
-}
-
-impl Default for Cartridge {
-    fn default() -> Self {
-        Cartridge::None
-    }
-}
-
-impl MemDevice for Cartridge {
-    fn read(&self, addr: Addr) -> u8 {
-        match self {
-            Cartridge::None => NullRom::<0xA000>.read(addr),
-            Cartridge::Mbc1(ref cart) => cart.read(addr),
-        }
-    }
-
-    fn write(&mut self, addr: Addr, value: u8) {
-        match self {
-            Cartridge::None => NullRom::<0xA000>.write(addr, value),
-            Cartridge::Mbc1(ref mut cart) => cart.write(addr, value),
-        }
-    }
-}
-
-/// Variant 1 of the system ROMs.
-/// Note that in the GB, the ROM occupies two memory spaces, one before GPU ram for the ROM
-/// portion, and one after for the RAM. In this implementation, this split is ignored, and the two
-/// memory spaces are squished together. It is the responsibility of the caller to remap the memory
-/// spaces as needed to insert the GPU ram.
-#[derive(Clone, Debug)]
-pub struct Mbc1Rom {
-    /// Set of rom banks loaded from the cartridge. Banks 32, 64, and 96 are unreachable but left
-    /// in place for convenient addressing.
-    rom_banks: [ReadOnly<[u8; 16384]>; 128],
-    /// Set of ram banks on this Mbc1Rom, if any. If none, this will just be zeros.
-    ram_banks: [[u8; 8192]; 4],
-    /// Whether this cartridge type has external ram support. If not, ram cannot be enabled, and
-    /// ram_mode does nothing.
-    has_ram: bool,
-
-    // Reigsters:
-    /// Whether ram is enabled for reading/writing. Otherwise writes are ignored and reads return
-    /// dummy values.
-    ram_enable: bool,
-    /// Rom bank select. This is the low-order 5 bits (0..5) of the rom bank.
-    rom_bank: u8,
-    /// Bank set is a 2 bit register that either selects the ram-bank or the high-order 2 bits
-    /// (5..7) of the rom bank, depending on the mode register. Note that because these two bits
-    /// are shared between rom and ram, if mode is 0, only ram bank 0 is accessible, and if mode is
-    /// 1, only rom banks 0..32 are accessible.
-    bank_set: u8,
-    /// Whether the mode is ram-mode. If set, the bank_set register chooses between ram banks
-    /// instead of rom bank-sets.
-    ram_mode: bool,
-}
-
-impl Mbc1Rom {
-    /// Convenient access to the fixed rom bank.
-    fn fixed_bank(&self) -> &ReadOnly<[u8; 16384]> {
-        &self.rom_banks[0]
-    }
-
-    /// Get the currently selected rom bank. This will never be bank 0, 32, 64, or 96.
-    fn rom_bank(&self) -> &ReadOnly<[u8; 16384]> {
-        let low_order = self.rom_bank;
-        // In RAM mode, bank_set is not used.
-        let high_order = if self.ram_mode { 0 } else { self.bank_set << 5 };
-        let rom = (high_order | low_order) as usize;
-        &self.rom_banks[rom]
-    }
-
-    /// Gets the currently selected ram bank. Does not check if ram is enabled, but does check
-    /// ram_mode to see if it should use bank_set to select the correct address.
-    fn ram_bank(&self) -> &[u8; 8192] {
-        // In ROM mode, only bank 0 is accessible
-        let ram = if self.ram_mode { self.bank_set } else { 0 } as usize;
-        &self.ram_banks[ram]
-    }
-
-    /// Gets the currently selected ram bank. Does not check if ram is enabled, but does check
-    /// ram_mode to see if it should use bank_set to select the correct address.
-    fn ram_bank_mut(&mut self) -> &mut [u8; 8192] {
-        // In ROM mode, only bank 0 is accessible
-        let ram = if self.ram_mode { self.bank_set } else { 0 } as usize;
-        &mut self.ram_banks[ram]
-    }
-}
-
-impl MemDevice for Mbc1Rom {
-    fn read(&self, addr: Addr) -> u8 {
-        match addr.relative() {
-            0..=0x3fff => self.fixed_bank().read(addr),
-            0x4000..=0x7fff => self.rom_bank().read(addr.offset_by(0x4000)),
-            0x8000..=0x9fff => {
-                if self.ram_enable {
-                    self.ram_bank().read(addr.offset_by(0x8000))
-                } else {
-                    0
-                }
-            }
-            _ => panic!("Address {} out of range for Mbc1Rom", addr),
-        }
-    }
-
-    fn write(&mut self, addr: Addr, value: u8) {
-        match addr.relative() {
-            0x0000..=0x1fff => {
-                // Enable ram if the cartridge actually has ram and if the lower four bits of the
-                // value are 0xA.
-                self.ram_enable = self.has_ram && (value & 0xF) == 0xA;
-            }
-            0x2000..=0x3fff => {
-                // Set the low-order bits of the rom-bank selection from the lower 5 bits of the
-                // provided value. If 0 is provided, raise the value to 1.
-                self.rom_bank = (value & 0x1f).max(1);
-            }
-            0x4000..=0x5fff => {
-                // Take the 3 bottom bits as the bank set. These will be applied based on whether
-                // the mode is ram mode or rom mode when used.
-                self.bank_set = value & 0x3;
-            }
-            0x6000..=0x7fff => {
-                // Change between rom mode and ram mode, if the cartridge has Ram.
-                self.ram_mode = self.has_ram && (value & 1) != 0;
-            }
-            0x8000..=0x9fff => {
-                if self.has_ram && self.ram_enable {
-                    // Write to ram, if ram exists and is enable.
-                    self.ram_bank_mut().write(addr.offset_by(0x8000), value);
-                }
-            }
-            _ => panic!("Address {} out of range for Mbc1Rom", addr),
-        }
-    }
-}
-
 impl<const N: usize> MemDevice for [u8; N] {
     fn read(&self, addr: Addr) -> u8 {
         match self.get(addr.index()) {
@@ -436,7 +296,7 @@ impl GbMmu {
 
 impl Default for GbMmu {
     fn default() -> Self {
-        Self::new(Default::default(), Default::default())
+        Self::new(Default::default(), Cartridge::None)
     }
 }
 
