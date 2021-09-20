@@ -565,6 +565,107 @@ impl fmt::Display for ConditionCode {
     }
 }
 
+/// Opcodes that come after a CB prefix opcode.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct CBOpcode {
+    /// The operand to operate on.
+    pub operand: Operand8,
+    /// The operation being performed.
+    pub op: CBOperation,
+}
+
+impl CBOpcode {
+    /// Decodes an 8-bit opcode found after a CB prefix into a CBOpcode.
+    pub fn decode(opcode: u8) -> Self {
+        let x = (opcode & 0b11000000) >> 6;
+        let y = (opcode & 0b00111000) >> 3;
+        let z = opcode & 0b00000111;
+        let operand = Operand8::from_regcode(z);
+        let op = match x {
+            0 => match y {
+                0 => CBOperation::RotateLeft8,
+                1 => CBOperation::RotateRight8,
+                2 => CBOperation::RotateLeft9,
+                3 => CBOperation::RotateRight9,
+                4 => CBOperation::ShiftLeft,
+                5 => CBOperation::ShiftRightSignExt,
+                6 => CBOperation::Swap,
+                7 => CBOperation::ShiftRight,
+                _ => unreachable!(),
+            },
+            1 => CBOperation::TestBit(y),
+            2 => CBOperation::ResetBit(y),
+            3 => CBOperation::SetBit(y),
+            _ => unreachable!(),
+        };
+        Self { operand, op }
+    }
+}
+
+impl fmt::Display for CBOpcode {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if self.op.is_bit_op() {
+            write!(f, "{},{}", self.op, self.operand)
+        } else {
+            write!(f, "{} {}", self.op, self.operand)
+        }
+    }
+}
+
+/// Type of operation performed in a CB prefix opcode.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum CBOperation {
+    /// 8-bit left rotate. Bit 7 goes to both the carry and bit 0.
+    RotateLeft8,
+    /// 9-bit left rotate. Bit 7 goes to carry and carry goes to bit 0.
+    RotateLeft9,
+    /// 8-bit right rotate. Bit 0 goes to both the carry and bit 7.
+    RotateRight8,
+    /// 9-bit left rotate. Bit 0 goes to carry and carry goes to bit 7.
+    RotateRight9,
+    /// Shift left. Bit 7 gotes to carry, and 0 fills in Bit 0.
+    ShiftLeft,
+    /// Shift right. Bit 0 goes to carry, and 0 fills in Bit 7.
+    ShiftRight,
+    /// Shift right with sign-extension. Bit 0 goes to carry, and Bit 7 is copied with its current
+    /// value.
+    ShiftRightSignExt,
+    /// Swap the nybbles of the byte.
+    Swap,
+    /// Check if the given bit (given as an index in range 0..=7) is set in the operand.
+    TestBit(u8),
+    /// Sets the given bit (given as an index in range 0..=7) in the operand.
+    SetBit(u8),
+    /// Clears the given bit (given as an index in range 0..=7) in the operand.
+    ResetBit(u8),
+}
+
+impl CBOperation {
+    /// Returns true if this CBOperation is one of the ones that affects a single bit. Otherwise, it
+    /// is one of the rotate/shift/swap operations.
+    fn is_bit_op(self) -> bool {
+        matches!(self, Self::TestBit(_) | Self::SetBit(_) | Self::ResetBit(_))
+    }
+}
+
+impl fmt::Display for CBOperation {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Self::RotateLeft8 => f.write_str("RLC"),
+            Self::RotateRight8 => f.write_str("RRC"),
+            Self::RotateLeft9 => f.write_str("RL"),
+            Self::RotateRight9 => f.write_str("RR"),
+            Self::ShiftLeft => f.write_str("SLA"),
+            Self::ShiftRightSignExt => f.write_str("SRA"),
+            Self::Swap => f.write_str("SWAP"),
+            Self::ShiftRight => f.write_str("SRL"),
+            Self::TestBit(bit) => write!(f, "BIT {}", bit),
+            Self::ResetBit(bit) => write!(f, "RES {}", bit),
+            Self::SetBit(bit) => write!(f, "SET {}", bit),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -573,6 +674,13 @@ mod tests {
     fn can_decode_any_opcode() {
         for op in 0u8..=0xff {
             Opcode::decode(op);
+        }
+    }
+
+    #[test]
+    fn can_decode_any_cb_opcode() {
+        for op in 0u8..=0xff {
+            CBOpcode::decode(op);
         }
     }
 }
