@@ -56,5 +56,6 @@ fn main() {
 
     loop {
         gbz80core::tick((&mut cpustate, &mut *mmu));
+        serial::tick()
     }
 }

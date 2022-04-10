@@ -1,12 +1,14 @@
 use crate::memdev::MemDevice;
 
+use std::io;
+use std::io::Write;
+
 // serial interrupt at bit 3
 const INTERRUPT_MASK: u8 = 0b1000;
 const SLOW_TPERIOD: u16 = 512;
 const FAST_TPERIOD: u16 = 16;
 
 struct SerialContext {
-    t_period: u16,
     t_progress: u16,
     bit_progress: u8,
     remote_byte: u8,
@@ -28,9 +30,13 @@ pub fn tick(serial_ctx: &mut SerialContext, mappedIO: &mut MemDevice, tcycles: u
             serial_ctx.remote_byte = (serial_ctx.remote_byte << 1) | local_high_bit;
 
             if serial_ctx.bit_progress == 8 {
-                mappedIO[0x02] = 0x01;
+                mappedIO[0x02] = 0x01; //clear transfer start flag
                 mappedIO[0x0f] |= INTERRUPT_MASK;
                 serial_ctx.bit_progress = 0;
+
+                //abstract this into something more modular later
+                print!("{}", serial_ctx.remote_byte);
+                io::stdout.flush().unwrap();
             }
         }
     }
