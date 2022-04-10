@@ -251,8 +251,13 @@ where
 {
     let ctx = ctx.borrow_mut();
 
-    // TODO: check interrupt state.
     if ctx.cpustate().halted {
+        if ctx.interrupts().active().is_empty() {
+            return;
+        }
+        ctx.cpustate_mut().halted = false;
+    }
+    if opcode::service_interrupt(ctx) {
         return;
     }
 

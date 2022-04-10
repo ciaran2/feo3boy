@@ -26,6 +26,64 @@ bitflags! {
     }
 }
 
+impl InterruptFlags {
+    /// Gets an interator over the flags that are set in this InterruptFlags.
+    pub fn iter(self) -> InterruptFlagsIter {
+        self.into_iter()
+    }
+
+    /// Gets the handler address for this particular interrupt. Panics if more than one
+    /// flag is set.
+    pub fn handler_addr(self) -> u16 {
+        const FIRST_INTERRUPT: u16 = 0x40;
+        const INTERRUPT_GAP: u16 = 0x08;
+
+        assert!(
+            self.bits.count_ones() == 1,
+            "mut have exactly on interrupt handler set"
+        );
+        FIRST_INTERRUPT + self.bits.trailing_zeros() as u16 * INTERRUPT_GAP
+    }
+}
+
+/// Gets an interator over the flags that are set in this InterruptFlags.
+impl IntoIterator for InterruptFlags {
+    type Item = InterruptFlags;
+    type IntoIter = InterruptFlagsIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        InterruptFlagsIter {
+            flags: self,
+            next: 1,
+        }
+    }
+}
+
+/// Iterates over InterruptFlags in priority order.
+pub struct InterruptFlagsIter {
+    /// The flags being iterated.
+    flags: InterruptFlags,
+    /// The next bit to check.
+    next: u8,
+}
+
+impl Iterator for InterruptFlagsIter {
+    type Item = InterruptFlags;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let flag = InterruptFlags::from_bits_truncate(self.next);
+            if flag.is_empty() {
+                return None;
+            }
+            self.next <<= 1;
+            if self.flags.contains(flag) {
+                return Some(flag);
+            }
+        }
+    }
+}
+
 /// The Interrupt Enable (IE) register. Implements MemDevice.
 #[derive(Copy, Clone, Debug, Default)]
 pub struct InterruptEnable(pub InterruptFlags);
@@ -65,11 +123,24 @@ pub trait Interrupts {
         self.set_queued(self.queued() | flags);
     }
 
+    /// Clears the specified interrupts by removing them from the active interrupt flags.
+    #[inline]
+    fn clear(&mut self, flags: InterruptFlags) {
+        self.set_queued(self.queued() - flags);
+    }
+
     /// Get the enabled interrupt flags.
     fn enabled(&self) -> InterruptFlags;
 
     /// Set the enabled interrupt flags for the context.
     fn set_enabled(&mut self, flags: InterruptFlags);
+
+    /// Gets the set of active interrupts, that is those which are enabled and in the
+    /// interrupt vector.
+    #[inline]
+    fn active(&self) -> InterruptFlags {
+        self.enabled() & self.queued()
+    }
 }
 
 /// Wraps a mem-device, providing access to memory-mapped interrupt registers by reading
