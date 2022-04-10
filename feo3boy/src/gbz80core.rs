@@ -2,7 +2,7 @@ use std::borrow::BorrowMut;
 
 use bitflags::bitflags;
 
-use crate::interrupts::InterruptFlags;
+use crate::interrupts::{Interrupts, MemInterrupts};
 use crate::memdev::MemDevice;
 pub use opcode::{CBOpcode, CBOperation, Opcode};
 pub use opcode_args::{AluOp, AluUnaryOp, ConditionCode, Operand16, Operand8};
@@ -195,8 +195,6 @@ pub struct Gbz80State {
     pub regs: Regs,
     /// Interrupt master enable flag, controlled by EI, DI, RETI, and interrupts.
     pub interrupt_master_enable: InterruptMasterState,
-    /// Current pending interrupts. Often referred to as register `IF`.
-    pub interrupt_vector: InterruptFlags,
     /// Whether the CPU is halted.
     pub halted: bool,
 }
@@ -217,6 +215,8 @@ pub trait CpuContext {
     /// Type of MemDevice in this context.
     type Mem: MemDevice;
 
+    type Interrupts: Interrupts;
+
     /// Gets the CPU state.
     fn cpustate(&self) -> &Gbz80State;
 
@@ -228,6 +228,12 @@ pub trait CpuContext {
 
     /// Get a mutable reference to the memory.
     fn mem_mut(&mut self) -> &mut Self::Mem;
+
+    /// Provides read access to the interrupt flags.
+    fn interrupts(&self) -> &Self::Interrupts;
+
+    /// Provides write-access to the interrupt flags.
+    fn interrupts_mut(&mut self) -> &mut Self::Interrupts;
 
     /// Yields from CPU execution for 1 M clock cycle (4 T). This callback should step the clock
     /// forward and perform any work that needs to happen faster than instructions execute.
@@ -264,21 +270,36 @@ where
 /// Allows a tuple of Gbz80State and any MemDevice to be used as CpuContext.
 impl<M: MemDevice> CpuContext for (Gbz80State, M) {
     type Mem = M;
+    type Interrupts = MemInterrupts<M>;
 
+    #[inline]
     fn cpustate(&self) -> &Gbz80State {
         &self.0
     }
 
+    #[inline]
     fn cpustate_mut(&mut self) -> &mut Gbz80State {
         &mut self.0
     }
 
+    #[inline]
     fn mem(&self) -> &Self::Mem {
         &self.1
     }
 
+    #[inline]
     fn mem_mut(&mut self) -> &mut Self::Mem {
         &mut self.1
+    }
+
+    #[inline]
+    fn interrupts(&self) -> &Self::Interrupts {
+        MemInterrupts::wrap(self.mem())
+    }
+
+    #[inline]
+    fn interrupts_mut(&mut self) -> &mut Self::Interrupts {
+        MemInterrupts::wrap_mut(self.mem_mut())
     }
 
     /// With just a Gbz80State and arbitrary MemDevice, yielding actually does nothing.
@@ -288,21 +309,36 @@ impl<M: MemDevice> CpuContext for (Gbz80State, M) {
 /// Allows a tuple of references to Gbz80State and any MemDevice to be used as CpuContext.
 impl<M: MemDevice> CpuContext for (&mut Gbz80State, &mut M) {
     type Mem = M;
+    type Interrupts = MemInterrupts<M>;
 
+    #[inline]
     fn cpustate(&self) -> &Gbz80State {
         self.0
     }
 
+    #[inline]
     fn cpustate_mut(&mut self) -> &mut Gbz80State {
         self.0
     }
 
+    #[inline]
     fn mem(&self) -> &Self::Mem {
         self.1
     }
 
+    #[inline]
     fn mem_mut(&mut self) -> &mut Self::Mem {
         self.1
+    }
+
+    #[inline]
+    fn interrupts(&self) -> &Self::Interrupts {
+        MemInterrupts::wrap(self.mem())
+    }
+
+    #[inline]
+    fn interrupts_mut(&mut self) -> &mut Self::Interrupts {
+        MemInterrupts::wrap_mut(self.mem_mut())
     }
 
     /// With just a Gbz80State and arbitrary MemDevice, yielding actually does nothing.

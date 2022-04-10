@@ -3,7 +3,7 @@ use std::fmt;
 
 use thiserror::Error;
 
-use crate::interrupts::{InterruptEnable, InterruptFlags};
+use crate::interrupts::{InterruptEnable, InterruptFlags, Interrupts};
 
 pub use cartridge::{Cartridge, Mbc1Rom, ParseCartridgeError, RamBank, RomBank};
 
@@ -218,6 +218,7 @@ pub struct MemMappedIo {
     serial_data: u8,
     serial_control: u8,
     bios_enabled: bool,
+    interrupt_flags: InterruptFlags,
 }
 
 impl MemMappedIo {
@@ -227,6 +228,7 @@ impl MemMappedIo {
             serial_data: 0x00,
             serial_control: 0x00,
             bios_enabled: true,
+            interrupt_flags: InterruptFlags::empty(),
         }
     }
 
@@ -248,7 +250,9 @@ impl MemDevice for MemMappedIo {
             0x00 => 0xff,
             0x01 => self.serial_data,
             0x02 => self.serial_control,
-            0x03..=0x4f => 0xff,
+            0x03..=0x0e => 0xff,
+            0x0f => self.interrupt_flags.bits(),
+            0x10..=0x4f => 0xff,
             0x50 => self.bios_enabled as u8,
             0x51..=0x7f => 0xff,
             _ => panic!("Address {} out of range for Mem Mapped IO", addr),
@@ -257,7 +261,9 @@ impl MemDevice for MemMappedIo {
 
     fn write(&mut self, addr: Addr, value: u8) {
         match addr.relative() {
-            0x00..=0x4f => {}
+            0x00..=0x0e => {}
+            0x0f => self.interrupt_flags = InterruptFlags::from_bits_truncate(value),
+            0x10..=0x4f => {}
             0x50 => {
                 if value & 1 != 0 {
                     self.bios_enabled = false;
@@ -365,5 +371,27 @@ impl MemDevice for GbMmu {
             0xff80..=0xfffe => self.zram.write(addr.offset_by(0xff80), value),
             0xffff => self.interrupt_enable.write(addr.offset_by(0xffff), value),
         }
+    }
+}
+
+impl Interrupts for GbMmu {
+    #[inline]
+    fn queued(&self) -> InterruptFlags {
+        self.io.interrupt_flags
+    }
+
+    #[inline]
+    fn set_queued(&mut self, flags: InterruptFlags) {
+        self.io.interrupt_flags = flags;
+    }
+
+    #[inline]
+    fn enabled(&self) -> InterruptFlags {
+        self.interrupt_enable.0
+    }
+
+    #[inline]
+    fn set_enabled(&mut self, flags: InterruptFlags) {
+        self.interrupt_enable.0 = flags;
     }
 }

@@ -4,7 +4,7 @@ use log::{debug, trace, warn};
 
 use super::oputils::{add8_flags, offset_addr, rotate_left9, rotate_right9, sub8_flags};
 use super::{AluOp, AluUnaryOp, ConditionCode, CpuContext, Flags, Operand16, Operand8};
-use crate::interrupts::InterruptFlags;
+use crate::interrupts::Interrupts;
 use crate::memdev::MemDevice;
 
 // Opcode References:
@@ -458,8 +458,8 @@ fn halt(ctx: &mut impl CpuContext) {
         // No need to special-case interrupts here, since the next `tick` call will un-halt anyway.
         ctx.cpustate_mut().halted = true;
     } else {
-        let enabled_interrupts = InterruptFlags::get_interrupt_enable(ctx.mem());
-        let pending_interrupts = ctx.cpustate().interrupt_vector;
+        let enabled_interrupts = ctx.interrupts().enabled();
+        let pending_interrupts = ctx.interrupts().queued();
         if enabled_interrupts.intersects(pending_interrupts) {
             panic!("Halt-Bug encountered (see method description).");
         } else {
