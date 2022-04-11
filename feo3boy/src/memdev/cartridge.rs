@@ -199,12 +199,12 @@ impl Cartridge {
                     return Err(ParseCartridgeError::UnsupportedRomSize { rom_type, rom_size });
                 }
                 let ram_size = match (rom_type, ram_size(&header)) {
-                    (0, Err(e)) => {
+                    (1, Err(e)) => {
                         warn!("Error parsing ram type for ramless MBC1: {}", e);
                         0
                     }
-                    (0, Ok(0)) => 0,
-                    (0, Ok(size)) => {
+                    (1, Ok(0)) => 0,
+                    (1, Ok(size)) => {
                         warn!("Got {} ram banks on a ramless MBC1, expected 0.", size);
                         0
                     }

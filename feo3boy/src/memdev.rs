@@ -261,7 +261,10 @@ impl MemDevice for MemMappedIo {
 
     fn write(&mut self, addr: Addr, value: u8) {
         match addr.relative() {
-            0x00..=0x0e => {}
+            0x00 => {},
+            0x01 => self.serial_data = value,
+            0x02 => self.serial_control = value,
+            0x03..=0x0e => {},
             0x0f => self.interrupt_flags = InterruptFlags::from_bits_truncate(value),
             0x10..=0x4f => {}
             0x50 => {
@@ -289,7 +292,7 @@ pub struct GbMmu {
     /// Spirte info. Mapped to 0xFE00..0xFEA0.
     oam: [u8; 160],
     /// Memory mapped IO. Mapped to 0xff00..FF80.
-    io: MemMappedIo,
+    pub io: MemMappedIo,
     /// "Page Zero", memory primarily used for software-hardware interaction. Mapped to
     /// 0xFF80..0xffff
     zram: [u8; 127],
