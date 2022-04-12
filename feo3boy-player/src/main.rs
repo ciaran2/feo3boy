@@ -4,9 +4,8 @@ use std::io::Read;
 use clap::{App, Arg};
 use log::info;
 
-use feo3boy::gbz80core;
-use feo3boy::serial;
-use feo3boy::memdev::{BiosRom, Cartridge, GbMmu};
+use feo3boy::gb::Gb;
+use feo3boy::memdev::{BiosRom, Cartridge};
 
 fn main() {
     env_logger::init();
@@ -52,12 +51,9 @@ fn main() {
     };
 
     // Box to keep it off the stack.
-    let mut mmu = Box::new(GbMmu::new(bios, cart));
-    let mut cpustate = gbz80core::Gbz80State::new();
-    let mut serial_ctx = serial::SerialContext::new();
+    let mut gb = Gb::new(bios, cart);
 
     loop {
-        gbz80core::tick((&mut cpustate, &mut *mmu));
-        serial::tick(&mut serial_ctx, &mut mmu.io, 4)
+        gb.tick();
     }
 }

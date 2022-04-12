@@ -1,5 +1,6 @@
 use crate::gbz80core::{self, CpuContext, Gbz80State};
 use crate::memdev::{BiosRom, Cartridge, GbMmu};
+use crate::serial::{self, SerialContext};
 
 /// Represents a "real" gameboy, by explicitly using the GbMmu for memory.
 pub struct Gb {
@@ -7,6 +8,8 @@ pub struct Gb {
     cpustate: Gbz80State,
     /// MMU for the system.
     mmu: Box<GbMmu>,
+    /// State of serial data transfer.
+    serial: SerialContext,
 }
 
 impl Gb {
@@ -15,13 +18,15 @@ impl Gb {
         Gb {
             cpustate: Gbz80State::new(),
             mmu: Box::new(GbMmu::new(bios, cart)),
+            serial: SerialContext::new(),
         }
     }
 
     /// Tick forward by one instruction, executing background and graphics processing
     /// operations as needed.
     pub fn tick(&mut self) {
-        gbz80core::tick::<_, Self>(self);
+        gbz80core::tick::<_, Self>(&mut *self);
+        serial::tick(&mut self.serial, &mut self.mmu.io, 4);
     }
 }
 
@@ -61,5 +66,7 @@ impl CpuContext for Gb {
 
     fn yield1m(&mut self) {
         // TODO: run background processing while yielded.
+        // Continue processing serial while yielded.
+        serial::tick(&mut self.serial, &mut self.mmu.io, 4);
     }
 }
