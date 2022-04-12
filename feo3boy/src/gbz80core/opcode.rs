@@ -563,6 +563,25 @@ fn pop_helper(ctx: &mut impl CpuContext) -> u16 {
     u16::from_le_bytes([low, high])
 }
 
+/// Checks if an interrupt should be serviced, and if so performs the hidden isr
+/// instruction to jump to the interrupt handler. If an interrupt was handled, returns
+/// true.
+pub(super) fn service_interrupt(ctx: &mut impl CpuContext) -> bool {
+    if ctx.cpustate().interrupt_master_enable.enabled() {
+        if let Some(interrupt) = ctx.interrupts().active().iter().next() {
+            ctx.yield1m();
+            ctx.yield1m();
+            ctx.interrupts_mut().clear(interrupt);
+            ctx.cpustate_mut().interrupt_master_enable.clear();
+            push_helper(ctx, ctx.cpustate().regs.pc);
+            ctx.yield1m();
+            ctx.cpustate_mut().regs.pc = interrupt.handler_addr();
+            return true;
+        }
+    }
+    false
+}
+
 /// DI instruction (applies immediately).
 fn disable_interrupts(ctx: &mut impl CpuContext) {
     ctx.cpustate_mut().interrupt_master_enable.clear();
