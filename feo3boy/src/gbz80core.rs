@@ -57,7 +57,7 @@ impl Flags {
 /// CPU registers on the GB Z80 processor.
 ///
 /// Note that there are a few other registers on a GameBoy, but those are memory mapped.
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct Regs {
     // Registers are paired in little-endian order (though we aren't using any specific #[repr], so
     // compiler is free to reorder them).
@@ -188,7 +188,7 @@ impl Default for InterruptMasterState {
 }
 
 /// Internal state of the CPU.
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct Gbz80State {
     /// Cpu registers.
     pub regs: Regs,

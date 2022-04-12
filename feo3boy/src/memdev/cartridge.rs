@@ -1,5 +1,6 @@
 //! Implementation of different cartridge types.
 
+use std::convert::TryFrom;
 use std::io::{self, ErrorKind, Read};
 use std::slice;
 
@@ -236,6 +237,22 @@ impl Cartridge {
             }
             code => Err(ParseCartridgeError::UnknownMbcType(code)),
         }
+    }
+}
+
+impl TryFrom<&[u8]> for Cartridge {
+    type Error = ParseCartridgeError;
+
+    fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
+        Cartridge::parse(data)
+    }
+}
+
+impl TryFrom<Vec<u8>> for Cartridge {
+    type Error = ParseCartridgeError;
+
+    fn try_from(data: Vec<u8>) -> Result<Self, Self::Error> {
+        Self::try_from(&*data)
     }
 }
 

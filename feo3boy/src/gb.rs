@@ -3,13 +3,14 @@ use crate::memdev::{BiosRom, Cartridge, GbMmu};
 use crate::serial::{self, SerialContext};
 
 /// Represents a "real" gameboy, by explicitly using the GbMmu for memory.
+#[derive(Clone, Debug)]
 pub struct Gb {
     /// State of the CPU in the system.
-    cpustate: Gbz80State,
+    pub cpustate: Gbz80State,
     /// MMU for the system.
-    mmu: Box<GbMmu>,
+    pub mmu: Box<GbMmu>,
     /// State of serial data transfer.
-    serial: SerialContext,
+    pub serial: SerialContext,
 }
 
 impl Gb {
