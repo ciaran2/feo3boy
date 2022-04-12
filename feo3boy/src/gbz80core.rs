@@ -196,6 +196,9 @@ pub struct Gbz80State {
     pub interrupt_master_enable: InterruptMasterState,
     /// Whether the CPU is halted.
     pub halted: bool,
+    /// Set to true when the halt bug is tripped until the double-read of the program
+    /// counter.
+    pub halt_bug: bool,
 }
 
 impl Gbz80State {

@@ -236,6 +236,11 @@ impl Opcode {
         let pc = ctx.cpustate().regs.pc;
         trace!("Loading opcode at {:#6X}", pc);
         let opcode = Operand8::Immediate.read(ctx);
+        if ctx.cpustate().halt_bug {
+            let state = ctx.cpustate_mut();
+            state.regs.pc = state.regs.pc.wrapping_sub(1);
+            state.halt_bug = false;
+        }
         let opcode = Self::decode(opcode);
         debug!("Executing @ {:#6X}: {}", pc, opcode);
         opcode.execute(ctx);
@@ -461,7 +466,9 @@ fn halt(ctx: &mut impl CpuContext) {
         let enabled_interrupts = ctx.interrupts().enabled();
         let pending_interrupts = ctx.interrupts().queued();
         if enabled_interrupts.intersects(pending_interrupts) {
-            panic!("Halt-Bug encountered (see method description).");
+            // Halt doesn't actually happen, and instead the program counter will fail to
+            // increment in the next step.
+            ctx.cpustate_mut().halt_bug = true;
         } else {
             // `tick` will un-halt next time ([IE] & [IF] != 0), but will not service the interrupt.
             ctx.cpustate_mut().halted = true;
@@ -573,7 +580,14 @@ pub(super) fn service_interrupt(ctx: &mut impl CpuContext) -> bool {
             ctx.yield1m();
             ctx.interrupts_mut().clear(interrupt);
             ctx.cpustate_mut().interrupt_master_enable.clear();
-            push_helper(ctx, ctx.cpustate().regs.pc);
+            let ret_loc = if ctx.cpustate().halt_bug {
+                let state = ctx.cpustate_mut();
+                state.halt_bug = false;
+                state.regs.pc.wrapping_sub(1)
+            } else {
+                ctx.cpustate().regs.pc
+            };
+            push_helper(ctx, ret_loc);
             ctx.yield1m();
             ctx.cpustate_mut().regs.pc = interrupt.handler_addr();
             return true;
