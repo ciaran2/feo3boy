@@ -46,7 +46,7 @@ pub fn tick(serial_ctx: &mut SerialContext, mappedIO: &mut MemDevice, tcycles: u
                 serial_ctx.bit_progress = 0;
 
                 //abstract this into something more modular later
-                print!("{}", serial_ctx.remote_byte);
+                print!("{}", serial_ctx.remote_byte as char);
                 io::stdout().flush().unwrap();
             }
         }

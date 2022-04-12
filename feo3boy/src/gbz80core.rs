@@ -132,9 +132,8 @@ impl Regs {
 
     /// Returns the current stack pointer and decrements the value.
     pub fn dec_sp(&mut self) -> u16 {
-        let sp = self.sp;
-        self.sp = sp.wrapping_sub(1);
-        sp
+        self.sp = self.sp.wrapping_sub(1);
+        self.sp
     }
 }
 
