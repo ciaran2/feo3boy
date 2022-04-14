@@ -2,6 +2,7 @@ use std::convert::TryFrom;
 use std::fmt;
 
 use thiserror::Error;
+use log::{trace,debug,warn};
 
 use crate::interrupts::{InterruptEnable, InterruptFlags, Interrupts};
 
@@ -339,6 +340,7 @@ impl MemDevice for GbMmu {
             "Using Root MMU with offset address {}",
             addr
         );
+        trace!("Read from MMU address {:#x}", addr.raw);
         // Address guaranteed to be in range since we cover the whole memory space.
         match addr.relative() {
             0x0..=0xff if self.io.bios_enabled() => self.bios.read(addr),
