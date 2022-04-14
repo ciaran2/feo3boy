@@ -2,4 +2,5 @@
 members = [
   "feo3boy",
   "feo3boy-player",
+  "web-debugger",
 ]
