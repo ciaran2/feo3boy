@@ -3,6 +3,7 @@
 use std::convert::TryFrom;
 use std::io::{self, ErrorKind, Read};
 use std::slice;
+use std::num::NonZeroU8;
 
 use log::warn;
 use thiserror::Error;
@@ -350,7 +351,7 @@ pub struct Mbc1Rom {
     /// dummy values.
     ram_enable: bool,
     /// Rom bank select. This is the low-order 5 bits (0..5) of the rom bank.
-    rom_bank: u8,
+    rom_bank: NonZeroU8,
     /// Bank set is a 2 bit register that either selects the ram-bank or the high-order 2 bits
     /// (5..7) of the rom bank, depending on the mode register. Note that because these two bits
     /// are shared between rom and ram, if mode is 0, only ram bank 0 is accessible, and if mode is
@@ -404,7 +405,7 @@ impl Mbc1Rom {
             ram_banks: vec![[0u8; RAM_BANK_SIZE]; num_ram_banks],
             save_ram,
             ram_enable: false,
-            rom_bank: 0,
+            rom_bank: NonZeroU8::new(1).unwrap(),
             bank_set: 0,
             advanced_banking_mode: false,
         }
@@ -423,11 +424,7 @@ impl Mbc1Rom {
 
     /// Get the currently selected rom bank. This will never be bank 0, 32, 64, or 96.
     fn upper_bank(&self) -> &RomBank {
-        let low_order = if self.rom_bank != 0 {
-            self.rom_bank
-        } else {
-            1
-        };
+        let low_order = self.rom_bank.get();
         let high_order = self.bank_set << 5;
         let rom = (low_order | high_order) as usize % self.rom_banks.len();
         &self.rom_banks[rom]
@@ -476,7 +473,7 @@ impl MemDevice for Mbc1Rom {
             0x0000..=0x1fff => self.ram_enable = (value & 0xF) == 0xA,
             // Set the low-order bits of the rom-bank selection from the lower 5 bits of the
             // provided value. If 0 is provided, raise the value to 1.
-            0x2000..=0x3fff => self.rom_bank = (value & 0x1f).max(1),
+            0x2000..=0x3fff => self.rom_bank = NonZeroU8::new((value & 0x1f).max(1)).unwrap(),
             // Take the 3 bottom bits as the bank set. These will be applied based on whether the
             // mode is ram mode or rom mode when used.
             0x4000..=0x5fff => self.bank_set = value & 0x3,
