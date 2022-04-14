@@ -423,7 +423,11 @@ impl Mbc1Rom {
 
     /// Get the currently selected rom bank. This will never be bank 0, 32, 64, or 96.
     fn upper_bank(&self) -> &RomBank {
-        let low_order = self.rom_bank;
+        let low_order = if self.rom_bank != 0 {
+            self.rom_bank
+        } else {
+            1
+        };
         let high_order = self.bank_set << 5;
         let rom = (low_order | high_order) as usize % self.rom_banks.len();
         &self.rom_banks[rom]
