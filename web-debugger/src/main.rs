@@ -129,7 +129,7 @@ impl Component for App {
                 <div class="header">
                     <h1>{"feo3boy debugger"}</h1>
                 </div>
-                <div class="row">
+                <div class="body row">
                     <div class="column">
                         <div class="romselect">
                             <RomLoader<BiosRom> onchange={setbios} input_id="bios-load" label="BIOS" />

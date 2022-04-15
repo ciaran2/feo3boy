@@ -1,4 +1,5 @@
 $base-bg: #c0c0e0;
+$header-bg: #a0a0e0;
 $panel-bg: #9090b0;
 $panel-border: #707090;
 
@@ -30,10 +31,28 @@ html, body {
     align-items: stretch;
     flex-grow: 1;
     box-sizing: border-box;
-    padding: 0 10px;
 
-    h1 {
+    h1, h2, h3, h4, h5, h6 {
         text-align: center;
+        padding: 0;
+        margin: 0;
+    }
+
+    .header {
+        display: flex;
+        flex-direction: row;
+        justify-content: center;
+        align-items: center;
+        height: 48px;
+        background-color: $header-bg;
+
+        box-sizing: border-box;
+        padding: 0 10px;
+    }
+
+    .body {
+        box-sizing: border-box;
+        padding: 10px;
     }
 
     .romselect {
@@ -105,11 +124,6 @@ html, body {
 
 .Derefs {
     @include panel;
-
-    h4 {
-        padding: 0;
-        margin: 0;
-    }
 
     th {
         text-align: center;
