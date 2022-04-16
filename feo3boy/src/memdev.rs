@@ -1,8 +1,8 @@
 use std::convert::TryFrom;
 use std::fmt;
 
+use log::{debug, trace, warn};
 use thiserror::Error;
-use log::{trace,debug,warn};
 
 use crate::interrupts::{InterruptEnable, InterruptFlags, Interrupts};
 

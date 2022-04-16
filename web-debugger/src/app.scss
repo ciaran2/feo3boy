@@ -1,12 +1,26 @@
+$base-bg: #c0c0e0;
+$header-bg: #a0a0e0;
+$panel-bg: #9090b0;
+$panel-border: #707090;
+
+@mixin panel {
+    box-sizing: border-box;
+    padding: 5px;
+    border: 2px solid $panel-border;
+    border-radius: 5px;
+    background-color: $panel-bg;
+}
+
 body {
     display: flex;
+    background-color: $base-bg;
 }
 html, body {
     margin: 0;
     padding: 0;
     min-width: 100%;
     height: 100%;
-    font-size: 18px;
+    font-size: 12px;
 }
 
 .App {
@@ -16,4 +30,157 @@ html, body {
     justify-content: flex-start;
     align-items: stretch;
     flex-grow: 1;
+    box-sizing: border-box;
+
+    h1, h2, h3, h4, h5, h6 {
+        text-align: center;
+        padding: 0;
+        margin: 0;
+    }
+
+    .header {
+        display: flex;
+        flex-direction: row;
+        justify-content: center;
+        align-items: center;
+        height: 48px;
+        background-color: $header-bg;
+
+        box-sizing: border-box;
+        padding: 0 10px;
+    }
+
+    .body {
+        box-sizing: border-box;
+        padding: 10px;
+    }
+
+    .romselect {
+        @include panel;
+
+        display: flex;
+        flex-direction: row;
+        justify-content: space-between;
+        align-items: stretch;
+        gap: 20px;
+    }
+
+    .runcontrols {
+        @include panel;
+
+        display: flex;
+        flex-direction: row;
+        justify-content: space-between;
+        align-items: stretch;
+        gap: 5px;
+
+        button {
+            min-width: 60px;
+        }
+    }
+}
+
+.RomLoader {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    align-items: stretch;
+    gap: 5px;
+}
+
+.BytesUpload {
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 10px;
+}
+
+.Regs {
+    @include panel;
+
+    th {
+        text-align: center;
+    }
+
+    td.num {
+        font-family: 'Liberation Mono', monospace;
+        text-align: right;
+    }
+
+    table.single .dec {
+        width: 2.1em;
+    }
+
+    table.double .dec {
+        width: 3.2em;
+    }
+
+    table.flags td {
+        font-family: 'Liberation Mono', monospace;
+        text-align: center;
+    }
+}
+
+.Derefs {
+    @include panel;
+
+    th {
+        text-align: center;
+    }
+
+    td.num {
+        font-family: 'Liberation Mono', monospace;
+        text-align: right;
+    }
+
+    table.single .dec {
+        width: 2.1em;
+    }
+    table.double .dec {
+        width: 3.2em;
+    }
+
+    .instr {
+        font-family: 'Liberation Mono', monospace;
+        min-width: 120px;
+    }
+}
+
+.Breakpoints {
+    @include panel;
+}
+
+.Memview {
+    @include panel;
+}
+
+@mixin gap-sizes {
+    .smallgap {
+        gap: 5px;
+    }
+    .biggap {
+        gap: 20px;
+    }
+    .nogap {
+        gap: 0;
+    }
+}
+
+.row {
+    display: flex;
+    flex-direction: row;
+    justify-content: space-evenly;
+    align-items: flex-start;
+    gap: 10px;
+    @include gap-sizes;
+
+    .column {
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-start;
+        align-items: stretch;
+        gap: 10px;
+        @include gap-sizes;
+    }
 }

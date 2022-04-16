@@ -26,7 +26,7 @@ pub enum Msg {
 }
 
 pub struct RomLoader<T> {
-    error: String,
+    status: String,
     _phantom: PhantomData<T>,
 }
 
@@ -38,9 +38,9 @@ where
     type Message = Msg;
     type Properties = Props<T>;
 
-    fn create(_ctx: &Context<Self>) -> Self {
+    fn create(ctx: &Context<Self>) -> Self {
         RomLoader {
-            error: String::new(),
+            status: format!("No {}", ctx.props().label),
             _phantom: PhantomData,
         }
     }
@@ -49,17 +49,18 @@ where
         match msg {
             Msg::Loaded { data } => {
                 if data.is_empty() {
-                    self.error.clear();
+                    self.status = format!("No {}", ctx.props().label);
                     ctx.props().onchange.emit(None);
                     true
                 } else {
                     match T::try_from(data) {
                         Ok(rom) => {
-                            self.error.clear();
+                            self.status = format!("{} Loaded Successfully", ctx.props().label);
                             ctx.props().onchange.emit(Some(rom));
                         }
                         Err(e) => {
-                            self.error = format!("{}", e);
+                            self.status = format!("Error loading {}: {}", ctx.props().label, e);
+                            ctx.props().onchange.emit(None);
                         }
                     }
                     true
@@ -71,11 +72,9 @@ where
     fn view(&self, ctx: &Context<Self>) -> Html {
         let onload = ctx.link().callback(|data| Msg::Loaded { data });
         html! {
-            <div class="BiosLoader">
+            <div class="RomLoader">
                 <BytesUpload input_id={ctx.props().input_id} label={ctx.props().label} {onload} />
-                if !self.error.is_empty() {
-                    <span class="error">{&self.error}</span>
-                }
+                <span class="error">{&self.status}</span>
             </div>
         }
     }

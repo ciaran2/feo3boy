@@ -2,8 +2,8 @@
 
 use std::convert::TryFrom;
 use std::io::{self, ErrorKind, Read};
-use std::slice;
 use std::num::NonZeroU8;
+use std::slice;
 
 use log::warn;
 use thiserror::Error;

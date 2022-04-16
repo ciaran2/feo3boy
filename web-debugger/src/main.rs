@@ -5,10 +5,16 @@ use feo3boy::memdev::{BiosRom, Cartridge};
 use gloo::timers::callback::Timeout;
 use yew::prelude::*;
 
+use breakpoints::Breakpoints;
+use derefs::Derefs;
+use memview::Memview;
 use regs::Regs;
 use romload::RomLoader;
 
+mod breakpoints;
 mod bytesup;
+mod derefs;
+mod memview;
 mod regs;
 mod romload;
 
@@ -120,23 +126,41 @@ impl Component for App {
         let reset = link.callback(|_| Msg::Reset);
         html! {
             <div class="App">
-                <div>
+                <div class="header">
                     <h1>{"feo3boy debugger"}</h1>
                 </div>
-                <div>
-                    <RomLoader<BiosRom> onchange={setbios} input_id="bios-load" label="BIOS" />
-                    <RomLoader<Cartridge> onchange={setcart} input_id="cart-load" label="Cartridge" />
+                <div class="body row">
+                    <div class="column">
+                        <div class="romselect">
+                            <RomLoader<BiosRom> onchange={setbios} input_id="bios-load" label="BIOS" />
+                            <RomLoader<Cartridge> onchange={setcart} input_id="cart-load" label="Cartridge" />
+                        </div>
+                        <div class="row">
+                            <div class="column">
+                                <div class="runcontrols">
+                                    <button onclick={reset}>{"Reset"}</button>
+                                    if self.pending_tick.is_none() {
+                                        <button onclick={run}>{"Run"}</button>
+                                        <button onclick={step}>{"Step"}</button>
+                                    } else {
+                                        <button onclick={pause}>{"Pause"}</button>
+                                        <button disabled=true>{"Step"}</button>
+                                    }
+                                </div>
+                                <Regs gb={self.gb.clone()} />
+                            </div>
+                            <div class="column">
+                                <Derefs gb={self.gb.clone()} />
+                            </div>
+                            <div class="column">
+                                <Breakpoints gb={self.gb.clone()} />
+                            </div>
+                        </div>
+                    </div>
+                    <div class="column">
+                        <Memview gb={self.gb.clone()} />
+                    </div>
                 </div>
-                <div>
-                    <button onclick={reset}>{"Reset"}</button>
-                    if self.pending_tick.is_none() {
-                        <button onclick={run}>{"Run"}</button>
-                        <button onclick={step}>{"Step"}</button>
-                    } else {
-                        <button onclick={pause}>{"Pause"}</button>
-                    }
-                </div>
-                <Regs gb={self.gb.clone()} />
             </div>
         }
     }
