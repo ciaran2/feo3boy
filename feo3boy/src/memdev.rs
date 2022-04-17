@@ -78,7 +78,7 @@ pub trait MemDevice {
 
 /// Wraps a memory device to make it read-only.
 #[repr(transparent)]
-#[derive(Copy, Clone, Debug, Default)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub struct ReadOnly<M>(M);
 
 impl<M> ReadOnly<M> {
@@ -131,7 +131,7 @@ impl<const N: usize> MemDevice for NullRom<N> {
 
 /// Rom for the bios, which is swapped out once started.
 #[repr(transparent)]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct BiosRom(ReadOnly<[u8; 0x100]>);
 
 impl BiosRom {
@@ -222,7 +222,7 @@ impl<D: MemDevice + ?Sized> MemDevice for Box<D> {
 }
 
 /// Memory device connecting memory mapped IO.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MemMappedIo {
     serial_data: u8,
     serial_control: u8,
@@ -288,7 +288,7 @@ impl MemDevice for MemMappedIo {
 }
 
 /// MemoryDevice which configures the standard memory mapping of the real GameBoy.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GbMmu {
     /// The bios. Mapped to 0..0x100 while bios is enabled.
     bios: BiosRom,

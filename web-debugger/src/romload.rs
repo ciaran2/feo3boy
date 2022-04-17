@@ -17,7 +17,9 @@ pub struct Props<T> {
 
 impl<T> PartialEq for Props<T> {
     fn eq(&self, other: &Props<T>) -> bool {
-        self.onchange == other.onchange
+        self.input_id == other.input_id
+            && self.label == other.label
+            && self.onchange == other.onchange
     }
 }
 

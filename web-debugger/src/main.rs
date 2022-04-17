@@ -1,11 +1,13 @@
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use feo3boy::gb::Gb;
 use feo3boy::memdev::{BiosRom, Cartridge};
 use gloo::timers::callback::Timeout;
+use log::info;
 use yew::prelude::*;
 
-use breakpoints::Breakpoints;
+use breakpoints::{Breakpoint, Breakpoints};
 use derefs::Derefs;
 use memview::Memview;
 use regs::Regs;
@@ -38,6 +40,21 @@ enum Msg {
         singlestep: bool,
     },
     Reset,
+    /// Add a breakpoint at the specified address. If one is set, replace it.
+    AddBreakpoint {
+        addr: u16,
+        name: String,
+        enabled: bool,
+    },
+    /// Delete a breakpoint at the specified address.
+    DeleteBreakpoint {
+        addr: u16,
+    },
+    /// Set the enabled state of a breakpoint at the specified address.
+    ToggleBreakpoint {
+        addr: u16,
+        new_enabled: bool,
+    },
 }
 
 struct App {
@@ -49,6 +66,8 @@ struct App {
     gb: Rc<Gb>,
     /// Next pending tick.
     pending_tick: Option<Timeout>,
+    /// Breakpoints for the program.
+    breakpoints: Rc<BTreeMap<u16, Breakpoint>>,
 }
 
 impl App {
@@ -71,6 +90,7 @@ impl Component for App {
             cart,
             gb,
             pending_tick: None,
+            breakpoints: Default::default(),
         }
     }
 
@@ -104,8 +124,13 @@ impl Component for App {
                 }
                 Rc::make_mut(&mut self.gb).tick();
                 if !singlestep {
-                    let step = ctx.link().callback(|_| Msg::Tick { singlestep: false });
-                    self.pending_tick = Some(Timeout::new(0, move || step.emit(())));
+                    match self.breakpoints.get(&self.gb.cpustate.regs.pc) {
+                        Some(breakpoint) if breakpoint.enabled => self.pending_tick = None,
+                        _ => {
+                            let step = ctx.link().callback(|_| Msg::Tick { singlestep: false });
+                            self.pending_tick = Some(Timeout::new(0, move || step.emit(())));
+                        }
+                    }
                 }
                 true
             }
@@ -113,6 +138,27 @@ impl Component for App {
                 self.pending_tick.take().map(|tick| tick.cancel());
                 self.reset_roms();
                 true
+            }
+            Msg::AddBreakpoint {
+                addr,
+                name,
+                enabled,
+            } => {
+                let breakpoints = Rc::make_mut(&mut self.breakpoints);
+                breakpoints.insert(addr, Breakpoint { name, enabled });
+                true
+            }
+            Msg::DeleteBreakpoint { addr } => {
+                Rc::make_mut(&mut self.breakpoints).remove(&addr).is_some()
+            }
+            Msg::ToggleBreakpoint { addr, new_enabled } => {
+                if let Some(bp) = Rc::make_mut(&mut self.breakpoints).get_mut(&addr) {
+                    let old = bp.enabled;
+                    bp.enabled = new_enabled;
+                    old != new_enabled
+                } else {
+                    false
+                }
             }
         }
     }
@@ -125,6 +171,15 @@ impl Component for App {
         let pause = link.callback(|_| Msg::SetRunning { should_run: false });
         let step = link.callback(|_| Msg::Tick { singlestep: true });
         let reset = link.callback(|_| Msg::Reset);
+
+        let add_breakpoint = link.callback(|(addr, name, enabled)| Msg::AddBreakpoint {
+            addr,
+            name,
+            enabled,
+        });
+        let delete_breakpoint = link.callback(|addr| Msg::DeleteBreakpoint { addr });
+        let toggle_breakpoint =
+            link.callback(|(addr, new_enabled)| Msg::ToggleBreakpoint { addr, new_enabled });
         html! {
             <div class="App">
                 <div class="header">
@@ -154,7 +209,8 @@ impl Component for App {
                                 <Derefs gb={self.gb.clone()} />
                             </div>
                             <div class="column">
-                                <Breakpoints gb={self.gb.clone()} />
+                                <Breakpoints gb={self.gb.clone()} breakpoints={self.breakpoints.clone()}
+                                    {add_breakpoint} {delete_breakpoint} {toggle_breakpoint} />
                             </div>
                         </div>
                     </div>

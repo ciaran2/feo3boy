@@ -85,7 +85,7 @@ impl Iterator for InterruptFlagsIter {
 }
 
 /// The Interrupt Enable (IE) register. Implements MemDevice.
-#[derive(Copy, Clone, Debug, Default)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct InterruptEnable(pub InterruptFlags);
 
 impl MemDevice for InterruptEnable {

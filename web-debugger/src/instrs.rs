@@ -5,17 +5,11 @@ use feo3boy::gbz80core::{CBOpcode, ConditionCode, Opcode, Operand16, Operand8};
 use feo3boy::memdev::MemDevice;
 use yew::prelude::*;
 
-#[derive(Properties)]
+#[derive(Properties, PartialEq)]
 pub struct Props {
     pub gb: Rc<Gb>,
     /// Address of the address to interpret as an instruction.
     pub addr: u16,
-}
-
-impl PartialEq for Props {
-    fn eq(&self, other: &Props) -> bool {
-        Rc::ptr_eq(&self.gb, &other.gb)
-    }
 }
 
 pub enum Msg {}

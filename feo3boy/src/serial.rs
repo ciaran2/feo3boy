@@ -9,7 +9,7 @@ const INTERRUPT_MASK: u8 = 0b1000;
 const SLOW_TPERIOD: u64 = 512;
 const FAST_TPERIOD: u64 = 16;
 
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct SerialContext {
     t_progress: u64,
     bit_progress: u8,

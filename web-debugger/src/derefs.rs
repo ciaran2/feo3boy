@@ -6,15 +6,9 @@ use yew::prelude::*;
 
 use crate::instrs::Instr;
 
-#[derive(Properties)]
+#[derive(Properties, PartialEq)]
 pub struct Props {
     pub gb: Rc<Gb>,
-}
-
-impl PartialEq for Props {
-    fn eq(&self, other: &Props) -> bool {
-        Rc::ptr_eq(&self.gb, &other.gb)
-    }
 }
 
 pub enum Msg {}

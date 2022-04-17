@@ -153,6 +153,17 @@ html, body {
 
 .Breakpoints {
     @include panel;
+
+    .name input {
+        width: 115px;
+    }
+    .addr {
+        font-family: 'Liberation Mono', monospace;
+        text-align: right;
+        input {
+            width: 40px;
+        }
+    }
 }
 
 .Memview {

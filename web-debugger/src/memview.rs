@@ -5,15 +5,9 @@ use feo3boy::gbz80core::{CBOpcode, Opcode};
 use feo3boy::memdev::MemDevice;
 use yew::prelude::*;
 
-#[derive(Properties)]
+#[derive(Properties, PartialEq)]
 pub struct Props {
     pub gb: Rc<Gb>,
-}
-
-impl PartialEq for Props {
-    fn eq(&self, other: &Props) -> bool {
-        Rc::ptr_eq(&self.gb, &other.gb)
-    }
 }
 
 pub enum Msg {}
