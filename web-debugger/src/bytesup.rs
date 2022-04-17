@@ -1,6 +1,6 @@
 use log::{info, warn};
 use wasm_bindgen_futures::spawn_local;
-use web_sys::{Blob, HtmlInputElement};
+use web_sys::{File, HtmlInputElement};
 use yew::prelude::*;
 
 #[derive(Properties, PartialEq)]
@@ -10,19 +10,19 @@ pub struct Props {
     /// Label to use on the upload field.
     pub label: &'static str,
     /// Callback to take the loaded data.
-    pub onload: Callback<Vec<u8>>,
+    pub onload: Callback<Option<(String, Vec<u8>)>>,
 }
 
 pub enum Msg {
-    Changed { pending: Blob },
-    Loaded { data: Vec<u8>, pending: Blob },
+    Changed { pending: File },
+    Loaded { data: Vec<u8>, pending: File },
     Clear,
 }
 
 #[derive(Default)]
 pub struct BytesUpload {
     /// Promise waiting for data to read.
-    pending: Option<Blob>,
+    pending: Option<File>,
     input: NodeRef,
 }
 
@@ -43,7 +43,7 @@ impl Component for BytesUpload {
             Msg::Loaded { data, pending } => match &self.pending {
                 Some(p) if p.loose_eq(&pending) => {
                     self.pending = None;
-                    ctx.props().onload.emit(data);
+                    ctx.props().onload.emit(Some((pending.name(), data)));
                     true
                 }
                 Some(_) => {
@@ -57,7 +57,7 @@ impl Component for BytesUpload {
             },
             Msg::Clear => {
                 self.pending = None;
-                ctx.props().onload.emit(Vec::new());
+                ctx.props().onload.emit(None);
                 match self.input.cast::<HtmlInputElement>() {
                     Some(input) => input.set_value(""),
                     None => warn!("input not bound"),
@@ -80,19 +80,20 @@ impl Component for BytesUpload {
                     Some(Msg::Clear)
                 }
                 Some(file) => {
-                    let blob = gloo::file::Blob::from(file.clone());
-                    let finish = finish.clone();
-                    spawn_local(async move {
-                        match gloo::file::futures::read_as_bytes(&blob).await {
-                            Ok(data) => finish.emit((data, Blob::from(blob))),
-                            Err(err) => {
-                                warn!("Failed to read file: {}", err);
+                    {
+                        let file = file.clone();
+                        let blob = gloo::file::Blob::from(file.clone());
+                        let finish = finish.clone();
+                        spawn_local(async move {
+                            match gloo::file::futures::read_as_bytes(&blob).await {
+                                Ok(data) => finish.emit((data, file)),
+                                Err(err) => {
+                                    warn!("Failed to read file: {}", err);
+                                }
                             }
-                        }
-                    });
-                    Some(Msg::Changed {
-                        pending: file.into(),
-                    })
+                        });
+                    }
+                    Some(Msg::Changed { pending: file })
                 }
             }
         });

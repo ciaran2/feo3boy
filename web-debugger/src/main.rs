@@ -3,15 +3,18 @@ use std::rc::Rc;
 
 use feo3boy::gb::Gb;
 use feo3boy::memdev::{BiosRom, Cartridge};
+use gloo::storage::errors::StorageError;
+use gloo::storage::{LocalStorage, Storage};
 use gloo::timers::callback::Timeout;
-use log::info;
+use log::warn;
+use serde::{Deserialize, Serialize};
 use yew::prelude::*;
 
 use breakpoints::{Breakpoint, Breakpoints};
 use derefs::Derefs;
 use memview::Memview;
 use regs::Regs;
-use romload::RomLoader;
+use romload::{RomFile, RomLoader, SavedRom};
 
 mod breakpoints;
 mod bytesup;
@@ -21,14 +24,24 @@ mod memview;
 mod regs;
 mod romload;
 
+const SAVED_STATE_KEY: &str = "feo3boy.webdebugger.savestate-v1";
+
+/// Saved debugger state.
+#[derive(Default, Serialize, Deserialize)]
+struct SaveState {
+    bios: Option<SavedRom>,
+    cart: Option<SavedRom>,
+    breakpoints: BTreeMap<u16, Breakpoint>,
+}
+
 enum Msg {
     /// Set the bios rom to use. Resets the GB.
     SetBios {
-        bios: Option<BiosRom>,
+        bios: Option<RomFile<BiosRom>>,
     },
     /// Set the cartridge rom to use. Resets the GB.
     SetCart {
-        cart: Option<Cartridge>,
+        cart: Option<RomFile<Cartridge>>,
     },
     /// Start or stop automatic ticking.
     SetRunning {
@@ -59,9 +72,9 @@ enum Msg {
 
 struct App {
     /// Bios to load into the GB.
-    bios: BiosRom,
+    bios: Option<Rc<RomFile<BiosRom>>>,
     /// Cartridge to load into the GB.
-    cart: Cartridge,
+    cart: Option<Rc<RomFile<Cartridge>>>,
     /// GB instance being run.
     gb: Rc<Gb>,
     /// Next pending tick.
@@ -73,7 +86,33 @@ struct App {
 impl App {
     /// Rebuild the GB for new roms.
     fn reset_roms(&mut self) {
-        self.gb = Rc::new(Gb::new(self.bios.clone(), self.cart.clone()));
+        self.gb = Rc::new(Gb::new(self.bios(), self.cart()));
+    }
+
+    /// Clone the selected bios rom or get the default bios.
+    fn bios(&self) -> BiosRom {
+        self.bios
+            .as_ref()
+            .map(|bios| bios.rom.clone())
+            .unwrap_or_default()
+    }
+
+    /// Clone the selected cartridge rom or get the default cartridge.
+    fn cart(&self) -> Cartridge {
+        self.cart
+            .as_ref()
+            .map_or_else(|| Cartridge::None, |cart| cart.rom.clone())
+    }
+
+    fn save_state(&self) {
+        let saved_state = SaveState {
+            bios: self.bios.as_ref().map(|bios| bios.clone_for_save()),
+            cart: self.cart.as_ref().map(|cart| cart.clone_for_save()),
+            breakpoints: self.breakpoints.as_ref().clone(),
+        };
+        if let Err(e) = LocalStorage::set(SAVED_STATE_KEY, &saved_state) {
+            warn!("Unable to save database: {}", e);
+        }
     }
 }
 
@@ -82,27 +121,51 @@ impl Component for App {
     type Properties = ();
 
     fn create(_ctx: &Context<Self>) -> Self {
-        let bios = BiosRom::default();
-        let cart = Cartridge::None;
-        let gb = Rc::new(Gb::new(bios.clone(), cart.clone()));
-        Self {
-            bios,
-            cart,
-            gb,
+        let saved_state: SaveState = LocalStorage::get(SAVED_STATE_KEY).unwrap_or_else(|e| {
+            if !matches!(e, StorageError::KeyNotFound(_)) {
+                warn!("Failed to load database: {}", e);
+            }
+            Default::default()
+        });
+
+        let mut app = Self {
+            bios: saved_state
+                .bios
+                .and_then(|bios| match RomFile::<BiosRom>::try_from(bios) {
+                    Ok(rom) => Some(Rc::new(rom)),
+                    Err(e) => {
+                        warn!("Failed to parse saved rom: {}", e);
+                        None
+                    }
+                }),
+            cart: saved_state
+                .cart
+                .and_then(|bios| match RomFile::<Cartridge>::try_from(bios) {
+                    Ok(rom) => Some(Rc::new(rom)),
+                    Err(e) => {
+                        warn!("Failed to parse saved rom: {}", e);
+                        None
+                    }
+                }),
+            gb: Rc::new(Gb::new(BiosRom::default(), Cartridge::None)),
             pending_tick: None,
-            breakpoints: Default::default(),
-        }
+            breakpoints: Rc::new(saved_state.breakpoints),
+        };
+        app.reset_roms();
+        app
     }
 
     fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
         match msg {
             Msg::SetBios { bios } => {
-                self.bios = bios.unwrap_or_default();
+                self.bios = bios.map(Rc::new);
+                self.save_state();
                 self.reset_roms();
                 true
             }
             Msg::SetCart { cart } => {
-                self.cart = cart.unwrap_or(Cartridge::None);
+                self.cart = cart.map(Rc::new);
+                self.save_state();
                 self.reset_roms();
                 true
             }
@@ -146,16 +209,26 @@ impl Component for App {
             } => {
                 let breakpoints = Rc::make_mut(&mut self.breakpoints);
                 breakpoints.insert(addr, Breakpoint { name, enabled });
+                self.save_state();
                 true
             }
             Msg::DeleteBreakpoint { addr } => {
-                Rc::make_mut(&mut self.breakpoints).remove(&addr).is_some()
+                if Rc::make_mut(&mut self.breakpoints).remove(&addr).is_some() {
+                    self.save_state();
+                    true
+                } else {
+                    false
+                }
             }
             Msg::ToggleBreakpoint { addr, new_enabled } => {
                 if let Some(bp) = Rc::make_mut(&mut self.breakpoints).get_mut(&addr) {
-                    let old = bp.enabled;
-                    bp.enabled = new_enabled;
-                    old != new_enabled
+                    if bp.enabled != new_enabled {
+                        bp.enabled = new_enabled;
+                        self.save_state();
+                        true
+                    } else {
+                        false
+                    }
                 } else {
                     false
                 }
@@ -188,8 +261,10 @@ impl Component for App {
                 <div class="body row">
                     <div class="column">
                         <div class="romselect">
-                            <RomLoader<BiosRom> onchange={setbios} input_id="bios-load" label="BIOS" />
-                            <RomLoader<Cartridge> onchange={setcart} input_id="cart-load" label="Cartridge" />
+                            <RomLoader<BiosRom> onchange={setbios} input_id="bios-load" label="BIOS"
+                                current={self.bios.clone()} />
+                            <RomLoader<Cartridge> onchange={setcart} input_id="cart-load" label="Cartridge"
+                                current={self.cart.clone()} />
                         </div>
                         <div class="row">
                             <div class="column">

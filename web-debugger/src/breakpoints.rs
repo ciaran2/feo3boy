@@ -1,19 +1,17 @@
 use std::collections::BTreeMap;
-use std::mem;
 use std::rc::Rc;
 
 use feo3boy::gb::Gb;
-use feo3boy::gbz80core::{CBOpcode, Opcode};
-use feo3boy::memdev::MemDevice;
-use log::{info, warn};
+use log::warn;
 use once_cell::sync::Lazy;
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
 use web_sys::HtmlInputElement;
 use yew::prelude::*;
 
 /// A breakpoint for the emulator.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Breakpoint {
     pub name: String,
     pub enabled: bool,
@@ -61,7 +59,6 @@ impl Component for Breakpoints {
     fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
         match msg {
             Msg::Add => {
-                info!("add");
                 if let Some(addr) = self.parsed_addr {
                     ctx.props().add_breakpoint.emit((
                         addr,

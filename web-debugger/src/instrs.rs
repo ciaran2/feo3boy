@@ -123,6 +123,19 @@ impl Instr {
                 <span>{format!("({:04x}h)", imm16())}</span>{","}
                 <span>{source}</span>
             </>},
+            Opcode::AluOp {
+                op,
+                operand: Operand8::Immediate,
+            } => html! {<>
+                <span>{op}</span>{" "}
+                <span>{"A"}</span>{","}
+                <span>{format!("{:02x}h", imm8())}</span>
+            </>},
+            Opcode::AluOp { op, operand } => html! {<>
+                <span>{op}</span>{" "}
+                <span>{"A"}</span>{","}
+                <span>{operand}</span>
+            </>},
             Opcode::Call(ConditionCode::Unconditional) => html! {<>
                 <span>{"CALL"}</span>{" "}
                 <span>{format!("{:04x}h", imm16())}</span>
