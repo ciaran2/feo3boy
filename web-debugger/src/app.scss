@@ -142,9 +142,13 @@ html, body {
     }
 
     .instr {
-        font-family: 'Liberation Mono', monospace;
-        min-width: 120px;
+        text-align: left;
     }
+}
+
+.Instr {
+    font-family: 'Liberation Mono', monospace;
+    min-width: 110px;
 }
 
 .Breakpoints {

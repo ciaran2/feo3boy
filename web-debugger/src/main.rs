@@ -14,6 +14,7 @@ use romload::RomLoader;
 mod breakpoints;
 mod bytesup;
 mod derefs;
+mod instrs;
 mod memview;
 mod regs;
 mod romload;
