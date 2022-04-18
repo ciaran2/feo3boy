@@ -15,6 +15,7 @@ use derefs::Derefs;
 use memview::Memview;
 use regs::Regs;
 use romload::{RomFile, RomLoader, SavedRom};
+use serial::Serial;
 
 mod breakpoints;
 mod bytesup;
@@ -23,6 +24,7 @@ mod instrs;
 mod memview;
 mod regs;
 mod romload;
+mod serial;
 
 const SAVED_STATE_KEY: &str = "feo3boy.webdebugger.savestate-v1";
 
@@ -81,12 +83,15 @@ struct App {
     pending_tick: Option<Timeout>,
     /// Breakpoints for the program.
     breakpoints: Rc<BTreeMap<u16, Breakpoint>>,
+    /// Serial data output by the program.
+    serial: Rc<String>,
 }
 
 impl App {
     /// Rebuild the GB for new roms.
     fn reset_roms(&mut self) {
         self.gb = Rc::new(Gb::new(self.bios(), self.cart()));
+        self.serial = Rc::new(String::new());
     }
 
     /// Clone the selected bios rom or get the default bios.
@@ -150,6 +155,7 @@ impl Component for App {
             gb: Rc::new(Gb::new(BiosRom::default(), Cartridge::None)),
             pending_tick: None,
             breakpoints: Rc::new(saved_state.breakpoints),
+            serial: Rc::new(String::new()),
         };
         app.reset_roms();
         app
@@ -161,12 +167,14 @@ impl Component for App {
                 self.bios = bios.map(Rc::new);
                 self.save_state();
                 self.reset_roms();
+                self.pending_tick.take().map(|tick| tick.cancel());
                 true
             }
             Msg::SetCart { cart } => {
                 self.cart = cart.map(Rc::new);
                 self.save_state();
                 self.reset_roms();
+                self.pending_tick.take().map(|tick| tick.cancel());
                 true
             }
             Msg::SetRunning { should_run } => {
@@ -181,18 +189,40 @@ impl Component for App {
                     false
                 }
             }
-            Msg::Tick { singlestep } => {
-                if singlestep {
-                    self.pending_tick.take().map(|tick| tick.cancel());
+            Msg::Tick { singlestep: true } => {
+                self.pending_tick.take().map(|tick| tick.cancel());
+                let gb = Rc::make_mut(&mut self.gb);
+                gb.tick();
+                let serial_out = gb.serial.stream.receive_bytes();
+                if serial_out.len() != 0 {
+                    let serial = Rc::make_mut(&mut self.serial);
+                    serial.extend(serial_out.map(|b| b as char));
                 }
-                Rc::make_mut(&mut self.gb).tick();
-                if !singlestep {
-                    match self.breakpoints.get(&self.gb.cpustate.regs.pc) {
-                        Some(breakpoint) if breakpoint.enabled => self.pending_tick = None,
-                        _ => {
-                            let step = ctx.link().callback(|_| Msg::Tick { singlestep: false });
-                            self.pending_tick = Some(Timeout::new(0, move || step.emit(())));
-                        }
+                true
+            }
+            Msg::Tick { singlestep: false } => {
+                // For performance (to avoid the overhead of continuously cloning the gb
+                // state and rerendering the whole page), run multiple ticks per web timer
+                // step.
+                const NON_SINGLESTEP_TICKS: usize = 1024;
+                let gb = Rc::make_mut(&mut self.gb);
+                for _ in 0..NON_SINGLESTEP_TICKS {
+                    gb.tick();
+                    match self.breakpoints.get(&gb.cpustate.regs.pc) {
+                        Some(breakpoint) if breakpoint.enabled => break,
+                        _ => {}
+                    }
+                }
+                let serial_out = gb.serial.stream.receive_bytes();
+                if serial_out.len() != 0 {
+                    let serial = Rc::make_mut(&mut self.serial);
+                    serial.extend(serial_out.map(|b| b as char));
+                }
+                match self.breakpoints.get(&gb.cpustate.regs.pc) {
+                    Some(breakpoint) if breakpoint.enabled => self.pending_tick = None,
+                    _ => {
+                        let step = ctx.link().callback(|_| Msg::Tick { singlestep: false });
+                        self.pending_tick = Some(Timeout::new(0, move || step.emit(())));
                     }
                 }
                 true
@@ -260,6 +290,7 @@ impl Component for App {
                 </div>
                 <div class="body row">
                     <div class="column">
+                        <h3>{"ROM Selection"}</h3>
                         <div class="romselect">
                             <RomLoader<BiosRom> onchange={setbios} input_id="bios-load" label="BIOS"
                                 current={self.bios.clone()} />
@@ -288,6 +319,7 @@ impl Component for App {
                                     {add_breakpoint} {delete_breakpoint} {toggle_breakpoint} />
                             </div>
                         </div>
+                        <Serial serial_output={self.serial.clone()} />
                     </div>
                     <div class="column">
                         <Memview gb={self.gb.clone()} />
@@ -299,6 +331,6 @@ impl Component for App {
 }
 
 fn main() {
-    console_log::init_with_level(log::Level::Debug).expect("Unable to init logger");
+    console_log::init_with_level(log::Level::Info).expect("Unable to init logger");
     yew::start_app::<App>();
 }

@@ -149,13 +149,46 @@ DW $0000
 
 ; $0150: Code!
 main:
+    di
+    ld sp,$dfff
+.loop:
+    call doprint
+    jr .loop
+
+doprint:
+    ld a,$08
+    ld [$ffff],a
+    ld hl,hello
+    ld a,13
+    call serial
 .loop:
     halt
-    jr .loop
+    ld b,a
+    ld a,[$ffff]
+    cp a,0
+    ld a,b
+    jr nz,.loop
+    ret
 
 draw:
 stat:
 timer:
-serial:
 joypad:
     reti
+serial:
+    dec a
+    push af
+    ld a,[hli]
+    ld [$ff01],a
+    ld a,$81
+    ld [$ff02],a
+    pop af
+    jr z,.done
+    reti
+.done:
+    ld a,0
+    ld [$ffff],a
+    reti
+
+hello:
+DB "Hello World",10

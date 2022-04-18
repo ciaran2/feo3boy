@@ -108,6 +108,18 @@ impl MemDevice for InterruptEnable {
     }
 }
 
+/// Context trait for accessing interrupts.
+pub trait InterruptContext {
+    /// The type which provides access to the interrupts.
+    type Interrupts: Interrupts;
+
+    /// Provides read access to the interrupt flags.
+    fn interrupts(&self) -> &Self::Interrupts;
+
+    /// Provides write-access to the interrupt flags.
+    fn interrupts_mut(&mut self) -> &mut Self::Interrupts;
+}
+
 /// Trait for accessing the (usually memory-mapped) registers for InterruptFlags and
 /// InterruptEnable.
 pub trait Interrupts {

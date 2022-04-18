@@ -37,8 +37,10 @@ impl Component for Derefs {
         let hlu8 = mem.read(regs.hl().into());
         let ffc = mem.read((0xff00 + regs.c as u16).into());
 
-        let spu8 = mem.read(regs.sp.into());
-        let spu16 = u16::from_le_bytes([spu8, mem.read(regs.sp.wrapping_add(1).into())]);
+        let spu16 = u16::from_le_bytes([
+            mem.read(regs.sp.into()),
+            mem.read(regs.sp.wrapping_add(1).into()),
+        ]);
 
         html! {
             <div class="Derefs column nogap">
@@ -73,12 +75,7 @@ impl Component for Derefs {
                             <td class="num dec">{ffc}</td>
                         </tr>
                         <tr>
-                            <td>{"(SP 8)"}</td>
-                            <td class="num">{format!("{:02x}", spu8)}</td>
-                            <td class="num dec">{spu8}</td>
-                        </tr>
-                        <tr>
-                            <td>{"(SP 16)"}</td>
+                            <td>{"(SP)"}</td>
                             <td class="num">{format!("{:04x}", spu16)}</td>
                             <td class="num dec">{spu16}</td>
                         </tr>
