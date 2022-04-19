@@ -51,7 +51,8 @@ impl AluOp {
                 if ctx.cpustate().regs.flags.contains(Flags::CARRY) {
                     let (res2, flags2) = add8_flags(res, 1);
                     res = res2;
-                    flags |= flags2;
+                    // Zero flag should only be set if the second add had a result of zero.
+                    flags = flags2 | (flags - Flags::ZERO);
                 }
                 ctx.cpustate_mut().regs.acc = res;
                 ctx.cpustate_mut().regs.flags = flags;
@@ -66,7 +67,8 @@ impl AluOp {
                 if ctx.cpustate().regs.flags.contains(Flags::CARRY) {
                     let (res2, flags2) = sub8_flags(res, 1);
                     res = res2;
-                    flags |= flags2;
+                    // Zero flag should only be set if the second subtract had a result of zero.
+                    flags = flags2 | (flags - Flags::ZERO);
                 }
                 ctx.cpustate_mut().regs.acc = res;
                 ctx.cpustate_mut().regs.flags = flags;

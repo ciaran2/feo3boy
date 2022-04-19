@@ -57,7 +57,7 @@ impl Flags {
 /// CPU registers on the GB Z80 processor.
 ///
 /// Note that there are a few other registers on a GameBoy, but those are memory mapped.
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, Eq, PartialEq)]
 pub struct Regs {
     // Registers are paired in little-endian order (though we aren't using any specific #[repr], so
     // compiler is free to reorder them).
@@ -188,7 +188,7 @@ impl Default for InterruptMasterState {
 }
 
 /// Internal state of the CPU.
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct Gbz80State {
     /// Cpu registers.
     pub regs: Regs,
@@ -389,5 +389,229 @@ mod tests {
             "{:?}",
             cpustate.regs
         );
+    }
+
+    #[test]
+    fn load8bit() {
+        fn set_dest(inst: u8, ctx: &mut impl CpuContext, val: u8) {
+            match inst {
+                0x40..=0x47 => ctx.cpustate_mut().regs.b = val,
+                0x48..=0x4f => ctx.cpustate_mut().regs.c = val,
+                0x50..=0x57 => ctx.cpustate_mut().regs.d = val,
+                0x58..=0x5f => ctx.cpustate_mut().regs.e = val,
+                0x60..=0x67 => ctx.cpustate_mut().regs.h = val,
+                0x68..=0x6f => ctx.cpustate_mut().regs.l = val,
+                0x70..=0x77 => {
+                    let dest = ctx.cpustate().regs.hl().into();
+                    ctx.mem_mut().write(dest, val)
+                }
+                0x78..=0x7f => ctx.cpustate_mut().regs.acc = val,
+                _ => unreachable!(),
+            }
+        }
+        fn set_source(inst: u8, ctx: &mut impl CpuContext, val: u8) {
+            match (inst & 0xf) % 0x8 {
+                0x0 => ctx.cpustate_mut().regs.b = val,
+                0x1 => ctx.cpustate_mut().regs.c = val,
+                0x2 => ctx.cpustate_mut().regs.d = val,
+                0x3 => ctx.cpustate_mut().regs.e = val,
+                0x4 => ctx.cpustate_mut().regs.h = val,
+                0x5 => ctx.cpustate_mut().regs.l = val,
+                0x6 => {
+                    let dest = ctx.cpustate().regs.hl().into();
+                    ctx.mem_mut().write(dest, val)
+                }
+                0x7 => ctx.cpustate_mut().regs.acc = val,
+                _ => unreachable!(),
+            }
+        }
+        for inst in (0x40..=0x7f).filter(|&i| i != 0x76) {
+            for input in 0..=0xff {
+                let mut ctx = (Gbz80State::default(), [0u8; 0x10000]);
+                // Start with HL at a high number so any single-byte change to it will never
+                // collide with the instruction at 0x00.
+                ctx.0.regs.set_hl(0xAA);
+                // This step might overwrite H or L changing the destination address of LD (HL),H
+                // or LD (HL),L, but that's ok because we use HL in set_dest.
+                set_source(inst, &mut ctx, input);
+                ctx.1[0] = inst;
+
+                let expected = {
+                    let mut expected = ctx.clone();
+                    expected.0.regs.pc = 1;
+                    set_dest(inst, &mut expected, input);
+                    expected
+                };
+
+                tick::<_, (Gbz80State, [u8; 0x10000])>(&mut ctx);
+                assert_eq!(ctx, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn add8bit() {
+        fn set_source(inst: u8, ctx: &mut impl CpuContext, val: u8) {
+            match (inst & 0xf) % 0x8 {
+                0x0 => ctx.cpustate_mut().regs.b = val,
+                0x1 => ctx.cpustate_mut().regs.c = val,
+                0x2 => ctx.cpustate_mut().regs.d = val,
+                0x3 => ctx.cpustate_mut().regs.e = val,
+                0x4 => ctx.cpustate_mut().regs.h = val,
+                0x5 => ctx.cpustate_mut().regs.l = val,
+                0x6 => {
+                    let dest = ctx.cpustate().regs.hl().into();
+                    ctx.mem_mut().write(dest, val)
+                }
+                _ => unreachable!(),
+            }
+        }
+        for inst in 0x80..=0x86 {
+            for v1 in 0..=0xff {
+                for v2 in 0..=0xff {
+                    let mut ctx = (Gbz80State::default(), [0u8; 2]);
+                    ctx.1[0] = inst;
+                    ctx.0.regs.acc = v1;
+                    ctx.0.regs.set_hl(1);
+                    set_source(inst, &mut ctx, v2);
+
+                    let expected = {
+                        let mut expected = ctx.clone();
+                        expected.0.regs.pc = 1;
+                        let (sum, wrapped) = v1.overflowing_add(v2);
+                        expected.0.regs.acc = sum;
+                        if sum == 0 {
+                            expected.0.regs.flags |= Flags::ZERO;
+                        }
+                        if wrapped {
+                            expected.0.regs.flags |= Flags::CARRY;
+                        }
+                        if (v1 & 0xf) + (v2 & 0xf) > 0xf {
+                            expected.0.regs.flags |= Flags::HALFCARRY;
+                        }
+                        expected
+                    };
+
+                    tick::<_, (Gbz80State, [u8; 0x2])>(&mut ctx);
+                    assert_eq!(ctx, expected);
+                }
+            }
+        }
+        for v in 0..=0xff {
+            let mut ctx = (Gbz80State::default(), [0u8; 1]);
+            ctx.1[0] = 0x87;
+            ctx.0.regs.acc = v;
+
+            let expected = {
+                let mut expected = ctx.clone();
+                expected.0.regs.pc = 1;
+                let (sum, wrapped) = v.overflowing_add(v);
+                expected.0.regs.acc = sum;
+                if sum == 0 {
+                    expected.0.regs.flags |= Flags::ZERO;
+                }
+                if wrapped {
+                    expected.0.regs.flags |= Flags::CARRY;
+                }
+                if (v & 0xf) + (v & 0xf) > 0xf {
+                    expected.0.regs.flags |= Flags::HALFCARRY;
+                }
+                expected
+            };
+
+            tick::<_, (Gbz80State, [u8; 0x1])>(&mut ctx);
+            assert_eq!(ctx, expected);
+        }
+    }
+
+    #[test]
+    fn adc8bit() {
+        fn set_source(inst: u8, ctx: &mut impl CpuContext, val: u8) {
+            match (inst & 0xf) % 0x8 {
+                0x0 => ctx.cpustate_mut().regs.b = val,
+                0x1 => ctx.cpustate_mut().regs.c = val,
+                0x2 => ctx.cpustate_mut().regs.d = val,
+                0x3 => ctx.cpustate_mut().regs.e = val,
+                0x4 => ctx.cpustate_mut().regs.h = val,
+                0x5 => ctx.cpustate_mut().regs.l = val,
+                0x6 => {
+                    let dest = ctx.cpustate().regs.hl().into();
+                    ctx.mem_mut().write(dest, val)
+                }
+                _ => unreachable!(),
+            }
+        }
+        for inst in 0x88..=0x8e {
+            for v1 in 0..=0xff {
+                for v2 in 0..=0xff {
+                    for carry in 0..=1 {
+                        println!("adc({:02x}) {},{} {}", inst, v1, v2, carry);
+                        let mut ctx = (Gbz80State::default(), [0u8; 2]);
+                        ctx.1[0] = inst;
+                        ctx.0.regs.acc = v1;
+                        ctx.0.regs.set_hl(1);
+                        if carry == 1 {
+                            ctx.0.regs.flags |= Flags::CARRY;
+                        }
+                        set_source(inst, &mut ctx, v2);
+
+                        let expected = {
+                            let mut expected = ctx.clone();
+                            expected.0.regs.pc = 1;
+                            let (sum1, wrapped1) = v1.overflowing_add(v2);
+                            let (sum2, wrapped2) = sum1.overflowing_add(carry);
+                            expected.0.regs.acc = sum2;
+                            expected.0.regs.flags = Flags::empty();
+                            if sum2 == 0 {
+                                expected.0.regs.flags |= Flags::ZERO;
+                            }
+                            if wrapped1 || wrapped2 {
+                                expected.0.regs.flags |= Flags::CARRY;
+                            }
+                            if (v1 & 0xf) + (v2 & 0xf) + carry > 0xf {
+                                expected.0.regs.flags |= Flags::HALFCARRY;
+                            }
+                            expected
+                        };
+
+                        tick::<_, (Gbz80State, [u8; 0x2])>(&mut ctx);
+                        assert_eq!(ctx, expected);
+                    }
+                }
+            }
+        }
+        for v in 0..=0xff {
+            for carry in 0..=1 {
+                println!("adc(0x8f) {},{} {}", v, v, carry);
+                let mut ctx = (Gbz80State::default(), [0u8; 1]);
+                ctx.1[0] = 0x8f;
+                ctx.0.regs.acc = v;
+                if carry == 1 {
+                    ctx.0.regs.flags |= Flags::CARRY;
+                }
+
+                let expected = {
+                    let mut expected = ctx.clone();
+                    expected.0.regs.pc = 1;
+                    let (sum1, wrapped1) = v.overflowing_add(v);
+                    let (sum2, wrapped2) = sum1.overflowing_add(carry);
+                    expected.0.regs.acc = sum2;
+                    expected.0.regs.flags = Flags::empty();
+                    if sum2 == 0 {
+                        expected.0.regs.flags |= Flags::ZERO;
+                    }
+                    if wrapped1 || wrapped2 {
+                        expected.0.regs.flags |= Flags::CARRY;
+                    }
+                    if (v & 0xf) + (v & 0xf) + carry > 0xf {
+                        expected.0.regs.flags |= Flags::HALFCARRY;
+                    }
+                    expected
+                };
+
+                tick::<_, (Gbz80State, [u8; 0x1])>(&mut ctx);
+                assert_eq!(ctx, expected);
+            }
+        }
     }
 }
