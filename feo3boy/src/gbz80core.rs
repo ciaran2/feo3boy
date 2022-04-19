@@ -467,7 +467,10 @@ mod tests {
                 _ => unreachable!(),
             }
         }
-        for inst in (0x00..=0x30).step_by(0x10).flat_map(|high| [high + 0x06, high + 0x0e]) {
+        for inst in (0x00..=0x30)
+            .step_by(0x10)
+            .flat_map(|high| [high + 0x06, high + 0x0e])
+        {
             for input in 0..=0xff {
                 let mut ctx = (Gbz80State::default(), [0u8; 3]);
                 // Start with HL at a high number so any single-byte change to it will never
@@ -488,8 +491,6 @@ mod tests {
             }
         }
     }
-
-
 
     #[test]
     fn add8bit() {
@@ -1038,7 +1039,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn xor8bit() {
         fn set_source(inst: u8, ctx: &mut impl CpuContext, val: u8) {
@@ -1322,6 +1322,210 @@ mod tests {
 
                 tick::<_, (Gbz80State, [u8; 0x1])>(&mut ctx);
                 assert_eq!(ctx, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn relative_jumps() {
+        for flags in (0x00..=0xf0).step_by(0x10) {
+            for offset in -128i8..=127 {
+                let jnz = (flags & 0x80) == 0;
+                let jz = (flags & 0x80) != 0;
+                let jnc = (flags & 0x10) == 0;
+                let jc = (flags & 0x10) != 0;
+                let ops = [
+                    (0x18, true),
+                    (0x20, jnz),
+                    (0x28, jz),
+                    (0x30, jnc),
+                    (0x38, jc),
+                ];
+
+                for (opcode, should_jump) in ops {
+                    println!("jr({:02x}) -> {} should: {}", opcode, offset, should_jump);
+                    let mut ctx = (Gbz80State::default(), [0u8; 0x200]);
+                    ctx.0.regs.flags = Flags::from_bits_truncate(flags);
+                    ctx.1[0x100] = opcode;
+                    ctx.0.regs.pc = 0x100;
+                    ctx.1[0x101] = offset as u8;
+
+                    let expected = {
+                        let mut expected = ctx.clone();
+                        if should_jump {
+                            expected.0.regs.pc = (0x102 + offset as i32) as u16;
+                        } else {
+                            expected.0.regs.pc = 0x102;
+                        }
+                        expected
+                    };
+
+                    tick::<_, (Gbz80State, [u8; 0x200])>(&mut ctx);
+                    assert_eq!(ctx, expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn absolute_immediate_jumps() {
+        for flags in (0x00..=0xf0).step_by(0x10) {
+            for dest in 0x0000u16..=0xffff {
+                let jnz = (flags & 0x80) == 0;
+                let jz = (flags & 0x80) != 0;
+                let jnc = (flags & 0x10) == 0;
+                let jc = (flags & 0x10) != 0;
+                let ops = [
+                    (0xc3, true),
+                    (0xc2, jnz),
+                    (0xca, jz),
+                    (0xd2, jnc),
+                    (0xda, jc),
+                ];
+
+                for (opcode, should_jump) in ops {
+                    println!("jp({:02x}) -> {:04x} should: {}", opcode, dest, should_jump);
+                    let mut ctx = (Gbz80State::default(), [0u8; 3]);
+                    ctx.0.regs.flags = Flags::from_bits_truncate(flags);
+                    ctx.1[0] = opcode;
+                    let [low, high] = dest.to_le_bytes();
+                    ctx.1[1] = low;
+                    ctx.1[2] = high;
+
+                    let expected = {
+                        let mut expected = ctx.clone();
+                        if should_jump {
+                            expected.0.regs.pc = dest;
+                        } else {
+                            expected.0.regs.pc = 3;
+                        }
+                        expected
+                    };
+
+                    tick::<_, (Gbz80State, [u8; 3])>(&mut ctx);
+                    assert_eq!(ctx, expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn jump_hl() {
+        for flags in (0x00..=0xf0).step_by(0x10) {
+            for dest in 0x0000u16..=0xffff {
+                println!("jp(e9) -> {:04x}", dest);
+                let mut ctx = (Gbz80State::default(), [0u8; 1]);
+                ctx.0.regs.flags = Flags::from_bits_truncate(flags);
+                ctx.1[0] = 0xe9;
+                ctx.0.regs.set_hl(dest);
+
+                let expected = {
+                    let mut expected = ctx.clone();
+                    expected.0.regs.pc = dest;
+                    expected
+                };
+
+                tick::<_, (Gbz80State, [u8; 1])>(&mut ctx);
+                assert_eq!(ctx, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn returns() {
+        for flags in (0x00..=0xf0).step_by(0x10) {
+            for dest in 0x0000u16..=0xffff {
+                let jnz = (flags & 0x80) == 0;
+                let jz = (flags & 0x80) != 0;
+                let jnc = (flags & 0x10) == 0;
+                let jc = (flags & 0x10) != 0;
+                let ops = [
+                    (0xc9, true),
+                    (0xc0, jnz),
+                    (0xc8, jz),
+                    (0xd0, jnc),
+                    (0xd8, jc),
+                ];
+
+                for (opcode, should_jump) in ops {
+                    println!(
+                        "ret({:02x}) -> {:04x} should: {}",
+                        opcode, dest, should_jump
+                    );
+                    let mut ctx = (Gbz80State::default(), [0u8; 0x200]);
+                    ctx.0.regs.flags = Flags::from_bits_truncate(flags);
+                    ctx.1[0x100] = opcode;
+                    ctx.0.regs.pc = 0x100;
+                    let [low, high] = dest.to_le_bytes();
+                    ctx.1[0x1fe] = low;
+                    ctx.1[0x1ff] = high;
+                    ctx.0.regs.sp = 0x1fe;
+
+                    let expected = {
+                        let mut expected = ctx.clone();
+                        if should_jump {
+                            expected.0.regs.sp = 0x200;
+                            expected.0.regs.pc = dest;
+                        } else {
+                            expected.0.regs.pc = 0x101;
+                        }
+                        expected
+                    };
+
+                    tick::<_, (Gbz80State, [u8; 0x200])>(&mut ctx);
+                    assert_eq!(ctx, expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn calls() {
+        for flags in (0x00..=0xf0).step_by(0x10) {
+            for dest in 0x0000u16..=0xffff {
+                let jnz = (flags & 0x80) == 0;
+                let jz = (flags & 0x80) != 0;
+                let jnc = (flags & 0x10) == 0;
+                let jc = (flags & 0x10) != 0;
+                let ops = [
+                    (0xcd, true),
+                    (0xc4, jnz),
+                    (0xcc, jz),
+                    (0xd4, jnc),
+                    (0xdc, jc),
+                ];
+
+                for (opcode, should_jump) in ops {
+                    println!(
+                        "call({:02x}) -> {:04x} should: {}",
+                        opcode, dest, should_jump
+                    );
+                    let mut ctx = (Gbz80State::default(), [0u8; 0x200]);
+                    ctx.0.regs.flags = Flags::from_bits_truncate(flags);
+                    ctx.1[0x100] = opcode;
+                    ctx.0.regs.pc = 0x100;
+                    let [low, high] = dest.to_le_bytes();
+                    ctx.1[0x101] = low;
+                    ctx.1[0x102] = high;
+                    ctx.0.regs.sp = 0x200;
+
+                    let expected = {
+                        let mut expected = ctx.clone();
+                        if should_jump {
+                            expected.0.regs.sp = 0x1fe;
+                            // Return to 0x0103.
+                            expected.1[0x1fe] = 0x03;
+                            expected.1[0x1ff] = 0x01;
+                            expected.0.regs.pc = dest;
+                        } else {
+                            expected.0.regs.pc = 0x103;
+                        }
+                        expected
+                    };
+
+                    tick::<_, (Gbz80State, [u8; 0x200])>(&mut ctx);
+                    assert_eq!(ctx, expected);
+                }
             }
         }
     }
