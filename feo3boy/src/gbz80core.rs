@@ -450,6 +450,49 @@ mod tests {
     }
 
     #[test]
+    fn load8bit_immediate() {
+        fn set_dest(inst: u8, ctx: &mut impl CpuContext, val: u8) {
+            match inst {
+                0x06 => ctx.cpustate_mut().regs.b = val,
+                0x0e => ctx.cpustate_mut().regs.c = val,
+                0x16 => ctx.cpustate_mut().regs.d = val,
+                0x1e => ctx.cpustate_mut().regs.e = val,
+                0x26 => ctx.cpustate_mut().regs.h = val,
+                0x2e => ctx.cpustate_mut().regs.l = val,
+                0x36 => {
+                    let dest = ctx.cpustate().regs.hl().into();
+                    ctx.mem_mut().write(dest, val)
+                }
+                0x3e => ctx.cpustate_mut().regs.acc = val,
+                _ => unreachable!(),
+            }
+        }
+        for inst in (0x00..=0x30)
+            .step_by(0x10)
+            .flat_map(|high| [high + 0x06, high + 0x0e])
+        {
+            for input in 0..=0xff {
+                let mut ctx = (Gbz80State::default(), [0u8; 3]);
+                // Start with HL at a high number so any single-byte change to it will never
+                // collide with the instruction at 0x00.
+                ctx.0.regs.set_hl(2);
+                ctx.1[0] = inst;
+                ctx.1[1] = input;
+
+                let expected = {
+                    let mut expected = ctx.clone();
+                    expected.0.regs.pc = 2;
+                    set_dest(inst, &mut expected, input);
+                    expected
+                };
+
+                tick::<_, (Gbz80State, [u8; 3])>(&mut ctx);
+                assert_eq!(ctx, expected);
+            }
+        }
+    }
+
+    #[test]
     fn add8bit() {
         fn set_source(inst: u8, ctx: &mut impl CpuContext, val: u8) {
             match (inst & 0xf) % 0x8 {
@@ -466,20 +509,57 @@ mod tests {
                 _ => unreachable!(),
             }
         }
-        for inst in 0x80..=0x86 {
+        for existing_flags in (0x00..=0xf0).step_by(0x10) {
+            for inst in 0x80..=0x86 {
+                for v1 in 0..=0xff {
+                    for v2 in 0..=0xff {
+                        println!("add({:02x}) {},{}", inst, v1, v2);
+                        let mut ctx = (Gbz80State::default(), [0u8; 2]);
+                        ctx.1[0] = inst;
+                        ctx.0.regs.acc = v1;
+                        ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
+                        ctx.0.regs.set_hl(1);
+                        set_source(inst, &mut ctx, v2);
+
+                        let expected = {
+                            let mut expected = ctx.clone();
+                            expected.0.regs.pc = 1;
+                            let (sum, wrapped) = v1.overflowing_add(v2);
+                            expected.0.regs.acc = sum;
+                            expected.0.regs.flags = Flags::empty();
+                            if sum == 0 {
+                                expected.0.regs.flags |= Flags::ZERO;
+                            }
+                            if wrapped {
+                                expected.0.regs.flags |= Flags::CARRY;
+                            }
+                            if (v1 & 0xf) + (v2 & 0xf) > 0xf {
+                                expected.0.regs.flags |= Flags::HALFCARRY;
+                            }
+                            expected
+                        };
+
+                        tick::<_, (Gbz80State, [u8; 0x2])>(&mut ctx);
+                        assert_eq!(ctx, expected);
+                    }
+                }
+            }
+            // A,u8
             for v1 in 0..=0xff {
                 for v2 in 0..=0xff {
+                    println!("add(c6) {},{}", v1, v2);
                     let mut ctx = (Gbz80State::default(), [0u8; 2]);
-                    ctx.1[0] = inst;
+                    ctx.1[0] = 0xc6;
                     ctx.0.regs.acc = v1;
-                    ctx.0.regs.set_hl(1);
-                    set_source(inst, &mut ctx, v2);
+                    ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
+                    ctx.1[1] = v2;
 
                     let expected = {
                         let mut expected = ctx.clone();
-                        expected.0.regs.pc = 1;
+                        expected.0.regs.pc = 2;
                         let (sum, wrapped) = v1.overflowing_add(v2);
                         expected.0.regs.acc = sum;
+                        expected.0.regs.flags = Flags::empty();
                         if sum == 0 {
                             expected.0.regs.flags |= Flags::ZERO;
                         }
@@ -492,35 +572,39 @@ mod tests {
                         expected
                     };
 
-                    tick::<_, (Gbz80State, [u8; 0x2])>(&mut ctx);
+                    tick::<_, (Gbz80State, [u8; 2])>(&mut ctx);
                     assert_eq!(ctx, expected);
                 }
             }
-        }
-        for v in 0..=0xff {
-            let mut ctx = (Gbz80State::default(), [0u8; 1]);
-            ctx.1[0] = 0x87;
-            ctx.0.regs.acc = v;
+            // A,A
+            for v in 0..=0xff {
+                println!("add(87) {},{}", v, v);
+                let mut ctx = (Gbz80State::default(), [0u8; 1]);
+                ctx.1[0] = 0x87;
+                ctx.0.regs.acc = v;
+                ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
 
-            let expected = {
-                let mut expected = ctx.clone();
-                expected.0.regs.pc = 1;
-                let (sum, wrapped) = v.overflowing_add(v);
-                expected.0.regs.acc = sum;
-                if sum == 0 {
-                    expected.0.regs.flags |= Flags::ZERO;
-                }
-                if wrapped {
-                    expected.0.regs.flags |= Flags::CARRY;
-                }
-                if (v & 0xf) + (v & 0xf) > 0xf {
-                    expected.0.regs.flags |= Flags::HALFCARRY;
-                }
-                expected
-            };
+                let expected = {
+                    let mut expected = ctx.clone();
+                    expected.0.regs.pc = 1;
+                    let (sum, wrapped) = v.overflowing_add(v);
+                    expected.0.regs.acc = sum;
+                    expected.0.regs.flags = Flags::empty();
+                    if sum == 0 {
+                        expected.0.regs.flags |= Flags::ZERO;
+                    }
+                    if wrapped {
+                        expected.0.regs.flags |= Flags::CARRY;
+                    }
+                    if (v & 0xf) + (v & 0xf) > 0xf {
+                        expected.0.regs.flags |= Flags::HALFCARRY;
+                    }
+                    expected
+                };
 
-            tick::<_, (Gbz80State, [u8; 0x1])>(&mut ctx);
-            assert_eq!(ctx, expected);
+                tick::<_, (Gbz80State, [u8; 0x1])>(&mut ctx);
+                assert_eq!(ctx, expected);
+            }
         }
     }
 
@@ -541,18 +625,17 @@ mod tests {
                 _ => unreachable!(),
             }
         }
-        for inst in 0x88..=0x8e {
-            for v1 in 0..=0xff {
-                for v2 in 0..=0xff {
-                    for carry in 0..=1 {
+        for existing_flags in (0x00..=0xf0).step_by(0x10) {
+            let carry = (existing_flags & 0x10) >> 4;
+            for inst in 0x88..=0x8e {
+                for v1 in 0..=0xff {
+                    for v2 in 0..=0xff {
                         println!("adc({:02x}) {},{} {}", inst, v1, v2, carry);
                         let mut ctx = (Gbz80State::default(), [0u8; 2]);
                         ctx.1[0] = inst;
                         ctx.0.regs.acc = v1;
+                        ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
                         ctx.0.regs.set_hl(1);
-                        if carry == 1 {
-                            ctx.0.regs.flags |= Flags::CARRY;
-                        }
                         set_source(inst, &mut ctx, v2);
 
                         let expected = {
@@ -579,13 +662,46 @@ mod tests {
                     }
                 }
             }
-        }
-        for v in 0..=0xff {
-            for carry in 0..=1 {
-                println!("adc(0x8f) {},{} {}", v, v, carry);
+            // ADC A,u8
+            for v1 in 0..=0xff {
+                for v2 in 0..=0xff {
+                    println!("adc(ce) {},{} {}", v1, v2, carry);
+                    let mut ctx = (Gbz80State::default(), [0u8; 2]);
+                    ctx.1[0] = 0xce;
+                    ctx.0.regs.acc = v1;
+                    ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
+                    ctx.1[1] = v2;
+
+                    let expected = {
+                        let mut expected = ctx.clone();
+                        expected.0.regs.pc = 2;
+                        let (sum1, wrapped1) = v1.overflowing_add(v2);
+                        let (sum2, wrapped2) = sum1.overflowing_add(carry);
+                        expected.0.regs.acc = sum2;
+                        expected.0.regs.flags = Flags::empty();
+                        if sum2 == 0 {
+                            expected.0.regs.flags |= Flags::ZERO;
+                        }
+                        if wrapped1 || wrapped2 {
+                            expected.0.regs.flags |= Flags::CARRY;
+                        }
+                        if (v1 & 0xf) + (v2 & 0xf) + carry > 0xf {
+                            expected.0.regs.flags |= Flags::HALFCARRY;
+                        }
+                        expected
+                    };
+
+                    tick::<_, (Gbz80State, [u8; 0x2])>(&mut ctx);
+                    assert_eq!(ctx, expected);
+                }
+            }
+            // ADC A,A
+            for v in 0..=0xff {
+                println!("adc(8f) {},{} {}", v, v, carry);
                 let mut ctx = (Gbz80State::default(), [0u8; 1]);
                 ctx.1[0] = 0x8f;
                 ctx.0.regs.acc = v;
+                ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
                 if carry == 1 {
                     ctx.0.regs.flags |= Flags::CARRY;
                 }
@@ -611,6 +727,805 @@ mod tests {
 
                 tick::<_, (Gbz80State, [u8; 0x1])>(&mut ctx);
                 assert_eq!(ctx, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn sub8bit() {
+        fn set_source(inst: u8, ctx: &mut impl CpuContext, val: u8) {
+            match (inst & 0xf) % 0x8 {
+                0x0 => ctx.cpustate_mut().regs.b = val,
+                0x1 => ctx.cpustate_mut().regs.c = val,
+                0x2 => ctx.cpustate_mut().regs.d = val,
+                0x3 => ctx.cpustate_mut().regs.e = val,
+                0x4 => ctx.cpustate_mut().regs.h = val,
+                0x5 => ctx.cpustate_mut().regs.l = val,
+                0x6 => {
+                    let dest = ctx.cpustate().regs.hl().into();
+                    ctx.mem_mut().write(dest, val)
+                }
+                _ => unreachable!(),
+            }
+        }
+        for existing_flags in (0x00..=0xf0).step_by(0x10) {
+            for inst in 0x90..=0x96 {
+                for v1 in 0..=0xff {
+                    for v2 in 0..=0xff {
+                        println!("sub({:02x}) {},{}", inst, v1, v2);
+                        let mut ctx = (Gbz80State::default(), [0u8; 2]);
+                        ctx.1[0] = inst;
+                        ctx.0.regs.acc = v1;
+                        ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
+                        ctx.0.regs.set_hl(1);
+                        set_source(inst, &mut ctx, v2);
+
+                        let expected = {
+                            let mut expected = ctx.clone();
+                            expected.0.regs.pc = 1;
+                            let diff = v1.wrapping_sub(v2);
+                            expected.0.regs.acc = diff;
+                            expected.0.regs.flags = Flags::SUB;
+                            if diff == 0 {
+                                expected.0.regs.flags |= Flags::ZERO;
+                            }
+                            if v1 < v2 {
+                                expected.0.regs.flags |= Flags::CARRY;
+                            }
+                            if (v1 & 0xf) < (v2 & 0xf) {
+                                expected.0.regs.flags |= Flags::HALFCARRY;
+                            }
+                            expected
+                        };
+
+                        tick::<_, (Gbz80State, [u8; 2])>(&mut ctx);
+                        assert_eq!(ctx, expected);
+                    }
+                }
+            }
+            for v1 in 0..=0xff {
+                for v2 in 0..=0xff {
+                    println!("sub(d6) {},{}", v1, v2);
+                    let mut ctx = (Gbz80State::default(), [0u8; 2]);
+                    ctx.1[0] = 0xd6;
+                    ctx.0.regs.acc = v1;
+                    ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
+                    ctx.1[1] = v2;
+
+                    let expected = {
+                        let mut expected = ctx.clone();
+                        expected.0.regs.pc = 2;
+                        let diff = v1.wrapping_sub(v2);
+                        expected.0.regs.acc = diff;
+                        expected.0.regs.flags = Flags::SUB;
+                        if diff == 0 {
+                            expected.0.regs.flags |= Flags::ZERO;
+                        }
+                        if v1 < v2 {
+                            expected.0.regs.flags |= Flags::CARRY;
+                        }
+                        if (v1 & 0xf) < (v2 & 0xf) {
+                            expected.0.regs.flags |= Flags::HALFCARRY;
+                        }
+                        expected
+                    };
+
+                    tick::<_, (Gbz80State, [u8; 2])>(&mut ctx);
+                    assert_eq!(ctx, expected);
+                }
+            }
+            for v in 0..=0xff {
+                println!("sub(97) {},{}", v, v);
+                let mut ctx = (Gbz80State::default(), [0u8; 1]);
+                ctx.1[0] = 0x97;
+                ctx.0.regs.acc = v;
+                ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
+
+                let expected = {
+                    let mut expected = ctx.clone();
+                    expected.0.regs.pc = 1;
+                    expected.0.regs.acc = 0;
+                    expected.0.regs.flags = Flags::ZERO | Flags::SUB;
+                    expected
+                };
+
+                tick::<_, (Gbz80State, [u8; 0x1])>(&mut ctx);
+                assert_eq!(ctx, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn sbc8bit() {
+        fn set_source(inst: u8, ctx: &mut impl CpuContext, val: u8) {
+            match (inst & 0xf) % 0x8 {
+                0x0 => ctx.cpustate_mut().regs.b = val,
+                0x1 => ctx.cpustate_mut().regs.c = val,
+                0x2 => ctx.cpustate_mut().regs.d = val,
+                0x3 => ctx.cpustate_mut().regs.e = val,
+                0x4 => ctx.cpustate_mut().regs.h = val,
+                0x5 => ctx.cpustate_mut().regs.l = val,
+                0x6 => {
+                    let dest = ctx.cpustate().regs.hl().into();
+                    ctx.mem_mut().write(dest, val)
+                }
+                _ => unreachable!(),
+            }
+        }
+        for existing_flags in (0x00..=0xf0).step_by(0x10) {
+            let carry = (existing_flags & 0x10) >> 4;
+            for inst in 0x98..=0x9e {
+                for v1 in 0..=0xff {
+                    for v2 in 0..=0xff {
+                        println!("sbc({:02x}) {},{} {}", inst, v1, v2, carry);
+                        let mut ctx = (Gbz80State::default(), [0u8; 2]);
+                        ctx.1[0] = inst;
+                        ctx.0.regs.acc = v1;
+                        ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
+                        ctx.0.regs.set_hl(1);
+                        set_source(inst, &mut ctx, v2);
+
+                        let expected = {
+                            let mut expected = ctx.clone();
+                            expected.0.regs.pc = 1;
+                            let diff = v1.wrapping_sub(v2).wrapping_sub(carry);
+                            expected.0.regs.acc = diff;
+                            expected.0.regs.flags = Flags::SUB;
+                            if diff == 0 {
+                                expected.0.regs.flags |= Flags::ZERO;
+                            }
+                            if v1 < v2 || (v1 == v2 && carry != 0) {
+                                expected.0.regs.flags |= Flags::CARRY;
+                            }
+                            if (v1 & 0xf) < (v2 & 0xf) || ((v1 & 0xf) == (v2 & 0xf) && carry != 0) {
+                                expected.0.regs.flags |= Flags::HALFCARRY;
+                            }
+                            expected
+                        };
+
+                        tick::<_, (Gbz80State, [u8; 2])>(&mut ctx);
+                        assert_eq!(ctx, expected);
+                    }
+                }
+            }
+            for v1 in 0..=0xff {
+                for v2 in 0..=0xff {
+                    println!("sbc(de) {},{} {}", v1, v2, carry);
+                    let mut ctx = (Gbz80State::default(), [0u8; 2]);
+                    ctx.1[0] = 0xde;
+                    ctx.0.regs.acc = v1;
+                    ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
+                    ctx.1[1] = v2;
+
+                    let expected = {
+                        let mut expected = ctx.clone();
+                        expected.0.regs.pc = 2;
+                        let diff = v1.wrapping_sub(v2).wrapping_sub(carry);
+                        expected.0.regs.acc = diff;
+                        expected.0.regs.flags = Flags::SUB;
+                        if diff == 0 {
+                            expected.0.regs.flags |= Flags::ZERO;
+                        }
+                        if v1 < v2 || (v1 == v2 && carry != 0) {
+                            expected.0.regs.flags |= Flags::CARRY;
+                        }
+                        if (v1 & 0xf) < (v2 & 0xf) || ((v1 & 0xf) == (v2 & 0xf) && carry != 0) {
+                            expected.0.regs.flags |= Flags::HALFCARRY;
+                        }
+                        expected
+                    };
+
+                    tick::<_, (Gbz80State, [u8; 2])>(&mut ctx);
+                    assert_eq!(ctx, expected);
+                }
+            }
+            for v in 0..=0xff {
+                println!("sbc(9f) {},{} {}", v, v, carry);
+                let mut ctx = (Gbz80State::default(), [0u8; 1]);
+                ctx.1[0] = 0x9f;
+                ctx.0.regs.acc = v;
+                ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
+
+                let expected = {
+                    let mut expected = ctx.clone();
+                    expected.0.regs.pc = 1;
+                    if carry == 0 {
+                        expected.0.regs.acc = 0;
+                        expected.0.regs.flags = Flags::ZERO | Flags::SUB;
+                    } else {
+                        expected.0.regs.acc = 0xff;
+                        expected.0.regs.flags = Flags::SUB | Flags::CARRY | Flags::HALFCARRY;
+                    }
+                    expected
+                };
+
+                tick::<_, (Gbz80State, [u8; 0x1])>(&mut ctx);
+                assert_eq!(ctx, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn and8bit() {
+        fn set_source(inst: u8, ctx: &mut impl CpuContext, val: u8) {
+            match (inst & 0xf) % 0x8 {
+                0x0 => ctx.cpustate_mut().regs.b = val,
+                0x1 => ctx.cpustate_mut().regs.c = val,
+                0x2 => ctx.cpustate_mut().regs.d = val,
+                0x3 => ctx.cpustate_mut().regs.e = val,
+                0x4 => ctx.cpustate_mut().regs.h = val,
+                0x5 => ctx.cpustate_mut().regs.l = val,
+                0x6 => {
+                    let dest = ctx.cpustate().regs.hl().into();
+                    ctx.mem_mut().write(dest, val)
+                }
+                _ => unreachable!(),
+            }
+        }
+        for existing_flags in (0x00..=0xf0).step_by(0x10) {
+            for inst in 0xa0..=0xa6 {
+                for v1 in 0..=0xff {
+                    for v2 in 0..=0xff {
+                        println!("and({:02x}) {},{}", inst, v1, v2);
+                        let mut ctx = (Gbz80State::default(), [0u8; 2]);
+                        ctx.1[0] = inst;
+                        ctx.0.regs.acc = v1;
+                        ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
+                        ctx.0.regs.set_hl(1);
+                        set_source(inst, &mut ctx, v2);
+
+                        let expected = {
+                            let mut expected = ctx.clone();
+                            expected.0.regs.pc = 1;
+                            let res = v1 & v2;
+                            expected.0.regs.acc = res;
+                            expected.0.regs.flags = Flags::HALFCARRY;
+                            if res == 0 {
+                                expected.0.regs.flags |= Flags::ZERO;
+                            }
+                            expected
+                        };
+
+                        tick::<_, (Gbz80State, [u8; 2])>(&mut ctx);
+                        assert_eq!(ctx, expected);
+                    }
+                }
+            }
+            for v1 in 0..=0xff {
+                for v2 in 0..=0xff {
+                    println!("and(e6) {},{}", v1, v2);
+                    let mut ctx = (Gbz80State::default(), [0u8; 2]);
+                    ctx.1[0] = 0xe6;
+                    ctx.0.regs.acc = v1;
+                    ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
+                    ctx.1[1] = v2;
+
+                    let expected = {
+                        let mut expected = ctx.clone();
+                        expected.0.regs.pc = 2;
+                        let res = v1 & v2;
+                        expected.0.regs.acc = res;
+                        expected.0.regs.flags = Flags::HALFCARRY;
+                        if res == 0 {
+                            expected.0.regs.flags |= Flags::ZERO;
+                        }
+                        expected
+                    };
+
+                    tick::<_, (Gbz80State, [u8; 2])>(&mut ctx);
+                    assert_eq!(ctx, expected);
+                }
+            }
+            for v in 0..=0xff {
+                println!("and(a7) {},{}", v, v);
+                let mut ctx = (Gbz80State::default(), [0u8; 1]);
+                ctx.1[0] = 0xa7;
+                ctx.0.regs.acc = v;
+                ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
+
+                let expected = {
+                    let mut expected = ctx.clone();
+                    expected.0.regs.pc = 1;
+                    expected.0.regs.flags = Flags::HALFCARRY;
+                    if v == 0 {
+                        expected.0.regs.flags |= Flags::ZERO;
+                    }
+                    expected
+                };
+
+                tick::<_, (Gbz80State, [u8; 0x1])>(&mut ctx);
+                assert_eq!(ctx, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn xor8bit() {
+        fn set_source(inst: u8, ctx: &mut impl CpuContext, val: u8) {
+            match (inst & 0xf) % 0x8 {
+                0x0 => ctx.cpustate_mut().regs.b = val,
+                0x1 => ctx.cpustate_mut().regs.c = val,
+                0x2 => ctx.cpustate_mut().regs.d = val,
+                0x3 => ctx.cpustate_mut().regs.e = val,
+                0x4 => ctx.cpustate_mut().regs.h = val,
+                0x5 => ctx.cpustate_mut().regs.l = val,
+                0x6 => {
+                    let dest = ctx.cpustate().regs.hl().into();
+                    ctx.mem_mut().write(dest, val)
+                }
+                _ => unreachable!(),
+            }
+        }
+        for existing_flags in (0x00..=0xf0).step_by(0x10) {
+            for inst in 0xa8..=0xae {
+                for v1 in 0..=0xff {
+                    for v2 in 0..=0xff {
+                        println!("xor({:02x}) {},{}", inst, v1, v2);
+                        let mut ctx = (Gbz80State::default(), [0u8; 2]);
+                        ctx.1[0] = inst;
+                        ctx.0.regs.acc = v1;
+                        ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
+                        ctx.0.regs.set_hl(1);
+                        set_source(inst, &mut ctx, v2);
+
+                        let expected = {
+                            let mut expected = ctx.clone();
+                            expected.0.regs.pc = 1;
+                            let res = v1 ^ v2;
+                            expected.0.regs.acc = res;
+                            expected.0.regs.flags = Flags::empty();
+                            if res == 0 {
+                                expected.0.regs.flags |= Flags::ZERO;
+                            }
+                            expected
+                        };
+
+                        tick::<_, (Gbz80State, [u8; 2])>(&mut ctx);
+                        assert_eq!(ctx, expected);
+                    }
+                }
+            }
+            for v1 in 0..=0xff {
+                for v2 in 0..=0xff {
+                    println!("xor(ee) {},{}", v1, v2);
+                    let mut ctx = (Gbz80State::default(), [0u8; 2]);
+                    ctx.1[0] = 0xee;
+                    ctx.0.regs.acc = v1;
+                    ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
+                    ctx.1[1] = v2;
+
+                    let expected = {
+                        let mut expected = ctx.clone();
+                        expected.0.regs.pc = 2;
+                        let res = v1 ^ v2;
+                        expected.0.regs.acc = res;
+                        expected.0.regs.flags = Flags::empty();
+                        if res == 0 {
+                            expected.0.regs.flags |= Flags::ZERO;
+                        }
+                        expected
+                    };
+
+                    tick::<_, (Gbz80State, [u8; 2])>(&mut ctx);
+                    assert_eq!(ctx, expected);
+                }
+            }
+            for v in 0..=0xff {
+                println!("and(af) {},{}", v, v);
+                let mut ctx = (Gbz80State::default(), [0u8; 1]);
+                ctx.1[0] = 0xaf;
+                ctx.0.regs.acc = v;
+                ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
+
+                let expected = {
+                    let mut expected = ctx.clone();
+                    expected.0.regs.pc = 1;
+                    expected.0.regs.acc = 0;
+                    expected.0.regs.flags = Flags::ZERO;
+                    expected
+                };
+
+                tick::<_, (Gbz80State, [u8; 0x1])>(&mut ctx);
+                assert_eq!(ctx, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn or8bit() {
+        fn set_source(inst: u8, ctx: &mut impl CpuContext, val: u8) {
+            match (inst & 0xf) % 0x8 {
+                0x0 => ctx.cpustate_mut().regs.b = val,
+                0x1 => ctx.cpustate_mut().regs.c = val,
+                0x2 => ctx.cpustate_mut().regs.d = val,
+                0x3 => ctx.cpustate_mut().regs.e = val,
+                0x4 => ctx.cpustate_mut().regs.h = val,
+                0x5 => ctx.cpustate_mut().regs.l = val,
+                0x6 => {
+                    let dest = ctx.cpustate().regs.hl().into();
+                    ctx.mem_mut().write(dest, val)
+                }
+                _ => unreachable!(),
+            }
+        }
+        for existing_flags in (0x00..=0xf0).step_by(0x10) {
+            for inst in 0xb0..=0xb6 {
+                for v1 in 0..=0xff {
+                    for v2 in 0..=0xff {
+                        println!("or({:02x}) {},{}", inst, v1, v2);
+                        let mut ctx = (Gbz80State::default(), [0u8; 2]);
+                        ctx.1[0] = inst;
+                        ctx.0.regs.acc = v1;
+                        ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
+                        ctx.0.regs.set_hl(1);
+                        set_source(inst, &mut ctx, v2);
+
+                        let expected = {
+                            let mut expected = ctx.clone();
+                            expected.0.regs.pc = 1;
+                            let res = v1 | v2;
+                            expected.0.regs.acc = res;
+                            expected.0.regs.flags = Flags::empty();
+                            if res == 0 {
+                                expected.0.regs.flags |= Flags::ZERO;
+                            }
+                            expected
+                        };
+
+                        tick::<_, (Gbz80State, [u8; 2])>(&mut ctx);
+                        assert_eq!(ctx, expected);
+                    }
+                }
+            }
+            for v1 in 0..=0xff {
+                for v2 in 0..=0xff {
+                    println!("or(f6) {},{}", v1, v2);
+                    let mut ctx = (Gbz80State::default(), [0u8; 2]);
+                    ctx.1[0] = 0xf6;
+                    ctx.0.regs.acc = v1;
+                    ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
+                    ctx.1[1] = v2;
+
+                    let expected = {
+                        let mut expected = ctx.clone();
+                        expected.0.regs.pc = 2;
+                        let res = v1 | v2;
+                        expected.0.regs.acc = res;
+                        expected.0.regs.flags = Flags::empty();
+                        if res == 0 {
+                            expected.0.regs.flags |= Flags::ZERO;
+                        }
+                        expected
+                    };
+
+                    tick::<_, (Gbz80State, [u8; 2])>(&mut ctx);
+                    assert_eq!(ctx, expected);
+                }
+            }
+            for v in 0..=0xff {
+                println!("or(b7) {},{}", v, v);
+                let mut ctx = (Gbz80State::default(), [0u8; 1]);
+                ctx.1[0] = 0xb7;
+                ctx.0.regs.acc = v;
+                ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
+
+                let expected = {
+                    let mut expected = ctx.clone();
+                    expected.0.regs.pc = 1;
+                    expected.0.regs.flags = Flags::empty();
+                    if v == 0 {
+                        expected.0.regs.flags |= Flags::ZERO;
+                    }
+                    expected
+                };
+
+                tick::<_, (Gbz80State, [u8; 0x1])>(&mut ctx);
+                assert_eq!(ctx, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn cp8bit() {
+        fn set_source(inst: u8, ctx: &mut impl CpuContext, val: u8) {
+            match (inst & 0xf) % 0x8 {
+                0x0 => ctx.cpustate_mut().regs.b = val,
+                0x1 => ctx.cpustate_mut().regs.c = val,
+                0x2 => ctx.cpustate_mut().regs.d = val,
+                0x3 => ctx.cpustate_mut().regs.e = val,
+                0x4 => ctx.cpustate_mut().regs.h = val,
+                0x5 => ctx.cpustate_mut().regs.l = val,
+                0x6 => {
+                    let dest = ctx.cpustate().regs.hl().into();
+                    ctx.mem_mut().write(dest, val)
+                }
+                _ => unreachable!(),
+            }
+        }
+        for existing_flags in (0x00..=0xf0).step_by(0x10) {
+            for inst in 0xb8..=0xbe {
+                for v1 in 0..=0xff {
+                    for v2 in 0..=0xff {
+                        println!("cp({:02x}) {},{}", inst, v1, v2);
+                        let mut ctx = (Gbz80State::default(), [0u8; 2]);
+                        ctx.1[0] = inst;
+                        ctx.0.regs.acc = v1;
+                        ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
+                        ctx.0.regs.set_hl(1);
+                        set_source(inst, &mut ctx, v2);
+
+                        let expected = {
+                            let mut expected = ctx.clone();
+                            expected.0.regs.pc = 1;
+                            let diff = v1.wrapping_sub(v2);
+                            expected.0.regs.flags = Flags::SUB;
+                            if diff == 0 {
+                                expected.0.regs.flags |= Flags::ZERO;
+                            }
+                            if v1 < v2 {
+                                expected.0.regs.flags |= Flags::CARRY;
+                            }
+                            if (v1 & 0xf) < (v2 & 0xf) {
+                                expected.0.regs.flags |= Flags::HALFCARRY;
+                            }
+                            expected
+                        };
+
+                        tick::<_, (Gbz80State, [u8; 2])>(&mut ctx);
+                        assert_eq!(ctx, expected);
+                    }
+                }
+            }
+            for v1 in 0..=0xff {
+                for v2 in 0..=0xff {
+                    println!("cp(fe) {},{}", v1, v2);
+                    let mut ctx = (Gbz80State::default(), [0u8; 2]);
+                    ctx.1[0] = 0xfe;
+                    ctx.0.regs.acc = v1;
+                    ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
+                    ctx.1[1] = v2;
+
+                    let expected = {
+                        let mut expected = ctx.clone();
+                        expected.0.regs.pc = 2;
+                        let diff = v1.wrapping_sub(v2);
+                        expected.0.regs.flags = Flags::SUB;
+                        if diff == 0 {
+                            expected.0.regs.flags |= Flags::ZERO;
+                        }
+                        if v1 < v2 {
+                            expected.0.regs.flags |= Flags::CARRY;
+                        }
+                        if (v1 & 0xf) < (v2 & 0xf) {
+                            expected.0.regs.flags |= Flags::HALFCARRY;
+                        }
+                        expected
+                    };
+
+                    tick::<_, (Gbz80State, [u8; 2])>(&mut ctx);
+                    assert_eq!(ctx, expected);
+                }
+            }
+            for v in 0..=0xff {
+                println!("cp(bf) {},{}", v, v);
+                let mut ctx = (Gbz80State::default(), [0u8; 1]);
+                ctx.1[0] = 0xbf;
+                ctx.0.regs.acc = v;
+                ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
+
+                let expected = {
+                    let mut expected = ctx.clone();
+                    expected.0.regs.pc = 1;
+                    expected.0.regs.flags = Flags::ZERO | Flags::SUB;
+                    expected
+                };
+
+                tick::<_, (Gbz80State, [u8; 0x1])>(&mut ctx);
+                assert_eq!(ctx, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn relative_jumps() {
+        for flags in (0x00..=0xf0).step_by(0x10) {
+            for offset in -128i8..=127 {
+                let jnz = (flags & 0x80) == 0;
+                let jz = (flags & 0x80) != 0;
+                let jnc = (flags & 0x10) == 0;
+                let jc = (flags & 0x10) != 0;
+                let ops = [
+                    (0x18, true),
+                    (0x20, jnz),
+                    (0x28, jz),
+                    (0x30, jnc),
+                    (0x38, jc),
+                ];
+
+                for (opcode, should_jump) in ops {
+                    println!("jr({:02x}) -> {} should: {}", opcode, offset, should_jump);
+                    let mut ctx = (Gbz80State::default(), [0u8; 0x200]);
+                    ctx.0.regs.flags = Flags::from_bits_truncate(flags);
+                    ctx.1[0x100] = opcode;
+                    ctx.0.regs.pc = 0x100;
+                    ctx.1[0x101] = offset as u8;
+
+                    let expected = {
+                        let mut expected = ctx.clone();
+                        if should_jump {
+                            expected.0.regs.pc = (0x102 + offset as i32) as u16;
+                        } else {
+                            expected.0.regs.pc = 0x102;
+                        }
+                        expected
+                    };
+
+                    tick::<_, (Gbz80State, [u8; 0x200])>(&mut ctx);
+                    assert_eq!(ctx, expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn absolute_immediate_jumps() {
+        for flags in (0x00..=0xf0).step_by(0x10) {
+            for dest in 0x0000u16..=0xffff {
+                let jnz = (flags & 0x80) == 0;
+                let jz = (flags & 0x80) != 0;
+                let jnc = (flags & 0x10) == 0;
+                let jc = (flags & 0x10) != 0;
+                let ops = [
+                    (0xc3, true),
+                    (0xc2, jnz),
+                    (0xca, jz),
+                    (0xd2, jnc),
+                    (0xda, jc),
+                ];
+
+                for (opcode, should_jump) in ops {
+                    println!("jp({:02x}) -> {:04x} should: {}", opcode, dest, should_jump);
+                    let mut ctx = (Gbz80State::default(), [0u8; 3]);
+                    ctx.0.regs.flags = Flags::from_bits_truncate(flags);
+                    ctx.1[0] = opcode;
+                    let [low, high] = dest.to_le_bytes();
+                    ctx.1[1] = low;
+                    ctx.1[2] = high;
+
+                    let expected = {
+                        let mut expected = ctx.clone();
+                        if should_jump {
+                            expected.0.regs.pc = dest;
+                        } else {
+                            expected.0.regs.pc = 3;
+                        }
+                        expected
+                    };
+
+                    tick::<_, (Gbz80State, [u8; 3])>(&mut ctx);
+                    assert_eq!(ctx, expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn jump_hl() {
+        for flags in (0x00..=0xf0).step_by(0x10) {
+            for dest in 0x0000u16..=0xffff {
+                println!("jp(e9) -> {:04x}", dest);
+                let mut ctx = (Gbz80State::default(), [0u8; 1]);
+                ctx.0.regs.flags = Flags::from_bits_truncate(flags);
+                ctx.1[0] = 0xe9;
+                ctx.0.regs.set_hl(dest);
+
+                let expected = {
+                    let mut expected = ctx.clone();
+                    expected.0.regs.pc = dest;
+                    expected
+                };
+
+                tick::<_, (Gbz80State, [u8; 1])>(&mut ctx);
+                assert_eq!(ctx, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn returns() {
+        for flags in (0x00..=0xf0).step_by(0x10) {
+            for dest in 0x0000u16..=0xffff {
+                let jnz = (flags & 0x80) == 0;
+                let jz = (flags & 0x80) != 0;
+                let jnc = (flags & 0x10) == 0;
+                let jc = (flags & 0x10) != 0;
+                let ops = [
+                    (0xc9, true),
+                    (0xc0, jnz),
+                    (0xc8, jz),
+                    (0xd0, jnc),
+                    (0xd8, jc),
+                ];
+
+                for (opcode, should_jump) in ops {
+                    println!(
+                        "ret({:02x}) -> {:04x} should: {}",
+                        opcode, dest, should_jump
+                    );
+                    let mut ctx = (Gbz80State::default(), [0u8; 0x200]);
+                    ctx.0.regs.flags = Flags::from_bits_truncate(flags);
+                    ctx.1[0x100] = opcode;
+                    ctx.0.regs.pc = 0x100;
+                    let [low, high] = dest.to_le_bytes();
+                    ctx.1[0x1fe] = low;
+                    ctx.1[0x1ff] = high;
+                    ctx.0.regs.sp = 0x1fe;
+
+                    let expected = {
+                        let mut expected = ctx.clone();
+                        if should_jump {
+                            expected.0.regs.sp = 0x200;
+                            expected.0.regs.pc = dest;
+                        } else {
+                            expected.0.regs.pc = 0x101;
+                        }
+                        expected
+                    };
+
+                    tick::<_, (Gbz80State, [u8; 0x200])>(&mut ctx);
+                    assert_eq!(ctx, expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn calls() {
+        for flags in (0x00..=0xf0).step_by(0x10) {
+            for dest in 0x0000u16..=0xffff {
+                let jnz = (flags & 0x80) == 0;
+                let jz = (flags & 0x80) != 0;
+                let jnc = (flags & 0x10) == 0;
+                let jc = (flags & 0x10) != 0;
+                let ops = [
+                    (0xcd, true),
+                    (0xc4, jnz),
+                    (0xcc, jz),
+                    (0xd4, jnc),
+                    (0xdc, jc),
+                ];
+
+                for (opcode, should_jump) in ops {
+                    println!(
+                        "call({:02x}) -> {:04x} should: {}",
+                        opcode, dest, should_jump
+                    );
+                    let mut ctx = (Gbz80State::default(), [0u8; 0x200]);
+                    ctx.0.regs.flags = Flags::from_bits_truncate(flags);
+                    ctx.1[0x100] = opcode;
+                    ctx.0.regs.pc = 0x100;
+                    let [low, high] = dest.to_le_bytes();
+                    ctx.1[0x101] = low;
+                    ctx.1[0x102] = high;
+                    ctx.0.regs.sp = 0x200;
+
+                    let expected = {
+                        let mut expected = ctx.clone();
+                        if should_jump {
+                            expected.0.regs.sp = 0x1fe;
+                            // Return to 0x0103.
+                            expected.1[0x1fe] = 0x03;
+                            expected.1[0x1ff] = 0x01;
+                            expected.0.regs.pc = dest;
+                        } else {
+                            expected.0.regs.pc = 0x103;
+                        }
+                        expected
+                    };
+
+                    tick::<_, (Gbz80State, [u8; 0x200])>(&mut ctx);
+                    assert_eq!(ctx, expected);
+                }
             }
         }
     }

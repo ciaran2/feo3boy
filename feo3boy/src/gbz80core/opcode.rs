@@ -641,7 +641,7 @@ fn address_of_offset_sp(ctx: &mut impl CpuContext) {
 // Similar to unconditional jump, but using HL as the target address.
 fn jump_hl(ctx: &mut impl CpuContext) {
     let regs = &mut ctx.cpustate_mut().regs;
-    regs.sp = regs.hl();
+    regs.pc = regs.hl();
 }
 
 /// Executes the reset instruction. Similar to call with a fixed destination.
