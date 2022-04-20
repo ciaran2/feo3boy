@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::Read;
+use std::io::{self, Read, Write};
 
 use clap::{App, Arg};
 use log::info;
@@ -53,7 +53,15 @@ fn main() {
     // Box to keep it off the stack.
     let mut gb = Gb::new(bios, cart);
 
+    let mut stdout = io::stdout();
     loop {
         gb.tick();
+        let bytes = gb.serial.stream.receive_bytes();
+        if bytes.len() != 0 {
+            for byte in bytes {
+                stdout.write(&[byte]).unwrap();
+            }
+            stdout.flush().unwrap();
+        }
     }
 }

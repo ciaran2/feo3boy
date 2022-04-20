@@ -42,55 +42,55 @@ impl AluOp {
         trace!("Evaluating {} A,{}", self, arg);
         match self {
             Self::Add => {
-                let (res, flags) = add8_flags(ctx.cpustate().regs.acc, arg);
-                ctx.cpustate_mut().regs.acc = res;
-                ctx.cpustate_mut().regs.flags = flags;
+                let (res, flags) = add8_flags(ctx.cpu().regs.acc, arg);
+                ctx.cpu_mut().regs.acc = res;
+                ctx.cpu_mut().regs.flags = flags;
             }
             Self::AddCarry => {
-                let (mut res, mut flags) = add8_flags(ctx.cpustate().regs.acc, arg);
-                if ctx.cpustate().regs.flags.contains(Flags::CARRY) {
+                let (mut res, mut flags) = add8_flags(ctx.cpu().regs.acc, arg);
+                if ctx.cpu().regs.flags.contains(Flags::CARRY) {
                     let (res2, flags2) = add8_flags(res, 1);
                     res = res2;
                     // Zero flag should only be set if the second add had a result of zero.
                     flags = flags2 | (flags - Flags::ZERO);
                 }
-                ctx.cpustate_mut().regs.acc = res;
-                ctx.cpustate_mut().regs.flags = flags;
+                ctx.cpu_mut().regs.acc = res;
+                ctx.cpu_mut().regs.flags = flags;
             }
             Self::Sub => {
-                let (res, flags) = sub8_flags(ctx.cpustate().regs.acc, arg);
-                ctx.cpustate_mut().regs.acc = res;
-                ctx.cpustate_mut().regs.flags = flags;
+                let (res, flags) = sub8_flags(ctx.cpu().regs.acc, arg);
+                ctx.cpu_mut().regs.acc = res;
+                ctx.cpu_mut().regs.flags = flags;
             }
             Self::SubCarry => {
-                let (mut res, mut flags) = sub8_flags(ctx.cpustate().regs.acc, arg);
-                if ctx.cpustate().regs.flags.contains(Flags::CARRY) {
+                let (mut res, mut flags) = sub8_flags(ctx.cpu().regs.acc, arg);
+                if ctx.cpu().regs.flags.contains(Flags::CARRY) {
                     let (res2, flags2) = sub8_flags(res, 1);
                     res = res2;
                     // Zero flag should only be set if the second subtract had a result of zero.
                     flags = flags2 | (flags - Flags::ZERO);
                 }
-                ctx.cpustate_mut().regs.acc = res;
-                ctx.cpustate_mut().regs.flags = flags;
+                ctx.cpu_mut().regs.acc = res;
+                ctx.cpu_mut().regs.flags = flags;
             }
             Self::And => {
-                let res = ctx.cpustate().regs.acc & arg;
-                ctx.cpustate_mut().regs.acc = res;
-                ctx.cpustate_mut().regs.flags = Flags::HALFCARRY | Flags::check_zero(res);
+                let res = ctx.cpu().regs.acc & arg;
+                ctx.cpu_mut().regs.acc = res;
+                ctx.cpu_mut().regs.flags = Flags::HALFCARRY | Flags::check_zero(res);
             }
             Self::Or => {
-                let res = ctx.cpustate().regs.acc | arg;
-                ctx.cpustate_mut().regs.acc = res;
-                ctx.cpustate_mut().regs.flags = Flags::check_zero(res);
+                let res = ctx.cpu().regs.acc | arg;
+                ctx.cpu_mut().regs.acc = res;
+                ctx.cpu_mut().regs.flags = Flags::check_zero(res);
             }
             Self::Xor => {
-                let res = ctx.cpustate().regs.acc ^ arg;
-                ctx.cpustate_mut().regs.acc = res;
-                ctx.cpustate_mut().regs.flags = Flags::check_zero(res);
+                let res = ctx.cpu().regs.acc ^ arg;
+                ctx.cpu_mut().regs.acc = res;
+                ctx.cpu_mut().regs.flags = Flags::check_zero(res);
             }
             Self::Compare => {
-                let (_, flags) = sub8_flags(ctx.cpustate().regs.acc, arg);
-                ctx.cpustate_mut().regs.flags = flags;
+                let (_, flags) = sub8_flags(ctx.cpu().regs.acc, arg);
+                ctx.cpu_mut().regs.flags = flags;
             }
         }
     }
@@ -151,7 +151,7 @@ impl AluUnaryOp {
 
     /// Evaluate this ALU unary op.
     pub(super) fn exec(self, ctx: &mut impl CpuContext) {
-        let regs = &mut ctx.cpustate_mut().regs;
+        let regs = &mut ctx.cpu_mut().regs;
         match self {
             Self::RotateLeft8 => {
                 let res = regs.acc.rotate_left(1);
@@ -313,42 +313,42 @@ impl Operand8 {
     pub(super) fn read(self, ctx: &mut impl CpuContext) -> u8 {
         trace!("Operand8::read {}", self);
         match self {
-            Self::A => ctx.cpustate().regs.acc,
-            Self::B => ctx.cpustate().regs.b,
-            Self::C => ctx.cpustate().regs.c,
-            Self::D => ctx.cpustate().regs.d,
-            Self::E => ctx.cpustate().regs.e,
-            Self::H => ctx.cpustate().regs.h,
-            Self::L => ctx.cpustate().regs.l,
+            Self::A => ctx.cpu().regs.acc,
+            Self::B => ctx.cpu().regs.b,
+            Self::C => ctx.cpu().regs.c,
+            Self::D => ctx.cpu().regs.d,
+            Self::E => ctx.cpu().regs.e,
+            Self::H => ctx.cpu().regs.h,
+            Self::L => ctx.cpu().regs.l,
             Self::AddrHL => {
-                let addr = ctx.cpustate().regs.hl();
+                let addr = ctx.cpu().regs.hl();
                 ctx.yield1m();
                 ctx.mem().read(addr.into())
             }
             Self::AddrBC => {
-                let addr = ctx.cpustate().regs.bc();
+                let addr = ctx.cpu().regs.bc();
                 ctx.yield1m();
                 ctx.mem().read(addr.into())
             }
             Self::AddrDE => {
-                let addr = ctx.cpustate().regs.de();
+                let addr = ctx.cpu().regs.de();
                 ctx.yield1m();
                 ctx.mem().read(addr.into())
             }
             Self::AddrHLInc => {
-                let addr = ctx.cpustate().regs.hl();
+                let addr = ctx.cpu().regs.hl();
                 ctx.yield1m();
-                ctx.cpustate_mut().regs.set_hl(addr.wrapping_add(1));
+                ctx.cpu_mut().regs.set_hl(addr.wrapping_add(1));
                 ctx.mem().read(addr.into())
             }
             Self::AddrHLDec => {
-                let addr = ctx.cpustate().regs.hl();
+                let addr = ctx.cpu().regs.hl();
                 ctx.yield1m();
-                ctx.cpustate_mut().regs.set_hl(addr.wrapping_sub(1));
+                ctx.cpu_mut().regs.set_hl(addr.wrapping_sub(1));
                 ctx.mem().read(addr.into())
             }
             Self::Immediate => {
-                let addr = ctx.cpustate_mut().regs.inc_pc();
+                let addr = ctx.cpu_mut().regs.inc_pc();
                 ctx.yield1m();
                 ctx.mem().read(addr.into())
             }
@@ -358,7 +358,7 @@ impl Operand8 {
                 ctx.mem().read(addr.into())
             }
             Self::AddrRelC => {
-                let addr = 0xFF00 + ctx.cpustate().regs.c as u16;
+                let addr = 0xFF00 + ctx.cpu().regs.c as u16;
                 ctx.yield1m();
                 ctx.mem().read(addr.into())
             }
@@ -374,38 +374,38 @@ impl Operand8 {
     pub(super) fn write(self, ctx: &mut impl CpuContext, val: u8) {
         trace!("Operand8::write {} -> {}", val, self);
         match self {
-            Self::A => ctx.cpustate_mut().regs.acc = val,
-            Self::B => ctx.cpustate_mut().regs.b = val,
-            Self::C => ctx.cpustate_mut().regs.c = val,
-            Self::D => ctx.cpustate_mut().regs.d = val,
-            Self::E => ctx.cpustate_mut().regs.e = val,
-            Self::H => ctx.cpustate_mut().regs.h = val,
-            Self::L => ctx.cpustate_mut().regs.l = val,
+            Self::A => ctx.cpu_mut().regs.acc = val,
+            Self::B => ctx.cpu_mut().regs.b = val,
+            Self::C => ctx.cpu_mut().regs.c = val,
+            Self::D => ctx.cpu_mut().regs.d = val,
+            Self::E => ctx.cpu_mut().regs.e = val,
+            Self::H => ctx.cpu_mut().regs.h = val,
+            Self::L => ctx.cpu_mut().regs.l = val,
             Self::AddrHL => {
-                let addr = ctx.cpustate().regs.hl();
+                let addr = ctx.cpu().regs.hl();
                 ctx.yield1m();
                 ctx.mem_mut().write(addr.into(), val)
             }
             Self::AddrBC => {
-                let addr = ctx.cpustate().regs.bc();
+                let addr = ctx.cpu().regs.bc();
                 ctx.yield1m();
                 ctx.mem_mut().write(addr.into(), val)
             }
             Self::AddrDE => {
-                let addr = ctx.cpustate().regs.de();
+                let addr = ctx.cpu().regs.de();
                 ctx.yield1m();
                 ctx.mem_mut().write(addr.into(), val)
             }
             Self::AddrHLInc => {
-                let addr = ctx.cpustate().regs.hl();
+                let addr = ctx.cpu().regs.hl();
                 ctx.yield1m();
-                ctx.cpustate_mut().regs.set_hl(addr.wrapping_add(1));
+                ctx.cpu_mut().regs.set_hl(addr.wrapping_add(1));
                 ctx.mem_mut().write(addr.into(), val)
             }
             Self::AddrHLDec => {
-                let addr = ctx.cpustate().regs.hl();
+                let addr = ctx.cpu().regs.hl();
                 ctx.yield1m();
-                ctx.cpustate_mut().regs.set_hl(addr.wrapping_sub(1));
+                ctx.cpu_mut().regs.set_hl(addr.wrapping_sub(1));
                 ctx.mem_mut().write(addr.into(), val)
             }
             Self::Immediate => panic!("Immediates cannot be used as store destinations"),
@@ -415,7 +415,7 @@ impl Operand8 {
                 ctx.mem_mut().write(addr.into(), val)
             }
             Self::AddrRelC => {
-                let addr = 0xFF00 + ctx.cpustate().regs.c as u16;
+                let addr = 0xFF00 + ctx.cpu().regs.c as u16;
                 ctx.yield1m();
                 ctx.mem_mut().write(addr.into(), val)
             }
@@ -502,11 +502,11 @@ impl Operand16 {
     pub(super) fn read(self, ctx: &mut impl CpuContext) -> u16 {
         trace!("Operand16::read {}", self);
         match self {
-            Self::BC => ctx.cpustate().regs.bc(),
-            Self::DE => ctx.cpustate().regs.de(),
-            Self::HL => ctx.cpustate().regs.hl(),
-            Self::AF => ctx.cpustate().regs.af(),
-            Self::Sp => ctx.cpustate().regs.sp,
+            Self::BC => ctx.cpu().regs.bc(),
+            Self::DE => ctx.cpu().regs.de(),
+            Self::HL => ctx.cpu().regs.hl(),
+            Self::AF => ctx.cpu().regs.af(),
+            Self::Sp => ctx.cpu().regs.sp,
             Self::Immediate => {
                 let low = Operand8::Immediate.read(ctx);
                 let high = Operand8::Immediate.read(ctx);
@@ -522,11 +522,11 @@ impl Operand16 {
     pub(super) fn write(self, ctx: &mut impl CpuContext, val: u16) {
         trace!("Operand16::write {} -> {}", val, self);
         match self {
-            Self::BC => ctx.cpustate_mut().regs.set_bc(val),
-            Self::DE => ctx.cpustate_mut().regs.set_de(val),
-            Self::HL => ctx.cpustate_mut().regs.set_hl(val),
-            Self::AF => ctx.cpustate_mut().regs.set_af(val),
-            Self::Sp => ctx.cpustate_mut().regs.sp = val,
+            Self::BC => ctx.cpu_mut().regs.set_bc(val),
+            Self::DE => ctx.cpu_mut().regs.set_de(val),
+            Self::HL => ctx.cpu_mut().regs.set_hl(val),
+            Self::AF => ctx.cpu_mut().regs.set_af(val),
+            Self::Sp => ctx.cpu_mut().regs.sp = val,
             Self::Immediate => panic!("Immediates cannot be used as store destinations"),
             Self::AddrImmediate => {
                 let [low, high] = val.to_le_bytes();
@@ -591,7 +591,7 @@ impl ConditionCode {
 
     /// Returns true if the jump condition is satisfied, that is, the jump *should* happen.
     pub(super) fn evaluate(self, ctx: &mut impl CpuContext) -> bool {
-        let flags = ctx.cpustate().regs.flags;
+        let flags = ctx.cpu().regs.flags;
         match self {
             Self::Unconditional => true,
             Self::NonZero => !flags.contains(Flags::ZERO),

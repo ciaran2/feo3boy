@@ -69,7 +69,7 @@ impl From<io::Error> for ParseCartridgeError {
 /// portion, and one after for the RAM. The `Cartridge` tye and all of the rom implementation types
 /// ignore this split, and map the ram portion directly after the rom. It is the responsibility of
 /// the caller to remap the memory spaces as needed to insert the GPU ram.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Cartridge {
     /// No cartridge. All reads return 0 and all writes are ignored.
     None,
@@ -288,7 +288,7 @@ const RAM_BANK_SIZE: usize = 0x4000;
 pub type RamBank = [u8; RAM_BANK_SIZE];
 
 /// Cartridge which has only 2 rom banks and optionally up to 1 ram bank.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RomOnly {
     /// Rom banks. Both are always accessible.
     rom_banks: Box<[RomBank; 2]>,
@@ -337,7 +337,7 @@ impl MemDevice for RomOnly {
 
 /// Variant 1 of the system ROMs.
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Mbc1Rom {
     /// Set of rom banks loaded from the cartridge.
     rom_banks: Vec<RomBank>,

@@ -1,25 +1,22 @@
 use std::rc::Rc;
 
-use feo3boy::gb::Gb;
-use feo3boy::gbz80core::{CBOpcode, Opcode};
-use feo3boy::memdev::MemDevice;
 use yew::prelude::*;
 
 #[derive(Properties, PartialEq)]
 pub struct Props {
-    pub gb: Rc<Gb>,
+    pub serial_output: Rc<String>,
 }
 
 pub enum Msg {}
 
-pub struct Memview {}
+pub struct Serial {}
 
-impl Component for Memview {
+impl Component for Serial {
     type Message = Msg;
     type Properties = Props;
 
     fn create(_ctx: &Context<Self>) -> Self {
-        Memview {}
+        Serial {}
     }
 
     fn update(&mut self, _ctx: &Context<Self>, msg: Self::Message) -> bool {
@@ -27,10 +24,9 @@ impl Component for Memview {
     }
 
     fn view(&self, ctx: &Context<Self>) -> Html {
-        html! {
-            <div class="Memview">
-                <h1>{"TODO: Memory View"}</h1>
-            </div>
-        }
+        html! {<div class="Serial column">
+            <h3>{"Serial Output"}</h3>
+            <pre>{ctx.props().serial_output.clone()}</pre>
+        </div>}
     }
 }

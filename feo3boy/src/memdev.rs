@@ -1,10 +1,10 @@
 use std::convert::TryFrom;
 use std::fmt;
 
-use log::{debug, trace, warn};
+use log::trace;
 use thiserror::Error;
 
-use crate::interrupts::{InterruptEnable, InterruptFlags, Interrupts};
+use crate::interrupts::{InterruptContext, InterruptEnable, InterruptFlags, Interrupts};
 
 pub use cartridge::{Cartridge, Mbc1Rom, ParseCartridgeError, RamBank, RomBank};
 
@@ -76,9 +76,21 @@ pub trait MemDevice {
     fn write(&mut self, addr: Addr, data: u8);
 }
 
+/// Context trait for accessing memory.
+pub trait MemContext {
+    /// Type of MemDevice in this context.
+    type Mem: MemDevice;
+
+    /// Gets the memory.
+    fn mem(&self) -> &Self::Mem;
+
+    /// Get a mutable reference to the memory.
+    fn mem_mut(&mut self) -> &mut Self::Mem;
+}
+
 /// Wraps a memory device to make it read-only.
 #[repr(transparent)]
-#[derive(Copy, Clone, Debug, Default)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub struct ReadOnly<M>(M);
 
 impl<M> ReadOnly<M> {
@@ -131,7 +143,7 @@ impl<const N: usize> MemDevice for NullRom<N> {
 
 /// Rom for the bios, which is swapped out once started.
 #[repr(transparent)]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct BiosRom(ReadOnly<[u8; 0x100]>);
 
 impl BiosRom {
@@ -222,7 +234,7 @@ impl<D: MemDevice + ?Sized> MemDevice for Box<D> {
 }
 
 /// Memory device connecting memory mapped IO.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MemMappedIo {
     serial_data: u8,
     serial_control: u8,
@@ -287,8 +299,54 @@ impl MemDevice for MemMappedIo {
     }
 }
 
+impl IoRegs for MemMappedIo {
+    fn serial_data(&self) -> u8 {
+        self.serial_data
+    }
+
+    fn set_serial_data(&mut self, val: u8) {
+        self.serial_data = val;
+    }
+
+    fn serial_control(&self) -> u8 {
+        self.serial_control
+    }
+
+    fn set_serial_control(&mut self, val: u8) {
+        self.serial_control = val;
+    }
+}
+
+/// Context trait for providing access to IO registers.
+pub trait IoRegsContext {
+    type IoRegs: IoRegs;
+
+    /// Get read-only access to the IO registers.
+    fn ioregs(&self) -> &Self::IoRegs;
+
+    /// Get write access to the IO registers.
+    fn ioregs_mut(&mut self) -> &mut Self::IoRegs;
+}
+
+/// Trait for use with contexts to provide access to IO registers.
+pub trait IoRegs {
+    /// Get the current value of the serial data register.
+    fn serial_data(&self) -> u8;
+
+    /// Set the current value of the serial data register.
+    fn set_serial_data(&mut self, val: u8);
+
+    /// Get the current value of the serial control register.
+    fn serial_control(&self) -> u8;
+
+    /// Set the current value of the serial control register.
+    fn set_serial_control(&mut self, val: u8);
+
+    // TODO: other IO registers.
+}
+
 /// MemoryDevice which configures the standard memory mapping of the real GameBoy.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GbMmu {
     /// The bios. Mapped to 0..0x100 while bios is enabled.
     bios: BiosRom,
@@ -385,6 +443,42 @@ impl MemDevice for GbMmu {
             0xff80..=0xfffe => self.zram.write(addr.offset_by(0xff80), value),
             0xffff => self.interrupt_enable.write(addr.offset_by(0xffff), value),
         }
+    }
+}
+
+impl MemContext for GbMmu {
+    type Mem = Self;
+
+    fn mem(&self) -> &Self::Mem {
+        self
+    }
+
+    fn mem_mut(&mut self) -> &mut Self::Mem {
+        self
+    }
+}
+
+impl IoRegsContext for GbMmu {
+    type IoRegs = MemMappedIo;
+
+    fn ioregs(&self) -> &Self::IoRegs {
+        &self.io
+    }
+
+    fn ioregs_mut(&mut self) -> &mut Self::IoRegs {
+        &mut self.io
+    }
+}
+
+impl InterruptContext for GbMmu {
+    type Interrupts = Self;
+
+    fn interrupts(&self) -> &Self::Interrupts {
+        self
+    }
+
+    fn interrupts_mut(&mut self) -> &mut Self::Interrupts {
+        self
     }
 }
 

@@ -85,7 +85,7 @@ impl Iterator for InterruptFlagsIter {
 }
 
 /// The Interrupt Enable (IE) register. Implements MemDevice.
-#[derive(Copy, Clone, Debug, Default)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct InterruptEnable(pub InterruptFlags);
 
 impl MemDevice for InterruptEnable {
@@ -106,6 +106,18 @@ impl MemDevice for InterruptEnable {
         );
         self.0 = InterruptFlags::from_bits_truncate(value);
     }
+}
+
+/// Context trait for accessing interrupts.
+pub trait InterruptContext {
+    /// The type which provides access to the interrupts.
+    type Interrupts: Interrupts;
+
+    /// Provides read access to the interrupt flags.
+    fn interrupts(&self) -> &Self::Interrupts;
+
+    /// Provides write-access to the interrupt flags.
+    fn interrupts_mut(&mut self) -> &mut Self::Interrupts;
 }
 
 /// Trait for accessing the (usually memory-mapped) registers for InterruptFlags and

@@ -1,16 +1,17 @@
 use crate::gbz80core::{self, CpuContext, Gbz80State};
-use crate::memdev::{BiosRom, Cartridge, GbMmu};
-use crate::serial::{self, SerialContext};
+use crate::interrupts::InterruptContext;
+use crate::memdev::{BiosRom, Cartridge, GbMmu, IoRegsContext, MemContext};
+use crate::serial::{self, SerialContext, SerialState};
 
 /// Represents a "real" gameboy, by explicitly using the GbMmu for memory.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Gb {
     /// State of the CPU in the system.
     pub cpustate: Gbz80State,
     /// MMU for the system.
     pub mmu: Box<GbMmu>,
     /// State of serial data transfer.
-    pub serial: SerialContext,
+    pub serial: SerialState,
 }
 
 impl Gb {
@@ -19,31 +20,38 @@ impl Gb {
         Gb {
             cpustate: Gbz80State::new(),
             mmu: Box::new(GbMmu::new(bios, cart)),
-            serial: SerialContext::new(),
+            serial: SerialState::new(),
         }
     }
 
     /// Tick forward by one instruction, executing background and graphics processing
     /// operations as needed.
     pub fn tick(&mut self) {
-        gbz80core::tick::<_, Self>(&mut *self);
-        serial::tick(&mut self.serial, &mut self.mmu.io, 4);
+        gbz80core::tick(self);
+        serial::tick(self, 4);
     }
 }
 
 impl CpuContext for Gb {
-    type Mem = GbMmu;
-    type Interrupts = GbMmu;
-
     #[inline]
-    fn cpustate(&self) -> &Gbz80State {
+    fn cpu(&self) -> &Gbz80State {
         &self.cpustate
     }
 
     #[inline]
-    fn cpustate_mut(&mut self) -> &mut Gbz80State {
+    fn cpu_mut(&mut self) -> &mut Gbz80State {
         &mut self.cpustate
     }
+
+    fn yield1m(&mut self) {
+        // TODO: run background processing while yielded.
+        // Continue processing serial while yielded.
+        serial::tick(self, 4);
+    }
+}
+
+impl MemContext for Gb {
+    type Mem = GbMmu;
 
     #[inline]
     fn mem(&self) -> &Self::Mem {
@@ -54,20 +62,43 @@ impl CpuContext for Gb {
     fn mem_mut(&mut self) -> &mut Self::Mem {
         self.mmu.as_mut()
     }
+}
+
+impl InterruptContext for Gb {
+    type Interrupts = <GbMmu as InterruptContext>::Interrupts;
 
     #[inline]
     fn interrupts(&self) -> &Self::Interrupts {
-        self.mmu.as_ref()
+        self.mmu.interrupts()
     }
 
     #[inline]
     fn interrupts_mut(&mut self) -> &mut Self::Interrupts {
-        self.mmu.as_mut()
+        self.mmu.interrupts_mut()
+    }
+}
+
+impl IoRegsContext for Gb {
+    type IoRegs = <GbMmu as IoRegsContext>::IoRegs;
+
+    #[inline]
+    fn ioregs(&self) -> &Self::IoRegs {
+        self.mmu.ioregs()
     }
 
-    fn yield1m(&mut self) {
-        // TODO: run background processing while yielded.
-        // Continue processing serial while yielded.
-        serial::tick(&mut self.serial, &mut self.mmu.io, 4);
+    #[inline]
+    fn ioregs_mut(&mut self) -> &mut Self::IoRegs {
+        self.mmu.ioregs_mut()
+    }
+}
+
+impl SerialContext for Gb {
+    #[inline]
+    fn serial(&self) -> &SerialState {
+        &self.serial
+    }
+
+    fn serial_mut(&mut self) -> &mut SerialState {
+        &mut self.serial
     }
 }

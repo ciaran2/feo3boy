@@ -69,14 +69,34 @@ html, body {
         @include panel;
 
         display: flex;
-        flex-direction: row;
-        justify-content: space-between;
-        align-items: stretch;
+        flex-direction: column;
         gap: 5px;
+
+        .playbuttons {
+            display: flex;
+            flex-direction: row;
+            justify-content: space-between;
+            align-items: stretch;
+            gap: 5px;
+        }
 
         button {
             min-width: 60px;
         }
+    }
+}
+
+.SpeedCtl {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    align-items: stretch;
+
+    .display-values {
+        display: flex;
+        flex-direction: row;
+        justify-content: space-between;
+        align-items: center;
     }
 }
 
@@ -142,13 +162,51 @@ html, body {
     }
 
     .instr {
-        font-family: 'Liberation Mono', monospace;
-        min-width: 120px;
+        text-align: left;
     }
+}
+
+.Instr {
+    font-family: 'Liberation Mono', monospace;
+    min-width: 110px;
 }
 
 .Breakpoints {
     @include panel;
+
+    .name input {
+        width: 115px;
+    }
+    .addr {
+        font-family: 'Liberation Mono', monospace;
+        text-align: right;
+        input {
+            width: 40px;
+        }
+    }
+}
+
+.Serial {
+    @include panel;
+
+    pre {
+        white-space: pre-wrap;       /* Since CSS 2.1 */
+        white-space: -moz-pre-wrap;  /* Mozilla, since 1999 */
+        white-space: -pre-wrap;      /* Opera 4-6 */
+        white-space: -o-pre-wrap;    /* Opera 7 */
+        word-wrap: break-word;       /* Internet Explorer 5.5+ */
+
+        background-color: #000000;
+        color: #44bb44;
+        margin: 0;
+        box-sizing: border-box;
+        padding: 5px;
+        border: 2px solid $panel-border;
+        height: 25em;
+        width: 60em;
+        overflow-y: scroll;
+        overflow-x: auto;
+    }
 }
 
 .Memview {

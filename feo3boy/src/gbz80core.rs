@@ -1,9 +1,7 @@
-use std::borrow::BorrowMut;
-
 use bitflags::bitflags;
 
-use crate::interrupts::{Interrupts, MemInterrupts};
-use crate::memdev::MemDevice;
+use crate::interrupts::{InterruptContext, Interrupts, MemInterrupts};
+use crate::memdev::{MemContext, MemDevice};
 pub use opcode::{CBOpcode, CBOperation, Opcode};
 pub use opcode_args::{AluOp, AluUnaryOp, ConditionCode, Operand16, Operand8};
 
@@ -208,34 +206,17 @@ impl Gbz80State {
     }
 }
 
-/// Trait which encapsulates everything that the CPU needs in order to execute.
+/// Context trait which encapsulates everything that the CPU needs in order to execute.
 ///
 /// The purpose of this trait is to encapsulate the components needed to run the GB Z80 CPU,
 /// independently of any other component of the GameBoy system. That allows the CPU to be run for
 /// other purposes, by swapping in a memory controller that behaves differently.
-pub trait CpuContext {
-    /// Type of MemDevice in this context.
-    type Mem: MemDevice;
-
-    type Interrupts: Interrupts;
-
+pub trait CpuContext: MemContext + InterruptContext {
     /// Gets the CPU state.
-    fn cpustate(&self) -> &Gbz80State;
+    fn cpu(&self) -> &Gbz80State;
 
     /// Gets a mutable reference to the CPU state.
-    fn cpustate_mut(&mut self) -> &mut Gbz80State;
-
-    /// Gets the memory.
-    fn mem(&self) -> &Self::Mem;
-
-    /// Get a mutable reference to the memory.
-    fn mem_mut(&mut self) -> &mut Self::Mem;
-
-    /// Provides read access to the interrupt flags.
-    fn interrupts(&self) -> &Self::Interrupts;
-
-    /// Provides write-access to the interrupt flags.
-    fn interrupts_mut(&mut self) -> &mut Self::Interrupts;
+    fn cpu_mut(&mut self) -> &mut Gbz80State;
 
     /// Yields from CPU execution for 1 M clock cycle (4 T). This callback should step the clock
     /// forward and perform any work that needs to happen faster than instructions execute.
@@ -244,30 +225,20 @@ pub trait CpuContext {
 }
 
 /// Runs a single instruction on the CPU.
-pub fn tick<B, C>(mut ctx: B)
-// Using BorrowMut here allows both `&mut (Gbz80State, M)` and `(&mut Gbz80State, &mut M)` to be
-// passed as the argument.
-where
-    B: BorrowMut<C>,
-    C: CpuContext,
-{
-    let ctx = ctx.borrow_mut();
-
-    if ctx.cpustate().halted {
+pub fn tick(ctx: &mut impl CpuContext) {
+    if ctx.cpu().halted {
         if ctx.interrupts().active().is_empty() {
             return;
         }
-        ctx.cpustate_mut().halted = false;
+        ctx.cpu_mut().halted = false;
     }
     if opcode::service_interrupt(ctx) {
         return;
     }
 
-    let previous_ime = ctx.cpustate().interrupt_master_enable;
+    let previous_ime = ctx.cpu().interrupt_master_enable;
     Opcode::load_and_execute(ctx);
-    ctx.cpustate_mut()
-        .interrupt_master_enable
-        .tick(previous_ime);
+    ctx.cpu_mut().interrupt_master_enable.tick(previous_ime);
 }
 
 /////////////////////////////////////////
@@ -276,18 +247,23 @@ where
 
 /// Allows a tuple of Gbz80State and any MemDevice to be used as CpuContext.
 impl<M: MemDevice> CpuContext for (Gbz80State, M) {
-    type Mem = M;
-    type Interrupts = MemInterrupts<M>;
-
     #[inline]
-    fn cpustate(&self) -> &Gbz80State {
+    fn cpu(&self) -> &Gbz80State {
         &self.0
     }
 
     #[inline]
-    fn cpustate_mut(&mut self) -> &mut Gbz80State {
+    fn cpu_mut(&mut self) -> &mut Gbz80State {
         &mut self.0
     }
+
+    /// With just a Gbz80State and arbitrary MemDevice, yielding actually does nothing.
+    #[inline]
+    fn yield1m(&mut self) {}
+}
+
+impl<M: MemDevice> MemContext for (Gbz80State, M) {
+    type Mem = M;
 
     #[inline]
     fn mem(&self) -> &Self::Mem {
@@ -298,6 +274,10 @@ impl<M: MemDevice> CpuContext for (Gbz80State, M) {
     fn mem_mut(&mut self) -> &mut Self::Mem {
         &mut self.1
     }
+}
+
+impl<M: MemDevice> InterruptContext for (Gbz80State, M) {
+    type Interrupts = MemInterrupts<M>;
 
     #[inline]
     fn interrupts(&self) -> &Self::Interrupts {
@@ -308,25 +288,27 @@ impl<M: MemDevice> CpuContext for (Gbz80State, M) {
     fn interrupts_mut(&mut self) -> &mut Self::Interrupts {
         MemInterrupts::wrap_mut(self.mem_mut())
     }
-
-    /// With just a Gbz80State and arbitrary MemDevice, yielding actually does nothing.
-    fn yield1m(&mut self) {}
 }
 
 /// Allows a tuple of references to Gbz80State and any MemDevice to be used as CpuContext.
 impl<M: MemDevice> CpuContext for (&mut Gbz80State, &mut M) {
+    #[inline]
+    fn cpu(&self) -> &Gbz80State {
+        self.0
+    }
+
+    #[inline]
+    fn cpu_mut(&mut self) -> &mut Gbz80State {
+        self.0
+    }
+
+    /// With just a Gbz80State and arbitrary MemDevice, yielding actually does nothing.
+    #[inline]
+    fn yield1m(&mut self) {}
+}
+
+impl<M: MemDevice> MemContext for (&mut Gbz80State, &mut M) {
     type Mem = M;
-    type Interrupts = MemInterrupts<M>;
-
-    #[inline]
-    fn cpustate(&self) -> &Gbz80State {
-        self.0
-    }
-
-    #[inline]
-    fn cpustate_mut(&mut self) -> &mut Gbz80State {
-        self.0
-    }
 
     #[inline]
     fn mem(&self) -> &Self::Mem {
@@ -337,6 +319,10 @@ impl<M: MemDevice> CpuContext for (&mut Gbz80State, &mut M) {
     fn mem_mut(&mut self) -> &mut Self::Mem {
         self.1
     }
+}
+
+impl<M: MemDevice> InterruptContext for (&mut Gbz80State, &mut M) {
+    type Interrupts = MemInterrupts<M>;
 
     #[inline]
     fn interrupts(&self) -> &Self::Interrupts {
@@ -347,9 +333,6 @@ impl<M: MemDevice> CpuContext for (&mut Gbz80State, &mut M) {
     fn interrupts_mut(&mut self) -> &mut Self::Interrupts {
         MemInterrupts::wrap_mut(self.mem_mut())
     }
-
-    /// With just a Gbz80State and arbitrary MemDevice, yielding actually does nothing.
-    fn yield1m(&mut self) {}
 }
 
 #[cfg(test)]
@@ -358,7 +341,7 @@ mod tests {
 
     #[test]
     fn test_loads_and_alu() {
-        let mut cpustate = Gbz80State::new();
+        let mut cpu = Gbz80State::new();
         let mut testmem = [0u8; 0x10000];
 
         testmem[0] = 0x3e;
@@ -370,58 +353,54 @@ mod tests {
         testmem[6] = 0x85;
         testmem[7] = 0x81;
 
-        tick((&mut cpustate, &mut testmem));
-        assert_eq!(cpustate.regs.acc, 0x80, "{:?}", cpustate.regs);
+        tick(&mut (&mut cpu, &mut testmem));
+        assert_eq!(cpu.regs.acc, 0x80, "{:?}", cpu.regs);
 
-        tick((&mut cpustate, &mut testmem));
-        assert_eq!(cpustate.regs.b, 0x01, "{:?}", cpustate.regs);
+        tick(&mut (&mut cpu, &mut testmem));
+        assert_eq!(cpu.regs.b, 0x01, "{:?}", cpu.regs);
 
-        tick((&mut cpustate, &mut testmem));
-        assert_eq!(cpustate.regs.acc, 0x81, "{:?}", cpustate.regs);
+        tick(&mut (&mut cpu, &mut testmem));
+        assert_eq!(cpu.regs.acc, 0x81, "{:?}", cpu.regs);
 
-        tick((&mut cpustate, &mut testmem));
-        assert_eq!(cpustate.regs.c, 0x85, "{:?}", cpustate.regs);
+        tick(&mut (&mut cpu, &mut testmem));
+        assert_eq!(cpu.regs.c, 0x85, "{:?}", cpu.regs);
 
-        tick((&mut cpustate, &mut testmem));
-        assert_eq!(cpustate.regs.acc, 0x6, "{:?}", cpustate.regs);
-        assert!(
-            cpustate.regs.flags.contains(Flags::CARRY),
-            "{:?}",
-            cpustate.regs
-        );
+        tick(&mut (&mut cpu, &mut testmem));
+        assert_eq!(cpu.regs.acc, 0x6, "{:?}", cpu.regs);
+        assert!(cpu.regs.flags.contains(Flags::CARRY), "{:?}", cpu.regs);
     }
 
     #[test]
     fn load8bit() {
         fn set_dest(inst: u8, ctx: &mut impl CpuContext, val: u8) {
             match inst {
-                0x40..=0x47 => ctx.cpustate_mut().regs.b = val,
-                0x48..=0x4f => ctx.cpustate_mut().regs.c = val,
-                0x50..=0x57 => ctx.cpustate_mut().regs.d = val,
-                0x58..=0x5f => ctx.cpustate_mut().regs.e = val,
-                0x60..=0x67 => ctx.cpustate_mut().regs.h = val,
-                0x68..=0x6f => ctx.cpustate_mut().regs.l = val,
+                0x40..=0x47 => ctx.cpu_mut().regs.b = val,
+                0x48..=0x4f => ctx.cpu_mut().regs.c = val,
+                0x50..=0x57 => ctx.cpu_mut().regs.d = val,
+                0x58..=0x5f => ctx.cpu_mut().regs.e = val,
+                0x60..=0x67 => ctx.cpu_mut().regs.h = val,
+                0x68..=0x6f => ctx.cpu_mut().regs.l = val,
                 0x70..=0x77 => {
-                    let dest = ctx.cpustate().regs.hl().into();
+                    let dest = ctx.cpu().regs.hl().into();
                     ctx.mem_mut().write(dest, val)
                 }
-                0x78..=0x7f => ctx.cpustate_mut().regs.acc = val,
+                0x78..=0x7f => ctx.cpu_mut().regs.acc = val,
                 _ => unreachable!(),
             }
         }
         fn set_source(inst: u8, ctx: &mut impl CpuContext, val: u8) {
             match (inst & 0xf) % 0x8 {
-                0x0 => ctx.cpustate_mut().regs.b = val,
-                0x1 => ctx.cpustate_mut().regs.c = val,
-                0x2 => ctx.cpustate_mut().regs.d = val,
-                0x3 => ctx.cpustate_mut().regs.e = val,
-                0x4 => ctx.cpustate_mut().regs.h = val,
-                0x5 => ctx.cpustate_mut().regs.l = val,
+                0x0 => ctx.cpu_mut().regs.b = val,
+                0x1 => ctx.cpu_mut().regs.c = val,
+                0x2 => ctx.cpu_mut().regs.d = val,
+                0x3 => ctx.cpu_mut().regs.e = val,
+                0x4 => ctx.cpu_mut().regs.h = val,
+                0x5 => ctx.cpu_mut().regs.l = val,
                 0x6 => {
-                    let dest = ctx.cpustate().regs.hl().into();
+                    let dest = ctx.cpu().regs.hl().into();
                     ctx.mem_mut().write(dest, val)
                 }
-                0x7 => ctx.cpustate_mut().regs.acc = val,
+                0x7 => ctx.cpu_mut().regs.acc = val,
                 _ => unreachable!(),
             }
         }
@@ -443,7 +422,7 @@ mod tests {
                     expected
                 };
 
-                tick::<_, (Gbz80State, [u8; 0x10000])>(&mut ctx);
+                tick(&mut ctx);
                 assert_eq!(ctx, expected);
             }
         }
@@ -453,17 +432,17 @@ mod tests {
     fn load8bit_immediate() {
         fn set_dest(inst: u8, ctx: &mut impl CpuContext, val: u8) {
             match inst {
-                0x06 => ctx.cpustate_mut().regs.b = val,
-                0x0e => ctx.cpustate_mut().regs.c = val,
-                0x16 => ctx.cpustate_mut().regs.d = val,
-                0x1e => ctx.cpustate_mut().regs.e = val,
-                0x26 => ctx.cpustate_mut().regs.h = val,
-                0x2e => ctx.cpustate_mut().regs.l = val,
+                0x06 => ctx.cpu_mut().regs.b = val,
+                0x0e => ctx.cpu_mut().regs.c = val,
+                0x16 => ctx.cpu_mut().regs.d = val,
+                0x1e => ctx.cpu_mut().regs.e = val,
+                0x26 => ctx.cpu_mut().regs.h = val,
+                0x2e => ctx.cpu_mut().regs.l = val,
                 0x36 => {
-                    let dest = ctx.cpustate().regs.hl().into();
+                    let dest = ctx.cpu().regs.hl().into();
                     ctx.mem_mut().write(dest, val)
                 }
-                0x3e => ctx.cpustate_mut().regs.acc = val,
+                0x3e => ctx.cpu_mut().regs.acc = val,
                 _ => unreachable!(),
             }
         }
@@ -486,7 +465,7 @@ mod tests {
                     expected
                 };
 
-                tick::<_, (Gbz80State, [u8; 3])>(&mut ctx);
+                tick(&mut ctx);
                 assert_eq!(ctx, expected);
             }
         }
@@ -496,14 +475,14 @@ mod tests {
     fn add8bit() {
         fn set_source(inst: u8, ctx: &mut impl CpuContext, val: u8) {
             match (inst & 0xf) % 0x8 {
-                0x0 => ctx.cpustate_mut().regs.b = val,
-                0x1 => ctx.cpustate_mut().regs.c = val,
-                0x2 => ctx.cpustate_mut().regs.d = val,
-                0x3 => ctx.cpustate_mut().regs.e = val,
-                0x4 => ctx.cpustate_mut().regs.h = val,
-                0x5 => ctx.cpustate_mut().regs.l = val,
+                0x0 => ctx.cpu_mut().regs.b = val,
+                0x1 => ctx.cpu_mut().regs.c = val,
+                0x2 => ctx.cpu_mut().regs.d = val,
+                0x3 => ctx.cpu_mut().regs.e = val,
+                0x4 => ctx.cpu_mut().regs.h = val,
+                0x5 => ctx.cpu_mut().regs.l = val,
                 0x6 => {
-                    let dest = ctx.cpustate().regs.hl().into();
+                    let dest = ctx.cpu().regs.hl().into();
                     ctx.mem_mut().write(dest, val)
                 }
                 _ => unreachable!(),
@@ -539,7 +518,7 @@ mod tests {
                             expected
                         };
 
-                        tick::<_, (Gbz80State, [u8; 0x2])>(&mut ctx);
+                        tick(&mut ctx);
                         assert_eq!(ctx, expected);
                     }
                 }
@@ -572,7 +551,7 @@ mod tests {
                         expected
                     };
 
-                    tick::<_, (Gbz80State, [u8; 2])>(&mut ctx);
+                    tick(&mut ctx);
                     assert_eq!(ctx, expected);
                 }
             }
@@ -602,7 +581,7 @@ mod tests {
                     expected
                 };
 
-                tick::<_, (Gbz80State, [u8; 0x1])>(&mut ctx);
+                tick(&mut ctx);
                 assert_eq!(ctx, expected);
             }
         }
@@ -612,14 +591,14 @@ mod tests {
     fn adc8bit() {
         fn set_source(inst: u8, ctx: &mut impl CpuContext, val: u8) {
             match (inst & 0xf) % 0x8 {
-                0x0 => ctx.cpustate_mut().regs.b = val,
-                0x1 => ctx.cpustate_mut().regs.c = val,
-                0x2 => ctx.cpustate_mut().regs.d = val,
-                0x3 => ctx.cpustate_mut().regs.e = val,
-                0x4 => ctx.cpustate_mut().regs.h = val,
-                0x5 => ctx.cpustate_mut().regs.l = val,
+                0x0 => ctx.cpu_mut().regs.b = val,
+                0x1 => ctx.cpu_mut().regs.c = val,
+                0x2 => ctx.cpu_mut().regs.d = val,
+                0x3 => ctx.cpu_mut().regs.e = val,
+                0x4 => ctx.cpu_mut().regs.h = val,
+                0x5 => ctx.cpu_mut().regs.l = val,
                 0x6 => {
-                    let dest = ctx.cpustate().regs.hl().into();
+                    let dest = ctx.cpu().regs.hl().into();
                     ctx.mem_mut().write(dest, val)
                 }
                 _ => unreachable!(),
@@ -657,7 +636,7 @@ mod tests {
                             expected
                         };
 
-                        tick::<_, (Gbz80State, [u8; 0x2])>(&mut ctx);
+                        tick(&mut ctx);
                         assert_eq!(ctx, expected);
                     }
                 }
@@ -691,7 +670,7 @@ mod tests {
                         expected
                     };
 
-                    tick::<_, (Gbz80State, [u8; 0x2])>(&mut ctx);
+                    tick(&mut ctx);
                     assert_eq!(ctx, expected);
                 }
             }
@@ -725,7 +704,7 @@ mod tests {
                     expected
                 };
 
-                tick::<_, (Gbz80State, [u8; 0x1])>(&mut ctx);
+                tick(&mut ctx);
                 assert_eq!(ctx, expected);
             }
         }
@@ -735,14 +714,14 @@ mod tests {
     fn sub8bit() {
         fn set_source(inst: u8, ctx: &mut impl CpuContext, val: u8) {
             match (inst & 0xf) % 0x8 {
-                0x0 => ctx.cpustate_mut().regs.b = val,
-                0x1 => ctx.cpustate_mut().regs.c = val,
-                0x2 => ctx.cpustate_mut().regs.d = val,
-                0x3 => ctx.cpustate_mut().regs.e = val,
-                0x4 => ctx.cpustate_mut().regs.h = val,
-                0x5 => ctx.cpustate_mut().regs.l = val,
+                0x0 => ctx.cpu_mut().regs.b = val,
+                0x1 => ctx.cpu_mut().regs.c = val,
+                0x2 => ctx.cpu_mut().regs.d = val,
+                0x3 => ctx.cpu_mut().regs.e = val,
+                0x4 => ctx.cpu_mut().regs.h = val,
+                0x5 => ctx.cpu_mut().regs.l = val,
                 0x6 => {
-                    let dest = ctx.cpustate().regs.hl().into();
+                    let dest = ctx.cpu().regs.hl().into();
                     ctx.mem_mut().write(dest, val)
                 }
                 _ => unreachable!(),
@@ -778,7 +757,7 @@ mod tests {
                             expected
                         };
 
-                        tick::<_, (Gbz80State, [u8; 2])>(&mut ctx);
+                        tick(&mut ctx);
                         assert_eq!(ctx, expected);
                     }
                 }
@@ -810,7 +789,7 @@ mod tests {
                         expected
                     };
 
-                    tick::<_, (Gbz80State, [u8; 2])>(&mut ctx);
+                    tick(&mut ctx);
                     assert_eq!(ctx, expected);
                 }
             }
@@ -829,7 +808,7 @@ mod tests {
                     expected
                 };
 
-                tick::<_, (Gbz80State, [u8; 0x1])>(&mut ctx);
+                tick(&mut ctx);
                 assert_eq!(ctx, expected);
             }
         }
@@ -839,14 +818,14 @@ mod tests {
     fn sbc8bit() {
         fn set_source(inst: u8, ctx: &mut impl CpuContext, val: u8) {
             match (inst & 0xf) % 0x8 {
-                0x0 => ctx.cpustate_mut().regs.b = val,
-                0x1 => ctx.cpustate_mut().regs.c = val,
-                0x2 => ctx.cpustate_mut().regs.d = val,
-                0x3 => ctx.cpustate_mut().regs.e = val,
-                0x4 => ctx.cpustate_mut().regs.h = val,
-                0x5 => ctx.cpustate_mut().regs.l = val,
+                0x0 => ctx.cpu_mut().regs.b = val,
+                0x1 => ctx.cpu_mut().regs.c = val,
+                0x2 => ctx.cpu_mut().regs.d = val,
+                0x3 => ctx.cpu_mut().regs.e = val,
+                0x4 => ctx.cpu_mut().regs.h = val,
+                0x5 => ctx.cpu_mut().regs.l = val,
                 0x6 => {
-                    let dest = ctx.cpustate().regs.hl().into();
+                    let dest = ctx.cpu().regs.hl().into();
                     ctx.mem_mut().write(dest, val)
                 }
                 _ => unreachable!(),
@@ -883,7 +862,7 @@ mod tests {
                             expected
                         };
 
-                        tick::<_, (Gbz80State, [u8; 2])>(&mut ctx);
+                        tick(&mut ctx);
                         assert_eq!(ctx, expected);
                     }
                 }
@@ -915,7 +894,7 @@ mod tests {
                         expected
                     };
 
-                    tick::<_, (Gbz80State, [u8; 2])>(&mut ctx);
+                    tick(&mut ctx);
                     assert_eq!(ctx, expected);
                 }
             }
@@ -939,7 +918,7 @@ mod tests {
                     expected
                 };
 
-                tick::<_, (Gbz80State, [u8; 0x1])>(&mut ctx);
+                tick(&mut ctx);
                 assert_eq!(ctx, expected);
             }
         }
@@ -949,14 +928,14 @@ mod tests {
     fn and8bit() {
         fn set_source(inst: u8, ctx: &mut impl CpuContext, val: u8) {
             match (inst & 0xf) % 0x8 {
-                0x0 => ctx.cpustate_mut().regs.b = val,
-                0x1 => ctx.cpustate_mut().regs.c = val,
-                0x2 => ctx.cpustate_mut().regs.d = val,
-                0x3 => ctx.cpustate_mut().regs.e = val,
-                0x4 => ctx.cpustate_mut().regs.h = val,
-                0x5 => ctx.cpustate_mut().regs.l = val,
+                0x0 => ctx.cpu_mut().regs.b = val,
+                0x1 => ctx.cpu_mut().regs.c = val,
+                0x2 => ctx.cpu_mut().regs.d = val,
+                0x3 => ctx.cpu_mut().regs.e = val,
+                0x4 => ctx.cpu_mut().regs.h = val,
+                0x5 => ctx.cpu_mut().regs.l = val,
                 0x6 => {
-                    let dest = ctx.cpustate().regs.hl().into();
+                    let dest = ctx.cpu().regs.hl().into();
                     ctx.mem_mut().write(dest, val)
                 }
                 _ => unreachable!(),
@@ -986,7 +965,7 @@ mod tests {
                             expected
                         };
 
-                        tick::<_, (Gbz80State, [u8; 2])>(&mut ctx);
+                        tick(&mut ctx);
                         assert_eq!(ctx, expected);
                     }
                 }
@@ -1012,7 +991,7 @@ mod tests {
                         expected
                     };
 
-                    tick::<_, (Gbz80State, [u8; 2])>(&mut ctx);
+                    tick(&mut ctx);
                     assert_eq!(ctx, expected);
                 }
             }
@@ -1033,7 +1012,7 @@ mod tests {
                     expected
                 };
 
-                tick::<_, (Gbz80State, [u8; 0x1])>(&mut ctx);
+                tick(&mut ctx);
                 assert_eq!(ctx, expected);
             }
         }
@@ -1043,14 +1022,14 @@ mod tests {
     fn xor8bit() {
         fn set_source(inst: u8, ctx: &mut impl CpuContext, val: u8) {
             match (inst & 0xf) % 0x8 {
-                0x0 => ctx.cpustate_mut().regs.b = val,
-                0x1 => ctx.cpustate_mut().regs.c = val,
-                0x2 => ctx.cpustate_mut().regs.d = val,
-                0x3 => ctx.cpustate_mut().regs.e = val,
-                0x4 => ctx.cpustate_mut().regs.h = val,
-                0x5 => ctx.cpustate_mut().regs.l = val,
+                0x0 => ctx.cpu_mut().regs.b = val,
+                0x1 => ctx.cpu_mut().regs.c = val,
+                0x2 => ctx.cpu_mut().regs.d = val,
+                0x3 => ctx.cpu_mut().regs.e = val,
+                0x4 => ctx.cpu_mut().regs.h = val,
+                0x5 => ctx.cpu_mut().regs.l = val,
                 0x6 => {
-                    let dest = ctx.cpustate().regs.hl().into();
+                    let dest = ctx.cpu().regs.hl().into();
                     ctx.mem_mut().write(dest, val)
                 }
                 _ => unreachable!(),
@@ -1080,7 +1059,7 @@ mod tests {
                             expected
                         };
 
-                        tick::<_, (Gbz80State, [u8; 2])>(&mut ctx);
+                        tick(&mut ctx);
                         assert_eq!(ctx, expected);
                     }
                 }
@@ -1106,7 +1085,7 @@ mod tests {
                         expected
                     };
 
-                    tick::<_, (Gbz80State, [u8; 2])>(&mut ctx);
+                    tick(&mut ctx);
                     assert_eq!(ctx, expected);
                 }
             }
@@ -1125,7 +1104,7 @@ mod tests {
                     expected
                 };
 
-                tick::<_, (Gbz80State, [u8; 0x1])>(&mut ctx);
+                tick(&mut ctx);
                 assert_eq!(ctx, expected);
             }
         }
@@ -1135,14 +1114,14 @@ mod tests {
     fn or8bit() {
         fn set_source(inst: u8, ctx: &mut impl CpuContext, val: u8) {
             match (inst & 0xf) % 0x8 {
-                0x0 => ctx.cpustate_mut().regs.b = val,
-                0x1 => ctx.cpustate_mut().regs.c = val,
-                0x2 => ctx.cpustate_mut().regs.d = val,
-                0x3 => ctx.cpustate_mut().regs.e = val,
-                0x4 => ctx.cpustate_mut().regs.h = val,
-                0x5 => ctx.cpustate_mut().regs.l = val,
+                0x0 => ctx.cpu_mut().regs.b = val,
+                0x1 => ctx.cpu_mut().regs.c = val,
+                0x2 => ctx.cpu_mut().regs.d = val,
+                0x3 => ctx.cpu_mut().regs.e = val,
+                0x4 => ctx.cpu_mut().regs.h = val,
+                0x5 => ctx.cpu_mut().regs.l = val,
                 0x6 => {
-                    let dest = ctx.cpustate().regs.hl().into();
+                    let dest = ctx.cpu().regs.hl().into();
                     ctx.mem_mut().write(dest, val)
                 }
                 _ => unreachable!(),
@@ -1172,7 +1151,7 @@ mod tests {
                             expected
                         };
 
-                        tick::<_, (Gbz80State, [u8; 2])>(&mut ctx);
+                        tick(&mut ctx);
                         assert_eq!(ctx, expected);
                     }
                 }
@@ -1198,7 +1177,7 @@ mod tests {
                         expected
                     };
 
-                    tick::<_, (Gbz80State, [u8; 2])>(&mut ctx);
+                    tick(&mut ctx);
                     assert_eq!(ctx, expected);
                 }
             }
@@ -1219,7 +1198,7 @@ mod tests {
                     expected
                 };
 
-                tick::<_, (Gbz80State, [u8; 0x1])>(&mut ctx);
+                tick(&mut ctx);
                 assert_eq!(ctx, expected);
             }
         }
@@ -1229,14 +1208,14 @@ mod tests {
     fn cp8bit() {
         fn set_source(inst: u8, ctx: &mut impl CpuContext, val: u8) {
             match (inst & 0xf) % 0x8 {
-                0x0 => ctx.cpustate_mut().regs.b = val,
-                0x1 => ctx.cpustate_mut().regs.c = val,
-                0x2 => ctx.cpustate_mut().regs.d = val,
-                0x3 => ctx.cpustate_mut().regs.e = val,
-                0x4 => ctx.cpustate_mut().regs.h = val,
-                0x5 => ctx.cpustate_mut().regs.l = val,
+                0x0 => ctx.cpu_mut().regs.b = val,
+                0x1 => ctx.cpu_mut().regs.c = val,
+                0x2 => ctx.cpu_mut().regs.d = val,
+                0x3 => ctx.cpu_mut().regs.e = val,
+                0x4 => ctx.cpu_mut().regs.h = val,
+                0x5 => ctx.cpu_mut().regs.l = val,
                 0x6 => {
-                    let dest = ctx.cpustate().regs.hl().into();
+                    let dest = ctx.cpu().regs.hl().into();
                     ctx.mem_mut().write(dest, val)
                 }
                 _ => unreachable!(),
@@ -1271,7 +1250,7 @@ mod tests {
                             expected
                         };
 
-                        tick::<_, (Gbz80State, [u8; 2])>(&mut ctx);
+                        tick(&mut ctx);
                         assert_eq!(ctx, expected);
                     }
                 }
@@ -1302,7 +1281,7 @@ mod tests {
                         expected
                     };
 
-                    tick::<_, (Gbz80State, [u8; 2])>(&mut ctx);
+                    tick(&mut ctx);
                     assert_eq!(ctx, expected);
                 }
             }
@@ -1320,7 +1299,7 @@ mod tests {
                     expected
                 };
 
-                tick::<_, (Gbz80State, [u8; 0x1])>(&mut ctx);
+                tick(&mut ctx);
                 assert_eq!(ctx, expected);
             }
         }
@@ -1360,7 +1339,7 @@ mod tests {
                         expected
                     };
 
-                    tick::<_, (Gbz80State, [u8; 0x200])>(&mut ctx);
+                    tick(&mut ctx);
                     assert_eq!(ctx, expected);
                 }
             }
@@ -1402,7 +1381,7 @@ mod tests {
                         expected
                     };
 
-                    tick::<_, (Gbz80State, [u8; 3])>(&mut ctx);
+                    tick(&mut ctx);
                     assert_eq!(ctx, expected);
                 }
             }
@@ -1425,7 +1404,7 @@ mod tests {
                     expected
                 };
 
-                tick::<_, (Gbz80State, [u8; 1])>(&mut ctx);
+                tick(&mut ctx);
                 assert_eq!(ctx, expected);
             }
         }
@@ -1472,7 +1451,7 @@ mod tests {
                         expected
                     };
 
-                    tick::<_, (Gbz80State, [u8; 0x200])>(&mut ctx);
+                    tick(&mut ctx);
                     assert_eq!(ctx, expected);
                 }
             }
@@ -1523,7 +1502,7 @@ mod tests {
                         expected
                     };
 
-                    tick::<_, (Gbz80State, [u8; 0x200])>(&mut ctx);
+                    tick(&mut ctx);
                     assert_eq!(ctx, expected);
                 }
             }

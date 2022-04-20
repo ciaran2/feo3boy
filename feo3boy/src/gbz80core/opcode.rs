@@ -233,11 +233,11 @@ impl Opcode {
 
     /// Load and execute a single opcode from the given context.
     pub(super) fn load_and_execute(ctx: &mut impl CpuContext) {
-        let pc = ctx.cpustate().regs.pc;
+        let pc = ctx.cpu().regs.pc;
         trace!("Loading opcode at {:#6X}", pc);
         let opcode = Operand8::Immediate.read(ctx);
-        if ctx.cpustate().halt_bug {
-            let state = ctx.cpustate_mut();
+        if ctx.cpu().halt_bug {
+            let state = ctx.cpu_mut();
             state.regs.pc = state.regs.pc.wrapping_sub(1);
             state.halt_bug = false;
         }
@@ -336,12 +336,12 @@ fn jump_relative(ctx: &mut impl CpuContext, cond: ConditionCode) {
     // Loading the offset also moves the program counter over the next instruction, which is
     // good because the jump is relative to the following instruction.
     let offset = Operand8::Immediate.read(ctx) as i8;
-    let base = ctx.cpustate().regs.pc;
+    let base = ctx.cpu().regs.pc;
     // JR doesn't set any flags.
     let (dest, _) = offset_addr(base, offset);
     if cond.evaluate(ctx) {
         trace!("Relative jump by {} from {} to {}", offset, base, dest);
-        ctx.cpustate_mut().regs.pc = dest;
+        ctx.cpu_mut().regs.pc = dest;
     } else {
         trace!("Skipping jump by {} from {} to {}", offset, base, dest);
     }
@@ -355,7 +355,7 @@ fn inc8(ctx: &mut impl CpuContext, operand: Operand8) {
     let val = operand.read(ctx);
     let (res, flags) = add8_flags(val, 1);
     trace!("Evaluating INC {} ({} => {})", operand, val, res);
-    ctx.cpustate_mut().regs.flags.merge(flags, MASK);
+    ctx.cpu_mut().regs.flags.merge(flags, MASK);
     operand.write(ctx, res);
 }
 
@@ -367,7 +367,7 @@ fn dec8(ctx: &mut impl CpuContext, operand: Operand8) {
     let val = operand.read(ctx);
     let (res, flags) = sub8_flags(val, 1);
     trace!("Evaluating DEC {} ({} => {})", operand, val, res);
-    ctx.cpustate_mut().regs.flags.merge(flags, MASK);
+    ctx.cpu_mut().regs.flags.merge(flags, MASK);
     operand.write(ctx, res);
 }
 
@@ -422,7 +422,7 @@ fn add16(ctx: &mut impl CpuContext, arg: Operand16) {
     // 16 bit add never modifies the zero flag.
     const MASK: Flags = Flags::all().difference(Flags::ZERO);
 
-    let lhs = ctx.cpustate().regs.hl();
+    let lhs = ctx.cpu().regs.hl();
     let rhs = arg.read(ctx); // This will always be a register in practice.
 
     let mut flags = Flags::empty();
@@ -432,8 +432,8 @@ fn add16(ctx: &mut impl CpuContext, arg: Operand16) {
     let (res, carry) = lhs.overflowing_add(rhs);
     flags |= Flags::check_carry(carry);
 
-    ctx.cpustate_mut().regs.set_hl(res);
-    ctx.cpustate_mut().regs.flags.merge(flags, MASK);
+    ctx.cpu_mut().regs.set_hl(res);
+    ctx.cpu_mut().regs.flags.merge(flags, MASK);
 }
 
 /// If `IME` is set, just halts the CPU until there is an interrupt available to be serviced. If
@@ -459,19 +459,19 @@ fn add16(ctx: &mut impl CpuContext, arg: Operand16) {
 /// state which would have to be checked in a bunch of places, so for now this just panics if the
 /// bug would be encountered.
 fn halt(ctx: &mut impl CpuContext) {
-    if ctx.cpustate().interrupt_master_enable.enabled() {
+    if ctx.cpu().interrupt_master_enable.enabled() {
         // No need to special-case interrupts here, since the next `tick` call will un-halt anyway.
-        ctx.cpustate_mut().halted = true;
+        ctx.cpu_mut().halted = true;
     } else {
         let enabled_interrupts = ctx.interrupts().enabled();
         let pending_interrupts = ctx.interrupts().queued();
         if enabled_interrupts.intersects(pending_interrupts) {
             // Halt doesn't actually happen, and instead the program counter will fail to
             // increment in the next step.
-            ctx.cpustate_mut().halt_bug = true;
+            ctx.cpu_mut().halt_bug = true;
         } else {
             // `tick` will un-halt next time ([IE] & [IF] != 0), but will not service the interrupt.
-            ctx.cpustate_mut().halted = true;
+            ctx.cpu_mut().halted = true;
         }
     }
 }
@@ -490,8 +490,8 @@ fn call(ctx: &mut impl CpuContext, cond: ConditionCode) {
     if cond.evaluate(ctx) {
         // Conditional jump has an extra internal delay if the condition is true.
         ctx.yield1m();
-        push_helper(ctx, ctx.cpustate().regs.pc);
-        ctx.cpustate_mut().regs.pc = dest;
+        push_helper(ctx, ctx.cpu().regs.pc);
+        ctx.cpu_mut().regs.pc = dest;
     }
 }
 
@@ -503,7 +503,7 @@ fn jump(ctx: &mut impl CpuContext, cond: ConditionCode) {
     if cond.evaluate(ctx) {
         // Branching adds an extra cycle despite not accessing memory.
         ctx.yield1m();
-        ctx.cpustate_mut().regs.pc = dest;
+        ctx.cpu_mut().regs.pc = dest;
     }
 }
 
@@ -514,7 +514,7 @@ fn ret(ctx: &mut impl CpuContext, cond: ConditionCode) {
         let dest = pop_helper(ctx);
         // There's an extra 1m delay after loading SP.
         ctx.yield1m();
-        ctx.cpustate_mut().regs.pc = dest;
+        ctx.cpu_mut().regs.pc = dest;
     } else {
         // Conditional branch always has this extra delay before evaluating.
         ctx.yield1m();
@@ -522,7 +522,7 @@ fn ret(ctx: &mut impl CpuContext, cond: ConditionCode) {
             let dest = pop_helper(ctx);
             // But there's also an extra delay after reading.
             ctx.yield1m();
-            ctx.cpustate_mut().regs.pc = dest;
+            ctx.cpu_mut().regs.pc = dest;
         }
     }
 }
@@ -548,11 +548,11 @@ fn pop(ctx: &mut impl CpuContext, operand: Operand16) {
 fn push_helper(ctx: &mut impl CpuContext, val: u16) {
     let [low, high] = val.to_le_bytes();
     ctx.yield1m();
-    let addr = ctx.cpustate_mut().regs.dec_sp();
+    let addr = ctx.cpu_mut().regs.dec_sp();
     ctx.mem_mut().write(addr.into(), high);
 
     ctx.yield1m();
-    let addr = ctx.cpustate_mut().regs.dec_sp();
+    let addr = ctx.cpu_mut().regs.dec_sp();
     ctx.mem_mut().write(addr.into(), low);
 }
 
@@ -560,11 +560,11 @@ fn push_helper(ctx: &mut impl CpuContext, val: u16) {
 /// and incrementing the stack pointer by 2.
 fn pop_helper(ctx: &mut impl CpuContext) -> u16 {
     ctx.yield1m();
-    let addr = ctx.cpustate_mut().regs.inc_sp();
+    let addr = ctx.cpu_mut().regs.inc_sp();
     let low = ctx.mem().read(addr.into());
 
     ctx.yield1m();
-    let addr = ctx.cpustate_mut().regs.inc_sp();
+    let addr = ctx.cpu_mut().regs.inc_sp();
     let high = ctx.mem().read(addr.into());
 
     u16::from_le_bytes([low, high])
@@ -574,22 +574,22 @@ fn pop_helper(ctx: &mut impl CpuContext) -> u16 {
 /// instruction to jump to the interrupt handler. If an interrupt was handled, returns
 /// true.
 pub(super) fn service_interrupt(ctx: &mut impl CpuContext) -> bool {
-    if ctx.cpustate().interrupt_master_enable.enabled() {
+    if ctx.cpu().interrupt_master_enable.enabled() {
         if let Some(interrupt) = ctx.interrupts().active().iter().next() {
             ctx.yield1m();
             ctx.yield1m();
             ctx.interrupts_mut().clear(interrupt);
-            ctx.cpustate_mut().interrupt_master_enable.clear();
-            let ret_loc = if ctx.cpustate().halt_bug {
-                let state = ctx.cpustate_mut();
+            ctx.cpu_mut().interrupt_master_enable.clear();
+            let ret_loc = if ctx.cpu().halt_bug {
+                let state = ctx.cpu_mut();
                 state.halt_bug = false;
                 state.regs.pc.wrapping_sub(1)
             } else {
-                ctx.cpustate().regs.pc
+                ctx.cpu().regs.pc
             };
             push_helper(ctx, ret_loc);
             ctx.yield1m();
-            ctx.cpustate_mut().regs.pc = interrupt.handler_addr();
+            ctx.cpu_mut().regs.pc = interrupt.handler_addr();
             return true;
         }
     }
@@ -598,14 +598,12 @@ pub(super) fn service_interrupt(ctx: &mut impl CpuContext) -> bool {
 
 /// DI instruction (applies immediately).
 fn disable_interrupts(ctx: &mut impl CpuContext) {
-    ctx.cpustate_mut().interrupt_master_enable.clear();
+    ctx.cpu_mut().interrupt_master_enable.clear();
 }
 
 /// EI instruction (applies after the following instruction).
 fn enable_interrupts(ctx: &mut impl CpuContext) {
-    ctx.cpustate_mut()
-        .interrupt_master_enable
-        .set_next_instruction();
+    ctx.cpu_mut().interrupt_master_enable.set_next_instruction();
 }
 
 /// Enabled interrupts and returns.
@@ -613,34 +611,34 @@ fn interrupt_return(ctx: &mut impl CpuContext) {
     let dest = pop_helper(ctx);
     // Theres an extra 1m of delay in here.
     ctx.yield1m();
-    ctx.cpustate_mut().regs.pc = dest;
-    ctx.cpustate_mut().interrupt_master_enable.set();
+    ctx.cpu_mut().regs.pc = dest;
+    ctx.cpu_mut().interrupt_master_enable.set();
 }
 
 /// Offsets the stack pointer by an immediate value.
 fn offset_sp(ctx: &mut impl CpuContext) {
     let offset = Operand8::Immediate.read(ctx) as i8;
-    let (res, flags) = offset_addr(ctx.cpustate().regs.sp, offset);
+    let (res, flags) = offset_addr(ctx.cpu().regs.sp, offset);
     // This instruction takes two more cycles after loading the offset.
     ctx.yield1m();
     ctx.yield1m();
-    ctx.cpustate_mut().regs.sp = res;
-    ctx.cpustate_mut().regs.flags = flags;
+    ctx.cpu_mut().regs.sp = res;
+    ctx.cpu_mut().regs.flags = flags;
 }
 
 /// Loads the result of offsetting the stack pointer by an immediate value into HL.
 fn address_of_offset_sp(ctx: &mut impl CpuContext) {
     let offset = Operand8::Immediate.read(ctx) as i8;
-    let (res, flags) = offset_addr(ctx.cpustate().regs.sp, offset);
+    let (res, flags) = offset_addr(ctx.cpu().regs.sp, offset);
     // Interestingly, this instruction is actually faster than `ADD SP,i8`.
     ctx.yield1m();
-    ctx.cpustate_mut().regs.set_hl(res);
-    ctx.cpustate_mut().regs.flags = flags;
+    ctx.cpu_mut().regs.set_hl(res);
+    ctx.cpu_mut().regs.flags = flags;
 }
 
 // Similar to unconditional jump, but using HL as the target address.
 fn jump_hl(ctx: &mut impl CpuContext) {
-    let regs = &mut ctx.cpustate_mut().regs;
+    let regs = &mut ctx.cpu_mut().regs;
     regs.pc = regs.hl();
 }
 
@@ -648,8 +646,8 @@ fn jump_hl(ctx: &mut impl CpuContext) {
 fn reset(ctx: &mut impl CpuContext, dest: u8) {
     // There's an extra delay at the start of an RST instruction.
     ctx.yield1m();
-    push_helper(ctx, ctx.cpustate().regs.pc);
-    ctx.cpustate_mut().regs.pc = dest as u16;
+    push_helper(ctx, ctx.cpu().regs.pc);
+    ctx.cpu_mut().regs.pc = dest as u16;
 }
 
 //////////////////////
@@ -694,7 +692,7 @@ impl CBOpcode {
 
     /// Load and execute a single CB-prefixed opcode from the given context.
     fn load_and_execute(ctx: &mut impl CpuContext) {
-        let pc = ctx.cpustate().regs.pc;
+        let pc = ctx.cpu().regs.pc;
         trace!("Loading CB-opcode at {:#6X}", pc);
         let opcode = Operand8::Immediate.read(ctx);
         let opcode = Self::decode(opcode);
@@ -708,54 +706,54 @@ impl CBOpcode {
         match self.op {
             CBOperation::RotateLeft8 => {
                 let res = arg.rotate_left(1);
-                ctx.cpustate_mut().regs.flags =
+                ctx.cpu_mut().regs.flags =
                     Flags::check_zero(res) | Flags::check_carry(res & 1 != 0);
                 self.operand.write(ctx, res);
             }
             CBOperation::RotateLeft9 => {
-                let (res, flags) = rotate_left9(arg, ctx.cpustate().regs.flags);
-                ctx.cpustate_mut().regs.flags = flags;
+                let (res, flags) = rotate_left9(arg, ctx.cpu().regs.flags);
+                ctx.cpu_mut().regs.flags = flags;
                 self.operand.write(ctx, res);
             }
             CBOperation::RotateRight8 => {
                 let res = arg.rotate_right(1);
-                ctx.cpustate_mut().regs.flags =
+                ctx.cpu_mut().regs.flags =
                     Flags::check_zero(res) | Flags::check_carry(res & 0x80 != 0);
                 self.operand.write(ctx, res);
             }
             CBOperation::RotateRight9 => {
-                let (res, flags) = rotate_right9(arg, ctx.cpustate().regs.flags);
-                ctx.cpustate_mut().regs.flags = flags;
+                let (res, flags) = rotate_right9(arg, ctx.cpu().regs.flags);
+                ctx.cpu_mut().regs.flags = flags;
                 self.operand.write(ctx, res);
             }
             CBOperation::ShiftLeft => {
                 let res = arg << 1;
-                ctx.cpustate_mut().regs.flags =
+                ctx.cpu_mut().regs.flags =
                     Flags::check_zero(res) | Flags::check_carry(arg & 0x80 != 0);
                 self.operand.write(ctx, res);
             }
             CBOperation::ShiftRightSignExt => {
                 let res = ((arg as i8) >> 1) as u8;
-                ctx.cpustate_mut().regs.flags =
+                ctx.cpu_mut().regs.flags =
                     Flags::check_zero(res) | Flags::check_carry(arg & 1 != 0);
                 self.operand.write(ctx, res);
             }
             CBOperation::ShiftRight => {
                 let res = arg >> 1;
-                ctx.cpustate_mut().regs.flags =
+                ctx.cpu_mut().regs.flags =
                     Flags::check_zero(res) | Flags::check_carry(arg & 1 != 0);
                 self.operand.write(ctx, res);
             }
             CBOperation::Swap => {
                 let res = ((arg & 0x0f) << 4) | ((arg & 0xf0) >> 4);
-                ctx.cpustate_mut().regs.flags = Flags::check_zero(res);
+                ctx.cpu_mut().regs.flags = Flags::check_zero(res);
                 self.operand.write(ctx, res);
             }
             CBOperation::TestBit(bit) => {
                 // Doesn't affect the carry flag.
                 const MASK: Flags = Flags::all().difference(Flags::CARRY);
                 let flags = Flags::check_zero(arg & (1 << bit)) | Flags::HALFCARRY;
-                ctx.cpustate_mut().regs.flags.merge(flags, MASK);
+                ctx.cpu_mut().regs.flags.merge(flags, MASK);
             }
             CBOperation::ResetBit(bit) => self.operand.write(ctx, arg & !(1 << bit)),
             CBOperation::SetBit(bit) => self.operand.write(ctx, arg | (1 << bit)),
