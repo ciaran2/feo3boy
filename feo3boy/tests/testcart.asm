@@ -151,6 +151,7 @@ DW $0000
 main:
     di
     ld sp,$dfff
+call ldinstrs
 .loop:
     call doprint
     jr .loop
@@ -192,3 +193,11 @@ serial:
 
 hello:
 DB "Hello World",10
+
+ldinstrs:
+    ldh a,[$ff00]
+    ld a,[$feff]
+    ldh a,[c]
+    ld a,a
+    ld a,b
+    ret

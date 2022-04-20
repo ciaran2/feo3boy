@@ -51,12 +51,7 @@ impl Instr {
                 mem.read(addr.wrapping_add(2).into()),
             ])
         };
-        let reladdr = |operand| match operand {
-            Operand8::AddrRelImmediate => 0xff00 + imm8() as u16,
-            Operand8::AddrRelC => 0xff00 + regs.c as u16,
-            Operand8::AddrImmediate => imm16(),
-            _ => panic!("Only use with (FF00+u8), (FF00+C), or (u16)"),
-        };
+        let reladdr = || 0xff00 + imm8() as u16;
 
         let opcode = Opcode::decode(mem.read(addr.into()));
         // TODO: Extract detail from more opcodes, add popups and similar for more detail.
@@ -71,29 +66,66 @@ impl Instr {
                 <span>{imm8() as i8}</span>
             </>},
             Opcode::Load8 {
-                dest:
-                    dest @ (Operand8::AddrRelImmediate | Operand8::AddrRelC | Operand8::AddrImmediate),
+                dest: Operand8::AddrRelC,
                 source,
             } => {
-                let reladdr = reladdr(dest);
                 html! {<>
-                    <span>{"LD"}</span>{" "}
-                    <span>{format!("({:04x}h)", reladdr)}</span>{","}
+                    <span>{"LDH"}</span>{" "}
+                    <span>{"(C)"}</span>{","}
                     <span>{source}</span>
                 </>}
             }
             Opcode::Load8 {
                 dest,
-                source:
-                    source @ (Operand8::AddrRelImmediate | Operand8::AddrRelC | Operand8::AddrImmediate),
+                source: Operand8::AddrRelC,
             } => {
-                let reladdr = reladdr(source);
+                html! {<>
+                    <span>{"LDH"}</span>{" "}
+                    <span>{dest}</span>{","}
+                    <span>{"(C)"}</span>
+                </>}
+            }
+            Opcode::Load8 {
+                dest: Operand8::AddrRelImmediate,
+                source,
+            } => {
+                html! {<>
+                    <span>{"LDH"}</span>{" "}
+                    <span>{format!("({:04x}h)", reladdr())}</span>{","}
+                    <span>{source}</span>
+                </>}
+            }
+            Opcode::Load8 {
+                dest,
+                source: Operand8::AddrRelImmediate,
+            } => {
+                html! {<>
+                    <span>{"LDH"}</span>{" "}
+                    <span>{dest}</span>{","}
+                    <span>{format!("({:04x}h)", reladdr())}</span>
+                </>}
+            }
+            Opcode::Load8 {
+                dest: Operand8::AddrImmediate,
+                source,
+            } => {
+                html! {<>
+                    <span>{"LD"}</span>{" "}
+                    <span>{format!("({:04x}h)", imm16())}</span>{","}
+                    <span>{source}</span>
+                </>}
+            }
+            Opcode::Load8 {
+                dest,
+                source: Operand8::AddrImmediate,
+            } => {
                 html! {<>
                     <span>{"LD"}</span>{" "}
                     <span>{dest}</span>{","}
-                    <span>{format!("({:04x}h)", reladdr)}</span>
+                    <span>{format!("({:04x}h)", imm16())}</span>
                 </>}
             }
+
             Opcode::Load8 {
                 dest,
                 source: Operand8::Immediate,

@@ -367,11 +367,7 @@ mod tests {
 
         tick(&mut (&mut cpu, &mut testmem));
         assert_eq!(cpu.regs.acc, 0x6, "{:?}", cpu.regs);
-        assert!(
-            cpu.regs.flags.contains(Flags::CARRY),
-            "{:?}",
-            cpu.regs
-        );
+        assert!(cpu.regs.flags.contains(Flags::CARRY), "{:?}", cpu.regs);
     }
 
     #[test]
