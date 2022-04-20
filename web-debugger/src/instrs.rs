@@ -41,7 +41,6 @@ impl Instr {
     fn instr_spans(&self, ctx: &Context<Self>) -> Html {
         let addr = ctx.props().addr;
         let mem = &ctx.props().gb.mmu;
-        let regs = &ctx.props().gb.cpustate.regs;
 
         // CB opcodes never use immediates, so immediates are always the next byte.
         let imm8 = || mem.read(addr.wrapping_add(1).into());
