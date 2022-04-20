@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::num::NonZeroU32;
 use std::rc::Rc;
 
 use feo3boy::gb::Gb;
@@ -8,6 +9,8 @@ use gloo::storage::{LocalStorage, Storage};
 use gloo::timers::callback::Timeout;
 use log::warn;
 use serde::{Deserialize, Serialize};
+use wasm_bindgen::JsCast;
+use web_sys::HtmlInputElement;
 use yew::prelude::*;
 
 use breakpoints::{Breakpoint, Breakpoints};
@@ -16,6 +19,7 @@ use memview::Memview;
 use regs::Regs;
 use romload::{RomFile, RomLoader, SavedRom};
 use serial::Serial;
+use speedctl::SpeedCtl;
 
 mod breakpoints;
 mod bytesup;
@@ -25,15 +29,56 @@ mod memview;
 mod regs;
 mod romload;
 mod serial;
+mod speedctl;
 
 const SAVED_STATE_KEY: &str = "feo3boy.webdebugger.savestate-v1";
 
 /// Saved debugger state.
 #[derive(Default, Serialize, Deserialize)]
 struct SaveState {
+    #[serde(default)]
     bios: Option<SavedRom>,
+    #[serde(default)]
     cart: Option<SavedRom>,
+    #[serde(default)]
     breakpoints: BTreeMap<u16, Breakpoint>,
+}
+
+/// Tick settings controls how fast the emulator runs when auto-ticking.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoTickSpeed {
+    /// Delay sets a delay between
+    Delay {
+        ms: NonZeroU32,
+    },
+    Single,
+    Repeat {
+        iterations: NonZeroU32,
+    },
+}
+
+impl AutoTickSpeed {
+    /// Number of milliseconds to delay between ticks at this speed.
+    fn delay_ms(self) -> u32 {
+        match self {
+            Self::Delay { ms } => ms.get(),
+            _ => 0,
+        }
+    }
+
+    /// Number of iterations to run per tick at this speed.
+    fn iterations(self) -> u32 {
+        match self {
+            Self::Repeat { iterations } => iterations.get(),
+            _ => 1,
+        }
+    }
+}
+
+impl Default for AutoTickSpeed {
+    fn default() -> Self {
+        Self::Single
+    }
 }
 
 enum Msg {
@@ -55,6 +100,10 @@ enum Msg {
         singlestep: bool,
     },
     Reset,
+    /// Sets the iteration speed.
+    SetSpeed {
+        speed: AutoTickSpeed,
+    },
     /// Add a breakpoint at the specified address. If one is set, replace it.
     AddBreakpoint {
         addr: u16,
@@ -85,6 +134,8 @@ struct App {
     breakpoints: Rc<BTreeMap<u16, Breakpoint>>,
     /// Serial data output by the program.
     serial: Rc<String>,
+    /// Speed to run auto-ticking at.
+    auto_tick_speed: AutoTickSpeed,
 }
 
 impl App {
@@ -118,6 +169,14 @@ impl App {
         if let Err(e) = LocalStorage::set(SAVED_STATE_KEY, &saved_state) {
             warn!("Unable to save database: {}", e);
         }
+    }
+
+    /// Schedule an auto-tick on self.
+    fn schedule_auto_tick(&mut self, ctx: &Context<Self>) {
+        let step = ctx.link().callback(|_| Msg::Tick { singlestep: false });
+        self.pending_tick = Some(Timeout::new(self.auto_tick_speed.delay_ms(), move || {
+            step.emit(())
+        }));
     }
 }
 
@@ -156,6 +215,7 @@ impl Component for App {
             pending_tick: None,
             breakpoints: Rc::new(saved_state.breakpoints),
             serial: Rc::new(String::new()),
+            auto_tick_speed: Default::default(),
         };
         app.reset_roms();
         app
@@ -179,8 +239,7 @@ impl Component for App {
             }
             Msg::SetRunning { should_run } => {
                 if should_run && self.pending_tick.is_none() {
-                    let step = ctx.link().callback(|_| Msg::Tick { singlestep: false });
-                    self.pending_tick = Some(Timeout::new(0, move || step.emit(())));
+                    self.schedule_auto_tick(ctx);
                     true
                 } else if !should_run && self.pending_tick.is_some() {
                     self.pending_tick.take().unwrap().cancel();
@@ -201,35 +260,42 @@ impl Component for App {
                 true
             }
             Msg::Tick { singlestep: false } => {
-                // For performance (to avoid the overhead of continuously cloning the gb
-                // state and rerendering the whole page), run multiple ticks per web timer
-                // step.
-                const NON_SINGLESTEP_TICKS: usize = 1024;
-                let gb = Rc::make_mut(&mut self.gb);
-                for _ in 0..NON_SINGLESTEP_TICKS {
-                    gb.tick();
-                    match self.breakpoints.get(&gb.cpustate.regs.pc) {
-                        Some(breakpoint) if breakpoint.enabled => break,
-                        _ => {}
+                {
+                    // For performance (to avoid the overhead of continuously cloning the
+                    // gb state and rerendering the whole page), run multiple ticks per
+                    // web timer step at high auto-tick speeds.
+                    let gb = Rc::make_mut(&mut self.gb);
+                    for _ in 0..self.auto_tick_speed.iterations() {
+                        gb.tick();
+                        match self.breakpoints.get(&gb.cpustate.regs.pc) {
+                            Some(breakpoint) if breakpoint.enabled => break,
+                            _ => {}
+                        }
+                    }
+                    let serial_out = gb.serial.stream.receive_bytes();
+                    if serial_out.len() != 0 {
+                        let serial = Rc::make_mut(&mut self.serial);
+                        serial.extend(serial_out.map(|b| b as char));
                     }
                 }
-                let serial_out = gb.serial.stream.receive_bytes();
-                if serial_out.len() != 0 {
-                    let serial = Rc::make_mut(&mut self.serial);
-                    serial.extend(serial_out.map(|b| b as char));
-                }
-                match self.breakpoints.get(&gb.cpustate.regs.pc) {
+
+                match self.breakpoints.get(&self.gb.cpustate.regs.pc) {
                     Some(breakpoint) if breakpoint.enabled => self.pending_tick = None,
-                    _ => {
-                        let step = ctx.link().callback(|_| Msg::Tick { singlestep: false });
-                        self.pending_tick = Some(Timeout::new(0, move || step.emit(())));
-                    }
+                    _ => self.schedule_auto_tick(ctx),
                 }
                 true
             }
             Msg::Reset => {
                 self.pending_tick.take().map(|tick| tick.cancel());
                 self.reset_roms();
+                true
+            }
+            Msg::SetSpeed { speed } => {
+                self.auto_tick_speed = speed;
+                if let Some(tick) = self.pending_tick.take() {
+                    tick.cancel();
+                    self.schedule_auto_tick(ctx);
+                }
                 true
             }
             Msg::AddBreakpoint {
@@ -274,6 +340,7 @@ impl Component for App {
         let pause = link.callback(|_| Msg::SetRunning { should_run: false });
         let step = link.callback(|_| Msg::Tick { singlestep: true });
         let reset = link.callback(|_| Msg::Reset);
+        let changespeed = link.callback(|speed| Msg::SetSpeed { speed });
 
         let add_breakpoint = link.callback(|(addr, name, enabled)| Msg::AddBreakpoint {
             addr,
@@ -300,14 +367,17 @@ impl Component for App {
                         <div class="row">
                             <div class="column">
                                 <div class="runcontrols">
-                                    <button onclick={reset}>{"Reset"}</button>
-                                    if self.pending_tick.is_none() {
-                                        <button onclick={run}>{"Run"}</button>
-                                        <button onclick={step}>{"Step"}</button>
-                                    } else {
-                                        <button onclick={pause}>{"Pause"}</button>
-                                        <button disabled=true>{"Step"}</button>
-                                    }
+                                    <div class="playbuttons">
+                                        <button onclick={reset}>{"Reset"}</button>
+                                        if self.pending_tick.is_none() {
+                                            <button onclick={run}>{"Run"}</button>
+                                            <button onclick={step}>{"Step"}</button>
+                                        } else {
+                                            <button onclick={pause}>{"Pause"}</button>
+                                            <button disabled=true>{"Step"}</button>
+                                        }
+                                    </div>
+                                    <SpeedCtl speed={self.auto_tick_speed} {changespeed} />
                                 </div>
                                 <Regs gb={self.gb.clone()} />
                             </div>
@@ -328,6 +398,11 @@ impl Component for App {
             </div>
         }
     }
+}
+
+fn get_value_from_input_event(e: InputEvent) -> String {
+    let target: HtmlInputElement = e.target().unwrap().dyn_into().unwrap();
+    target.value()
 }
 
 fn main() {

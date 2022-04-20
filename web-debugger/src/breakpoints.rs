@@ -6,9 +6,9 @@ use log::warn;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use wasm_bindgen::JsCast;
-use web_sys::HtmlInputElement;
 use yew::prelude::*;
+
+use crate::get_value_from_input_event;
 
 /// A breakpoint for the emulator.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -156,9 +156,4 @@ impl Component for Breakpoints {
             </form>
         </div>}
     }
-}
-
-fn get_value_from_input_event(e: InputEvent) -> String {
-    let target: HtmlInputElement = e.target().unwrap().dyn_into().unwrap();
-    target.value()
 }

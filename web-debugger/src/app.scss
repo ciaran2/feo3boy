@@ -69,14 +69,34 @@ html, body {
         @include panel;
 
         display: flex;
-        flex-direction: row;
-        justify-content: space-between;
-        align-items: stretch;
+        flex-direction: column;
         gap: 5px;
+
+        .playbuttons {
+            display: flex;
+            flex-direction: row;
+            justify-content: space-between;
+            align-items: stretch;
+            gap: 5px;
+        }
 
         button {
             min-width: 60px;
         }
+    }
+}
+
+.SpeedCtl {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    align-items: stretch;
+
+    .display-values {
+        display: flex;
+        flex-direction: row;
+        justify-content: space-between;
+        align-items: center;
     }
 }
 
