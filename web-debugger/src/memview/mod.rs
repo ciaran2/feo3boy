@@ -113,13 +113,15 @@ impl Memview {
                 <table class="namedbytes">
                     <thead>
                         <tr>
-                            <th>{"Serial Data"}</th>
+                            <th colspan={3}>{"Serial Data"}</th>
                             <th>{"Serial Control"}</th>
                         </tr>
                     </thead>
                     <tbody>
                         <tr>
                             <td class="byte">{hexbyte(io.serial_data)}</td>
+                            <td class="byte charinterp">{interpret_as_char(io.serial_data)}</td>
+                            <td class="byte">{format!("{:08b}", io.serial_data)}</td>
                             <td class="byte">{hexbyte(io.serial_control)}</td>
                         </tr>
                     </tbody>
@@ -204,4 +206,13 @@ fn hexbyte(byte: u8) -> String {
 /// Get HTML for the given address.
 fn addr(addr: u16) -> Html {
     html! {<div class="addr"><h5>{format!("{:#06x}", addr)}</h5></div> }
+}
+
+fn interpret_as_char(byte: u8) -> char {
+    match byte {
+        0..=0x20 => char::from_u32(0x2400 + byte as u32).unwrap(),
+        0x21..=0x7e => byte as char,
+        0x7f => '\u{2421}',
+        _ => '\u{00a0}',
+    }
 }

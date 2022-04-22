@@ -360,6 +360,10 @@ body {
         font-family: 'Liberation Mono', monospace;
     }
 
+    .byte.charinterp {
+        width: 1em;
+    }
+
     table.interrupt-flags {
 
         th,

@@ -2,7 +2,7 @@ use feo3boy::gb::Gb;
 use owning_ref::RcRef;
 use yew::prelude::*;
 
-use super::hexbyte;
+use super::{hexbyte, interpret_as_char};
 
 type MemSlice = RcRef<Gb, [u8]>;
 
@@ -67,14 +67,7 @@ fn view_byte_slice_line(props: &ViewByteSliceProps) -> Html {
             </td>
         }) }
         { for props.slice.iter().enumerate().map(|(i, &byte)| html! {
-            <td class={classes!(idx_classes(i), "ascii")}>{
-                match byte {
-                    0..=0x20 => char::from_u32(0x2400 + byte as u32).unwrap(),
-                    0x21..=0x7e => byte as char,
-                    0x7f => '\u{2421}',
-                    _ => '\u{00a0}',
-                }
-            }</td>
+            <td class={classes!(idx_classes(i), "ascii")}>{interpret_as_char(byte)}</td>
         }) }
     </tr>}
 }
