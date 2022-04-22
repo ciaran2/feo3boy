@@ -15,11 +15,14 @@ body {
     display: flex;
     background-color: $base-bg;
 }
-html, body {
+
+html,
+body {
     margin: 0;
     padding: 0;
     min-width: 100%;
-    height: 100%;
+    height: 100vh;
+    overflow: hidden;
     font-size: 12px;
 }
 
@@ -32,7 +35,12 @@ html, body {
     flex-grow: 1;
     box-sizing: border-box;
 
-    h1, h2, h3, h4, h5, h6 {
+    h1,
+    h2,
+    h3,
+    h4,
+    h5,
+    h6 {
         text-align: center;
         padding: 0;
         margin: 0;
@@ -52,17 +60,11 @@ html, body {
 
     .body {
         box-sizing: border-box;
-        padding: 10px;
+        height: calc(100vh - 48px);
     }
 
     .romselect {
         @include panel;
-
-        display: flex;
-        flex-direction: row;
-        justify-content: space-between;
-        align-items: stretch;
-        gap: 20px;
     }
 
     .runcontrols {
@@ -152,13 +154,12 @@ html, body {
     td.num {
         font-family: 'Liberation Mono', monospace;
         text-align: right;
-    }
 
-    table.single .dec {
-        width: 2.1em;
-    }
-    table.double .dec {
-        width: 3.2em;
+        width: 2.6em;
+
+        .dec {
+            width: 3.2em;
+        }
     }
 
     .instr {
@@ -177,9 +178,11 @@ html, body {
     .name input {
         width: 115px;
     }
+
     .addr {
         font-family: 'Liberation Mono', monospace;
         text-align: right;
+
         input {
             width: 40px;
         }
@@ -190,11 +193,16 @@ html, body {
     @include panel;
 
     pre {
-        white-space: pre-wrap;       /* Since CSS 2.1 */
-        white-space: -moz-pre-wrap;  /* Mozilla, since 1999 */
-        white-space: -pre-wrap;      /* Opera 4-6 */
-        white-space: -o-pre-wrap;    /* Opera 7 */
-        word-wrap: break-word;       /* Internet Explorer 5.5+ */
+        white-space: pre-wrap;
+        /* Since CSS 2.1 */
+        white-space: -moz-pre-wrap;
+        /* Mozilla, since 1999 */
+        white-space: -pre-wrap;
+        /* Opera 4-6 */
+        white-space: -o-pre-wrap;
+        /* Opera 7 */
+        word-wrap: break-word;
+        /* Internet Explorer 5.5+ */
 
         background-color: #000000;
         color: #44bb44;
@@ -211,15 +219,166 @@ html, body {
 
 .Memview {
     @include panel;
+
+    $addr-bg: #9898b0;
+    $addr-bg-write: #cfcf8d;
+    $addr-bg-read: #8383eb;
+
+    .addr {
+        background-color: $addr-bg;
+        box-sizing: border-box;
+        border-right: 1px solid $panel-border;
+    }
+
+    .write-only .addr {
+        background-color: $addr-bg-write;
+    }
+
+    .read-only .addr {
+        background-color: $addr-bg-read;
+    }
+
+    .bios,
+    .cart-rom,
+    .vram,
+    .cart-ram,
+    .wram,
+    .oam,
+    .io,
+    .zram,
+    .ie {
+        display: flex;
+        box-sizing: border-box;
+        flex-direction: column;
+        justify-content: flex-start;
+        align-items: stretch;
+        border: 2px solid $panel-border;
+        background-color: #a0a0c0;
+    }
+
+    .bios.disabled {
+        color: #444444;
+    }
+
+    h4 {
+        background-color: #8080a0;
+    }
+
+    .line {
+        display: flex;
+        flex-direction: row;
+        justify-content: flex-start;
+        align-items: center;
+        box-sizing: border-box;
+
+        border-bottom: 1px solid $panel-border;
+
+        &:last-child {
+            border-bottom: none;
+        }
+
+
+        >.desc {
+            margin: 2px;
+            max-width: min-content;
+            text-align: center;
+        }
+
+        .namedbytes {
+            td {
+                text-align: center;
+            }
+        }
+
+        .addr {
+            display: flex;
+            flex-direction: row;
+            align-items: center;
+            align-self: stretch;
+            justify-content: center;
+            padding: 2px 5px;
+
+            h5 {
+                font-family: 'Liberation Mono', monospace;
+                font-weight: normal;
+                font-size: inherit;
+                line-height: 100%;
+            }
+        }
+
+    }
+
+    .hexeditor {
+        font-family: 'Liberation Mono', monospace;
+        box-sizing: border-box;
+        border-collapse: collapse;
+
+        .addr {
+            padding-left: 5px;
+            padding-right: 5px;
+        }
+
+        .byte {
+            padding-left: 2px;
+            padding-right: 2px;
+        }
+
+        .byte.dword-start {
+            padding-left: 6px;
+        }
+
+        .byte.first-addr {
+            padding-left: 5px;
+        }
+
+        .byte.last-addr {
+            padding-right: 10px;
+        }
+
+        tr {
+            border-bottom: 1px solid $panel-border;
+
+            &:last-child {
+                border-bottom: none;
+            }
+        }
+
+        td,
+        th {
+            vertical-align: middle;
+            line-height: 100%;
+            padding-top: 2px;
+            padding-bottom: 2px;
+        }
+    }
+
+    .byte {
+        font-family: 'Liberation Mono', monospace;
+    }
+
+    table.interrupt-flags {
+
+        th,
+        td {
+            text-align: center;
+        }
+
+        td {
+            font-family: 'Liberation Mono', monospace;
+        }
+    }
+
 }
 
 @mixin gap-sizes {
     .smallgap {
         gap: 5px;
     }
+
     .biggap {
         gap: 20px;
     }
+
     .nogap {
         gap: 0;
     }
@@ -230,6 +389,7 @@ html, body {
     flex-direction: row;
     justify-content: space-evenly;
     align-items: flex-start;
+    box-sizing: border-box;
     gap: 10px;
     @include gap-sizes;
 
@@ -238,7 +398,18 @@ html, body {
         flex-direction: column;
         justify-content: flex-start;
         align-items: stretch;
+        box-sizing: border-box;
         gap: 10px;
         @include gap-sizes;
+
+        &.scroll {
+            height: 100%;
+            overflow-y: auto;
+            scrollbar-gutter: stable;
+        }
+
+        &.main {
+            padding: 10px;
+        }
     }
 }

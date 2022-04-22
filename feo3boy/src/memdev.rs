@@ -159,6 +159,11 @@ impl BiosRom {
     pub fn try_from_slice(data: &[u8]) -> Result<Self, BiosSizeError> {
         Self::try_from(data)
     }
+
+    /// View the contents of the memory as a slice.
+    pub fn bytes(&self) -> &[u8] {
+        &self.0 .0[..]
+    }
 }
 
 impl Default for BiosRom {
@@ -236,10 +241,10 @@ impl<D: MemDevice + ?Sized> MemDevice for Box<D> {
 /// Memory device connecting memory mapped IO.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MemMappedIo {
-    serial_data: u8,
-    serial_control: u8,
-    bios_enabled: bool,
-    interrupt_flags: InterruptFlags,
+    pub serial_data: u8,
+    pub serial_control: u8,
+    pub bios_enabled: bool,
+    pub interrupt_flags: InterruptFlags,
 }
 
 impl MemMappedIo {
@@ -349,23 +354,23 @@ pub trait IoRegs {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GbMmu {
     /// The bios. Mapped to 0..0x100 while bios is enabled.
-    bios: BiosRom,
+    pub bios: BiosRom,
     /// The inserted cartridge. Mapped to 0..0x8000 (rom) and 0xA000..0xC000 (ram).
-    cart: Cartridge,
+    pub cart: Cartridge,
     /// Video Ram. Mapped to 0x8000..0xA000
-    vram: [u8; 0x2000],
+    pub vram: [u8; 0x2000],
     /// Working Ram. Mapped to 0xC000..0xE000 and duplicately mapped at 0xE000..0xFE00.
-    wram: [u8; 0x2000],
+    pub wram: [u8; 0x2000],
     /// Spirte info. Mapped to 0xFE00..0xFEA0.
-    oam: [u8; 160],
+    pub oam: [u8; 160],
     /// Memory mapped IO. Mapped to 0xff00..FF80.
     // TODO: don't require this to be exposed directly (use traits like for interrupts).
     pub io: MemMappedIo,
     /// "Page Zero", memory primarily used for software-hardware interaction. Mapped to
     /// 0xFF80..0xffff
-    zram: [u8; 127],
+    pub zram: [u8; 127],
     /// Interrupt enable register. Mapped to 0xffff
-    interrupt_enable: InterruptEnable,
+    pub interrupt_enable: InterruptEnable,
 }
 
 impl GbMmu {

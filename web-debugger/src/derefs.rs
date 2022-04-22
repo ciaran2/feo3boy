@@ -45,12 +45,13 @@ impl Component for Derefs {
         html! {
             <div class="Derefs column nogap">
                 <h3>{"Pointers & Instructions"}</h3>
-                <table class="double">
+                <table>
                     <thead>
                         <tr>
                             <th>{"ptr"}</th>
                             <th>{"hex"}</th>
                             <th>{"dec"}</th>
+                            <th></th>
                         </tr>
                     </thead>
                     <tbody>
@@ -81,7 +82,7 @@ impl Component for Derefs {
                         </tr>
                         <tr>
                             <td>{"(PC)"}</td>
-                            <td colspan={2} class="instr">
+                            <td colspan={3} class="instr">
                                 <Instr gb={gb.clone()} addr={regs.pc} />
                             </td>
                         </tr>

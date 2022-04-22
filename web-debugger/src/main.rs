@@ -356,13 +356,15 @@ impl Component for App {
                     <h1>{"feo3boy debugger"}</h1>
                 </div>
                 <div class="body row">
-                    <div class="column">
-                        <h3>{"ROM Selection"}</h3>
-                        <div class="romselect">
-                            <RomLoader<BiosRom> onchange={setbios} input_id="bios-load" label="BIOS"
-                                current={self.bios.clone()} />
-                            <RomLoader<Cartridge> onchange={setcart} input_id="cart-load" label="Cartridge"
-                                current={self.cart.clone()} />
+                    <div class="column scroll main">
+                        <div class="romselect column smallgap">
+                            <h3>{"ROM Selection"}</h3>
+                            <div class="row biggap">
+                                <RomLoader<BiosRom> onchange={setbios} input_id="bios-load" label="BIOS"
+                                    current={self.bios.clone()} />
+                                <RomLoader<Cartridge> onchange={setcart} input_id="cart-load" label="Cartridge"
+                                    current={self.cart.clone()} />
+                            </div>
                         </div>
                         <div class="row">
                             <div class="column">
@@ -391,7 +393,7 @@ impl Component for App {
                         </div>
                         <Serial serial_output={self.serial.clone()} />
                     </div>
-                    <div class="column">
+                    <div class="column scroll main">
                         <Memview gb={self.gb.clone()} />
                     </div>
                 </div>
