@@ -1,14 +1,44 @@
-use std::rc::Rc;
-
 use feo3boy::gb::Gb;
 use feo3boy::memdev::MemDevice;
 use yew::prelude::*;
 
-use crate::instrs::Instr;
+use crate::instrs::{Instr, InstrInfo};
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct ComputedDerefs {
+    /// Value pointed at by BC
+    pbc: u8,
+    /// Value pointed at by DE
+    pde: u8,
+    /// Value pointed at by HL
+    phl: u8,
+    /// Value pointed at by 0xFF00+C
+    pffc: u8,
+    /// Value pointed at by stack pointer.
+    psp: u16,
+    /// Instruction under the program counter.
+    ppc: InstrInfo,
+}
+
+impl From<&Gb> for ComputedDerefs {
+    fn from(gb: &Gb) -> Self {
+        Self {
+            pbc: gb.mmu.read(gb.cpustate.regs.bc().into()),
+            pde: gb.mmu.read(gb.cpustate.regs.de().into()),
+            phl: gb.mmu.read(gb.cpustate.regs.hl().into()),
+            pffc: gb.mmu.read((0xff00 + gb.cpustate.regs.c as u16).into()),
+            psp: u16::from_le_bytes([
+                gb.mmu.read(gb.cpustate.regs.sp.into()),
+                gb.mmu.read(gb.cpustate.regs.sp.wrapping_add(1).into()),
+            ]),
+            ppc: InstrInfo::fetch_at(&gb.mmu, gb.cpustate.regs.pc),
+        }
+    }
+}
 
 #[derive(Properties, PartialEq)]
 pub struct Props {
-    pub gb: Rc<Gb>,
+    pub derefs: ComputedDerefs,
 }
 
 pub enum Msg {}
@@ -28,61 +58,49 @@ impl Component for Derefs {
     }
 
     fn view(&self, ctx: &Context<Self>) -> Html {
-        let gb = &ctx.props().gb;
-        let regs = &gb.cpustate.regs;
-        let mem = &gb.mmu;
-
-        let bcu8 = mem.read(regs.bc().into());
-        let deu8 = mem.read(regs.de().into());
-        let hlu8 = mem.read(regs.hl().into());
-        let ffc = mem.read((0xff00 + regs.c as u16).into());
-
-        let spu16 = u16::from_le_bytes([
-            mem.read(regs.sp.into()),
-            mem.read(regs.sp.wrapping_add(1).into()),
-        ]);
-
+        let derefs = &ctx.props().derefs;
         html! {
             <div class="Derefs column nogap">
                 <h3>{"Pointers & Instructions"}</h3>
-                <table class="double">
+                <table>
                     <thead>
                         <tr>
                             <th>{"ptr"}</th>
                             <th>{"hex"}</th>
                             <th>{"dec"}</th>
+                            <th></th>
                         </tr>
                     </thead>
                     <tbody>
                         <tr>
                             <td>{"(BC)"}</td>
-                            <td class="num">{format!("{:02x}", bcu8)}</td>
-                            <td class="num dec">{bcu8}</td>
+                            <td class="num">{format!("{:02x}", derefs.pbc)}</td>
+                            <td class="num dec">{derefs.pbc}</td>
                         </tr>
                         <tr>
                             <td>{"(DE)"}</td>
-                            <td class="num">{format!("{:02x}", deu8)}</td>
-                            <td class="num dec">{deu8}</td>
+                            <td class="num">{format!("{:02x}", derefs.pde)}</td>
+                            <td class="num dec">{derefs.pde}</td>
                         </tr>
                         <tr>
                             <td>{"(HL)"}</td>
-                            <td class="num">{format!("{:02x}", hlu8)}</td>
-                            <td class="num dec">{hlu8}</td>
+                            <td class="num">{format!("{:02x}", derefs.phl)}</td>
+                            <td class="num dec">{derefs.phl}</td>
                         </tr>
                         <tr>
                             <td>{"(+C)"}</td>
-                            <td class="num">{format!("{:02x}", ffc)}</td>
-                            <td class="num dec">{ffc}</td>
+                            <td class="num">{format!("{:02x}", derefs.pffc)}</td>
+                            <td class="num dec">{derefs.pffc}</td>
                         </tr>
                         <tr>
                             <td>{"(SP)"}</td>
-                            <td class="num">{format!("{:04x}", spu16)}</td>
-                            <td class="num dec">{spu16}</td>
+                            <td class="num">{format!("{:04x}", derefs.psp)}</td>
+                            <td class="num dec">{derefs.psp}</td>
                         </tr>
                         <tr>
                             <td>{"(PC)"}</td>
-                            <td colspan={2} class="instr">
-                                <Instr gb={gb.clone()} addr={regs.pc} />
+                            <td colspan={3} class="instr">
+                                <Instr instr={derefs.ppc} />
                             </td>
                         </tr>
                     </tbody>

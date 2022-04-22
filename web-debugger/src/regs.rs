@@ -1,12 +1,9 @@
-use std::rc::Rc;
-
-use feo3boy::gb::Gb;
-use feo3boy::gbz80core::Flags;
+use feo3boy::gbz80core::{Flags, Regs as CpuRegs};
 use yew::prelude::*;
 
 #[derive(Properties, PartialEq)]
 pub struct Props {
-    pub gb: Rc<Gb>,
+    pub regs: CpuRegs,
 }
 
 pub enum Msg {}
@@ -18,7 +15,7 @@ impl Component for Regs {
     type Properties = Props;
 
     fn create(_ctx: &Context<Self>) -> Self {
-        Regs {}
+        Self {}
     }
 
     fn update(&mut self, _ctx: &Context<Self>, msg: Self::Message) -> bool {
@@ -26,7 +23,7 @@ impl Component for Regs {
     }
 
     fn view(&self, ctx: &Context<Self>) -> Html {
-        let regs = &ctx.props().gb.cpustate.regs;
+        let regs = &ctx.props().regs;
         html! {
             <div class="Regs column nogap">
                 <div class="row">

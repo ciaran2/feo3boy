@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use feo3boy::gb::Gb;
 use log::warn;
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -19,7 +18,6 @@ pub struct Breakpoint {
 
 #[derive(Properties, PartialEq)]
 pub struct Props {
-    pub gb: Rc<Gb>,
     pub breakpoints: Rc<BTreeMap<u16, Breakpoint>>,
     pub add_breakpoint: Callback<(u16, String, bool)>,
     pub delete_breakpoint: Callback<u16>,
