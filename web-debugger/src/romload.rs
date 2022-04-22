@@ -1,6 +1,5 @@
 use std::fmt;
 use std::marker::PhantomData;
-use std::rc::Rc;
 
 use serde::{Deserialize, Serialize};
 use yew::prelude::*;
@@ -22,6 +21,12 @@ impl<T> RomFile<T> {
             raw: self.raw.clone(),
         }
     }
+
+    pub fn info(&self) -> RomFileInfo {
+        RomFileInfo {
+            name: self.name.clone(),
+        }
+    }
 }
 
 impl<T> TryFrom<SavedRom> for RomFile<T>
@@ -41,6 +46,13 @@ pub struct SavedRom {
     pub raw: Vec<u8>,
 }
 
+/// Just the info of the `RomFile<T>`. Improves performance by not doing eq comparisons on
+/// the whole RomFile.
+#[derive(Eq, PartialEq, Debug)]
+pub struct RomFileInfo {
+    pub name: String,
+}
+
 #[derive(Properties, PartialEq)]
 pub struct Props<T: PartialEq> {
     /// Id of this upload.
@@ -49,7 +61,7 @@ pub struct Props<T: PartialEq> {
     pub label: &'static str,
     /// True if there is currently a rom set. Needed when loading from save-state when a
     /// file name will be lost.
-    pub current: Option<Rc<RomFile<T>>>,
+    pub current: Option<RomFileInfo>,
     /// Handler to recieve the set value.
     pub onchange: Callback<Option<RomFile<T>>>,
 }

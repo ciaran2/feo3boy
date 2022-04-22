@@ -1,12 +1,18 @@
-use std::rc::Rc;
-
 use feo3boy::gb::Gb;
 use feo3boy::interrupts::InterruptFlags;
+use feo3boy::memdev::GbMmu;
+use owning_ref::RcRef;
 use yew::prelude::*;
+
+use byteslice::ViewByteSlice;
+
+mod byteslice;
+
+type GbMem = RcRef<Gb, GbMmu>;
 
 #[derive(Properties, PartialEq)]
 pub struct Props {
-    pub gb: Rc<Gb>,
+    pub mem: GbMem,
 }
 
 pub enum Msg {}
@@ -45,7 +51,7 @@ impl Component for Memview {
 
 impl Memview {
     fn view_bios(&self, ctx: &Context<Self>) -> Html {
-        let enabled = ctx.props().gb.mmu.io.bios_enabled;
+        let enabled = ctx.props().mem.io.bios_enabled;
         let enabled_class = match enabled {
             false => "disabled",
             true => "enabled",
@@ -57,7 +63,8 @@ impl Memview {
                     {" (disabled)"}
                 }
             </h4>
-            {view_byte_slice(0x0000, &ctx.props().gb.mmu.bios.bytes())}
+            <ViewByteSlice start_addr={0x0000}
+                slice={ctx.props().mem.clone().map(|mem| mem.bios.bytes())} />
         </div>}
     }
 
@@ -70,7 +77,8 @@ impl Memview {
     fn view_vram(&self, ctx: &Context<Self>) -> Html {
         html! {<div class="vram">
             <h4>{"Video RAM"}</h4>
-            {view_byte_slice(0x8000, &ctx.props().gb.mmu.vram)}
+            <ViewByteSlice start_addr={0x8000}
+                slice={ctx.props().mem.clone().map(|mem| mem.vram.as_ref())} />
         </div>}
     }
 
@@ -83,19 +91,21 @@ impl Memview {
     fn view_wram(&self, ctx: &Context<Self>) -> Html {
         html! {<div class="wram">
             <h4>{"Working RAM"}</h4>
-            {view_byte_slice(0xc000, &ctx.props().gb.mmu.wram)}
+            <ViewByteSlice start_addr={0xc000}
+                slice={ctx.props().mem.clone().map(|mem| mem.wram.as_ref())} />
         </div>}
     }
 
     fn view_oam(&self, ctx: &Context<Self>) -> Html {
         html! {<div class="oam">
             <h4>{"Sprite Info"}</h4>
-            {view_byte_slice(0xfe00, &ctx.props().gb.mmu.oam)}
+            <ViewByteSlice start_addr={0xfe00}
+                slice={ctx.props().mem.clone().map(|mem| mem.oam.as_ref())} />
         </div>}
     }
 
     fn view_io(&self, ctx: &Context<Self>) -> Html {
-        let io = &ctx.props().gb.mmu.io;
+        let io = &ctx.props().mem.io;
         html! {<div class="io">
             <h4>{"Memory-Mapped IO"}</h4>
             <div class="line">
@@ -141,7 +151,8 @@ impl Memview {
     fn view_zram(&self, ctx: &Context<Self>) -> Html {
         html! {<div class="zram">
             <h4>{"\"Page Zero\" RAM"}</h4>
-            {view_byte_slice(0xff80, &ctx.props().gb.mmu.zram)}
+            <ViewByteSlice start_addr={0xff80}
+                slice={ctx.props().mem.clone().map(|mem| mem.zram.as_ref())} />
         </div>}
     }
 
@@ -150,7 +161,7 @@ impl Memview {
             <h4>{"Interrupt Enable"}</h4>
             <div class="line">
                 {addr(0xffff)}
-                {view_interrupt_flags(ctx.props().gb.mmu.interrupt_enable.0)}
+                {view_interrupt_flags(ctx.props().mem.interrupt_enable.0)}
             </div>
         </div>}
     }
@@ -182,62 +193,6 @@ fn view_interrupt_flags(flags: InterruptFlags) -> Html {
                 <td>{flags.contains(InterruptFlags::VBLANK) as u8}</td>
             </tr>
         </tbody>
-    </table>}
-}
-
-fn view_byte_slice(start_addr: u16, bytes: &[u8]) -> Html {
-    fn idx_classes(i: usize) -> Classes {
-        let mut classes = classes!();
-        if i == 0 {
-            classes.push("first-addr");
-        }
-        if i % 4 == 0 {
-            classes.push("dword-start");
-        }
-        if i == 0xf {
-            classes.push("last-addr");
-        }
-        classes
-    }
-
-    const BYTES_PER_LINE: usize = 16;
-    let body = bytes
-        .chunks(BYTES_PER_LINE)
-        .zip((start_addr..).step_by(BYTES_PER_LINE))
-        .map(|(data, line_addr)| {
-            html! {<tr>
-                <th class="addr">{format!("{:#06x}", line_addr)}</th>
-                { for (0..BYTES_PER_LINE).map(|i| html! {
-                    <td class={classes!(idx_classes(i), "byte")}>
-                        if let Some(&byte) = data.get(i) {
-                            {hexbyte(byte)}
-                        }
-                    </td>
-                }) }
-                { for data.iter().enumerate().map(|(i, &byte)| html! {
-                    <td class={classes!(idx_classes(i), "ascii")}>{
-                        match byte {
-                            0..=0x20 => char::from_u32(0x2400 + byte as u32).unwrap(),
-                            0x21..=0x7e => byte as char,
-                            0x7f => '\u{2421}',
-                            _ => '\u{00a0}',
-                        }
-                    }</td>
-                }) }
-            </tr>}
-        })
-        .collect::<Html>();
-    html! {<table class="hexeditor">
-        <tr>
-            <th class="addr" />
-            { for (0..=0xf).map(|b| html! {
-                <th class={classes!(idx_classes(b as usize), "byte")}>{hexbyte(b)}</th>
-            }) }
-            { for (0..=0xf).map(|b| html! {
-                <th class={classes!(idx_classes(b as usize), "ascii")}>{hexbyte(b)}</th>
-            }) }
-        </tr>
-        {body}
     </table>}
 }
 

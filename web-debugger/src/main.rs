@@ -8,13 +8,14 @@ use gloo::storage::errors::StorageError;
 use gloo::storage::{LocalStorage, Storage};
 use gloo::timers::callback::Timeout;
 use log::warn;
+use owning_ref::RcRef;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
 use web_sys::HtmlInputElement;
 use yew::prelude::*;
 
 use breakpoints::{Breakpoint, Breakpoints};
-use derefs::Derefs;
+use derefs::{ComputedDerefs, Derefs};
 use memview::Memview;
 use regs::Regs;
 use romload::{RomFile, RomLoader, SavedRom};
@@ -123,9 +124,9 @@ enum Msg {
 
 struct App {
     /// Bios to load into the GB.
-    bios: Option<Rc<RomFile<BiosRom>>>,
+    bios: Option<RomFile<BiosRom>>,
     /// Cartridge to load into the GB.
-    cart: Option<Rc<RomFile<Cartridge>>>,
+    cart: Option<RomFile<Cartridge>>,
     /// GB instance being run.
     gb: Rc<Gb>,
     /// Next pending tick.
@@ -196,7 +197,7 @@ impl Component for App {
             bios: saved_state
                 .bios
                 .and_then(|bios| match RomFile::<BiosRom>::try_from(bios) {
-                    Ok(rom) => Some(Rc::new(rom)),
+                    Ok(rom) => Some(rom),
                     Err(e) => {
                         warn!("Failed to parse saved rom: {}", e);
                         None
@@ -205,7 +206,7 @@ impl Component for App {
             cart: saved_state
                 .cart
                 .and_then(|bios| match RomFile::<Cartridge>::try_from(bios) {
-                    Ok(rom) => Some(Rc::new(rom)),
+                    Ok(rom) => Some(rom),
                     Err(e) => {
                         warn!("Failed to parse saved rom: {}", e);
                         None
@@ -224,14 +225,14 @@ impl Component for App {
     fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
         match msg {
             Msg::SetBios { bios } => {
-                self.bios = bios.map(Rc::new);
+                self.bios = bios;
                 self.save_state();
                 self.reset_roms();
                 self.pending_tick.take().map(|tick| tick.cancel());
                 true
             }
             Msg::SetCart { cart } => {
-                self.cart = cart.map(Rc::new);
+                self.cart = cart;
                 self.save_state();
                 self.reset_roms();
                 self.pending_tick.take().map(|tick| tick.cancel());
@@ -361,9 +362,9 @@ impl Component for App {
                             <h3>{"ROM Selection"}</h3>
                             <div class="row biggap">
                                 <RomLoader<BiosRom> onchange={setbios} input_id="bios-load" label="BIOS"
-                                    current={self.bios.clone()} />
+                                    current={self.bios.as_ref().map(RomFile::info)} />
                                 <RomLoader<Cartridge> onchange={setcart} input_id="cart-load" label="Cartridge"
-                                    current={self.cart.clone()} />
+                                    current={self.cart.as_ref().map(RomFile::info)} />
                             </div>
                         </div>
                         <div class="row">
@@ -381,20 +382,20 @@ impl Component for App {
                                     </div>
                                     <SpeedCtl speed={self.auto_tick_speed} {changespeed} />
                                 </div>
-                                <Regs gb={self.gb.clone()} />
+                                <Regs regs={self.gb.cpustate.regs.clone()} />
                             </div>
                             <div class="column">
-                                <Derefs gb={self.gb.clone()} />
+                                <Derefs derefs={ComputedDerefs::from(&*self.gb)} />
                             </div>
                             <div class="column">
-                                <Breakpoints gb={self.gb.clone()} breakpoints={self.breakpoints.clone()}
+                                <Breakpoints breakpoints={self.breakpoints.clone()}
                                     {add_breakpoint} {delete_breakpoint} {toggle_breakpoint} />
                             </div>
                         </div>
                         <Serial serial_output={self.serial.clone()} />
                     </div>
                     <div class="column scroll main">
-                        <Memview gb={self.gb.clone()} />
+                        <Memview mem={RcRef::new(self.gb.clone()).map(|gb| gb.mmu.as_ref())} />
                     </div>
                 </div>
             </div>
