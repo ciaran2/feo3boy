@@ -231,7 +231,10 @@ fn view_byte_slice(start_addr: u16, bytes: &[u8]) -> Html {
         <tr>
             <th class="addr" />
             { for (0..=0xf).map(|b| html! {
-                <th class={idx_classes(b as usize)}>{hexbyte(b)}</th>
+                <th class={classes!(idx_classes(b as usize), "byte")}>{hexbyte(b)}</th>
+            }) }
+            { for (0..=0xf).map(|b| html! {
+                <th class={classes!(idx_classes(b as usize), "ascii")}>{hexbyte(b)}</th>
             }) }
         </tr>
         {body}
