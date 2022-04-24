@@ -291,9 +291,9 @@ pub type RamBank = [u8; RAM_BANK_SIZE];
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RomOnly {
     /// Rom banks. Both are always accessible.
-    rom_banks: Box<[RomBank; 2]>,
+    pub rom_banks: Box<[RomBank; 2]>,
     /// Ram bank, may or may not be included.
-    ram_bank: Option<Box<RamBank>>,
+    pub ram_bank: Option<Box<RamBank>>,
     /// Whether ram is saved when the device is powered off. (Does the ram have a battery?)
     save_ram: bool,
 }

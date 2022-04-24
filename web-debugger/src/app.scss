@@ -24,6 +24,7 @@ body {
     height: 100vh;
     overflow: hidden;
     font-size: 12px;
+    font-family: 'DejaVu Sans', sans-serif;
 }
 
 .App {
@@ -142,6 +143,14 @@ body {
         font-family: 'Liberation Mono', monospace;
         text-align: center;
     }
+
+    .ime {
+        display: flex;
+        flex-direction: row;
+        justify-content: flex-start;
+        align-items: center;
+        gap: 5px;
+    }
 }
 
 .Derefs {
@@ -223,30 +232,42 @@ body {
     $addr-bg: #9898b0;
     $addr-bg-write: #cfcf8d;
     $addr-bg-read: #8383eb;
+    $addr-bg-unimplemented: #ebbe83;
+    $addr-bg-bad: #eb8383;
 
-    .addr {
-        background-color: $addr-bg;
-        box-sizing: border-box;
-        border-right: 1px solid $panel-border;
+    .key {
+        display: flex;
+        flex-direction: row;
+        justify-content: space-evenly;
+        align-items: center;
+
+        span {
+            padding: 5px;
+            border: 2px solid $panel-border;
+        }
+
+        .read-write {
+            background-color: $addr-bg;
+        }
+
+        .read-only {
+            background-color: $addr-bg-read;
+        }
+
+        .write-only {
+            background-color: $addr-bg-write;
+        }
+
+        .unimplemented {
+            background-color: $addr-bg-unimplemented;
+        }
+
+        .bad {
+            background-color: $addr-bg-bad;
+        }
     }
 
-    .write-only .addr {
-        background-color: $addr-bg-write;
-    }
-
-    .read-only .addr {
-        background-color: $addr-bg-read;
-    }
-
-    .bios,
-    .cart-rom,
-    .vram,
-    .cart-ram,
-    .wram,
-    .oam,
-    .io,
-    .zram,
-    .ie {
+    .mem-section {
         display: flex;
         box-sizing: border-box;
         flex-direction: column;
@@ -254,14 +275,23 @@ body {
         align-items: stretch;
         border: 2px solid $panel-border;
         background-color: #a0a0c0;
-    }
 
-    .bios.disabled {
-        color: #444444;
+        .disabled {
+            color: #444444;
+        }
     }
 
     h4 {
         background-color: #8080a0;
+
+        &.subsection {
+            background-color: #8888a2;
+            border-top: 1px solid $panel-border;
+        }
+    }
+
+    h5 {
+        font-size: inherit;
     }
 
     .line {
@@ -269,43 +299,75 @@ body {
         flex-direction: row;
         justify-content: flex-start;
         align-items: center;
+        line-height: 100%;
+
         box-sizing: border-box;
+        border-top: 1px solid $panel-border;
 
-        border-bottom: 1px solid $panel-border;
+        gap: 5px;
+    }
 
-        &:last-child {
-            border-bottom: none;
-        }
+    .addr,
+    .named {
+        background-color: $addr-bg;
+        box-sizing: border-box;
+        border-right: 1px solid $panel-border;
+        padding: 2px 5px;
+        font-family: 'Liberation Mono', monospace;
+    }
 
+    .line {
 
-        >.desc {
-            margin: 2px;
-            max-width: min-content;
-            text-align: center;
-        }
-
-        .namedbytes {
-            td {
-                text-align: center;
-            }
-        }
-
-        .addr {
+        .addr,
+        .named {
             display: flex;
             flex-direction: row;
-            align-items: center;
-            align-self: stretch;
             justify-content: center;
-            padding: 2px 5px;
-
-            h5 {
-                font-family: 'Liberation Mono', monospace;
-                font-weight: normal;
-                font-size: inherit;
-                line-height: 100%;
-            }
+            align-self: stretch;
+            align-items: center;
         }
 
+        .named {
+            margin-left: -5px;
+        }
+
+        .addr.range {
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+    }
+
+    .write-only {
+
+        .addr,
+        .named {
+            background-color: $addr-bg-write;
+        }
+    }
+
+    .read-only {
+
+        .addr,
+        .named {
+            background-color: $addr-bg-read;
+        }
+    }
+
+    .unimplemented {
+
+        .addr,
+        .named {
+            background-color: $addr-bg-unimplemented;
+        }
+    }
+
+    .bad {
+
+        .addr,
+        .named {
+            background-color: $addr-bg-bad;
+        }
     }
 
     .hexeditor {
@@ -316,6 +378,12 @@ body {
         .addr {
             padding-left: 5px;
             padding-right: 5px;
+
+            .range {
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+            }
         }
 
         .byte {
@@ -339,12 +407,12 @@ body {
             padding-right: 5px;
         }
 
-        tr {
-            border-bottom: 1px solid $panel-border;
+        .group {
+            padding-left: 5px;
+        }
 
-            &:last-child {
-                border-bottom: none;
-            }
+        tr {
+            border-top: 1px solid $panel-border;
         }
 
         td,
@@ -356,26 +424,37 @@ body {
         }
     }
 
-    .byte {
-        font-family: 'Liberation Mono', monospace;
-    }
-
-    .byte.charinterp {
-        width: 1em;
+    .io {
+        .named {
+            width: 10em;
+        }
     }
 
     table.interrupt-flags {
+        border-collapse: collapse;
+        margin-left: -5px;
+        align-self: stretch;
 
         th,
         td {
             text-align: center;
+            border: 1px solid $panel-border;
+            padding: 0 2px;
+
+            &:first-child {
+                border-left: none;
+            }
+        }
+
+        th {
+            border-top: none;
         }
 
         td {
             font-family: 'Liberation Mono', monospace;
+            border-bottom: none;
         }
     }
-
 }
 
 @mixin gap-sizes {

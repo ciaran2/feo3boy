@@ -149,6 +149,8 @@ DW $0000
 
 ; $0150: Code!
 main:
+    ei
+    nop
     di
     ld sp,$dfff
 call ldinstrs

@@ -382,7 +382,7 @@ impl Component for App {
                                     </div>
                                     <SpeedCtl speed={self.auto_tick_speed} {changespeed} />
                                 </div>
-                                <Regs regs={self.gb.cpustate.regs.clone()} />
+                                <Regs regs={self.gb.cpustate.regs.clone()} ime={self.gb.cpustate.interrupt_master_enable} />
                             </div>
                             <div class="column">
                                 <Derefs derefs={ComputedDerefs::from(&*self.gb)} />
