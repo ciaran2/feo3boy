@@ -23,7 +23,7 @@ pub fn view_byte_slice(props: &ViewByteSliceProps) -> Html {
     fn collect_zero_lines(lines: &mut Vec<Html>, zero_lines: &mut Vec<(usize, u16, MemSlice)>) {
         if !zero_lines.is_empty() {
             if zero_lines.len() <= 3 {
-                for (idx, start_addr, slice) in zero_lines.drain(..) {
+                for (_, start_addr, slice) in zero_lines.drain(..) {
                     lines.push(html! {
                         <ViewByteSliceLine key={start_addr as u128}
                             {start_addr} {slice} />

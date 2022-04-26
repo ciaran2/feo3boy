@@ -3,6 +3,9 @@ $header-bg: #a0a0e0;
 $panel-bg: #9090b0;
 $panel-border: #707090;
 
+$dec-single-width: 2.1em;
+$dec-double-width: 3.2em;
+
 @mixin panel {
     box-sizing: border-box;
     padding: 5px;
@@ -132,11 +135,11 @@ body {
     }
 
     table.single .dec {
-        width: 2.1em;
+        width: $dec-single-width;
     }
 
     table.double .dec {
-        width: 3.2em;
+        width: $dec-double-width;
     }
 
     table.flags td {
@@ -320,21 +323,25 @@ body {
 
         .addr,
         .named {
-            display: flex;
-            flex-direction: row;
-            justify-content: center;
             align-self: stretch;
+
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
             align-items: center;
+            gap: 4px;
         }
 
         .named {
             margin-left: -5px;
+            width: 10em;
         }
 
         .addr.range {
             flex-direction: column;
             align-items: center;
             justify-content: center;
+            gap: 0;
         }
     }
 
@@ -367,6 +374,15 @@ body {
         .addr,
         .named {
             background-color: $addr-bg-bad;
+        }
+    }
+
+    .byte {
+        font-family: 'Liberation Mono', monospace;
+
+        &.dec {
+            width: $dec-single-width;
+            text-align: right;
         }
     }
 
@@ -421,12 +437,6 @@ body {
             line-height: 100%;
             padding-top: 2px;
             padding-bottom: 2px;
-        }
-    }
-
-    .io {
-        .named {
-            width: 10em;
         }
     }
 

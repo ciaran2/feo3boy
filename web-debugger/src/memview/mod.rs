@@ -7,7 +7,7 @@ use owning_ref::RcRef;
 use yew::prelude::*;
 
 use byteslice::ViewByteSlice;
-use cartridge::CartridgeRom;
+use cartridge::{CartridgeRamSection, CartridgeRomSection};
 
 mod byteslice;
 mod cartridge;
@@ -47,13 +47,13 @@ impl Component for Memview {
                 <span class="bad">{"Unusable"}</span>
             </div>
             {self.view_bios(ctx)}
-            <CartridgeRom cart={mem.clone().map(|mem| &mem.cart)} />
+            <CartridgeRomSection cart={mem.clone().map(|mem| &mem.cart)} />
             <div class="mem-section vram">
                 <h4>{"Video RAM"}</h4>
                 <ViewByteSlice start_addr={0x8000}
                     slice={mem.clone().map(|mem| mem.vram.as_ref())} />
             </div>
-            {self.view_cart_ram(ctx)}
+            <CartridgeRamSection cart={mem.clone().map(|mem| &mem.cart)} />
             <div class="mem-section wram">
                 <h4>{"Working RAM"}</h4>
                 <ViewByteSlice start_addr={0xc000}
@@ -104,18 +104,6 @@ impl Memview {
             </h4>
             <ViewByteSlice start_addr={0x0000} class={classes!("read-only")}
                 slice={ctx.props().mem.clone().map(|mem| mem.bios.as_ref())} />
-        </div>}
-    }
-
-    fn view_cart_rom(&self, ctx: &Context<Self>) -> Html {
-        html! {<div class="mem-section cart-rom">
-            <h4>{"Cartridge ROM"}</h4>
-        </div>}
-    }
-
-    fn view_cart_ram(&self, ctx: &Context<Self>) -> Html {
-        html! {<div class="mem-section cart-ram">
-            <h4>{"Cartridge RAM"}</h4>
         </div>}
     }
 }
