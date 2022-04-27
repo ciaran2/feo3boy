@@ -238,6 +238,10 @@ body {
     $addr-bg-unimplemented: #ebbe83;
     $addr-bg-bad: #eb8383;
 
+    $mem-section-color: #a0a0c0;
+    $section-head-color: #8080a0;
+    $subsection-head-color: #8888a2;
+
     .key {
         display: flex;
         flex-direction: row;
@@ -277,7 +281,7 @@ body {
         justify-content: flex-start;
         align-items: stretch;
         border: 2px solid $panel-border;
-        background-color: #a0a0c0;
+        background-color: $mem-section-color;
 
         .disabled {
             color: #444444;
@@ -285,10 +289,10 @@ body {
     }
 
     h4 {
-        background-color: #8080a0;
+        background-color: $section-head-color;
 
         &.subsection {
-            background-color: #8888a2;
+            background-color: $subsection-head-color;
             border-top: 1px solid $panel-border;
         }
     }
@@ -308,6 +312,52 @@ body {
         border-top: 1px solid $panel-border;
 
         gap: 5px;
+    }
+
+
+    .bankselect {
+        display: flex;
+        flex-flow: row wrap;
+        justify-content: stretch;
+        align-items: stretch;
+        box-sizing: border-box;
+        border-top: 1px solid $panel-border;
+
+        width: 0;
+        min-width: 100%;
+
+        .choosebank {
+            display: flex;
+            flex-direction: row;
+            justify-content: center;
+            align-items: center;
+            gap: 5px;
+
+
+            border-radius: 3px;
+            flex: 1 50px;
+            border: 1px solid #9090a0;
+            margin: 1px;
+
+            background-color: #c4c4c4;
+            &:hover {
+                background-color: #969696;
+            }
+            &.viewed {
+                background-color: #acacac;
+            }
+
+            .banknum {
+                font-family: 'Liberation Mono', monospace;
+                font-size: 12px;
+                line-height: 12px;
+                width: 1.8em;
+            }
+
+            .material-icons {
+                font-size: inherit;
+            }
+        }
     }
 
     .addr,
@@ -429,6 +479,29 @@ body {
 
         tr {
             border-top: 1px solid $panel-border;
+        }
+
+        .byte, .ascii {
+            position: relative;
+
+            .tooltip {
+                position: absolute;
+                top: 100%;
+                left: 50%;
+                transform: translateX(-50%);
+                display: none;
+                background-color: $subsection-head-color;
+                box-sizing: border-box;
+                padding: 2px;
+                border: 1px solid $panel-border;
+                border-radius: 2px;
+                z-index: 2;
+                pointer-events: none;
+            }
+
+            &:hover .tooltip {
+                display: block;
+            }
         }
 
         td,

@@ -4,6 +4,7 @@ use owning_ref::RcRef;
 use yew::prelude::*;
 
 use super::{addr_range, hexbyte, named, ViewByteSlice};
+use crate::CompareAssign;
 
 type CartRef = RcRef<Gb, Cartridge>;
 type RomOnlyRef = RcRef<Gb, RomOnly>;
@@ -69,24 +70,53 @@ struct Mbc1RomProps {
     pub rom: Mbc1Ref,
 }
 
-enum Mbc1RomRomSectionMsg {}
+enum Mbc1RomRomSectionMsg {
+    SetLowerBank { viewed_lower: Option<usize> },
+    SetUpperBank { viewed_upper: Option<usize> },
+}
 
-struct Mbc1RomRomSection {}
+struct Mbc1RomRomSection {
+    viewed_lower: Option<usize>,
+    viewed_upper: Option<usize>,
+}
 
 impl Component for Mbc1RomRomSection {
     type Properties = Mbc1RomProps;
     type Message = Mbc1RomRomSectionMsg;
 
     fn create(_ctx: &Context<Self>) -> Self {
-        Mbc1RomRomSection {}
+        Mbc1RomRomSection {
+            viewed_lower: None,
+            viewed_upper: None,
+        }
     }
 
     fn update(&mut self, _ctx: &Context<Self>, msg: Self::Message) -> bool {
-        match msg {}
+        match msg {
+            Mbc1RomRomSectionMsg::SetLowerBank { viewed_lower } => {
+                self.viewed_lower.ne_assign(viewed_lower)
+            }
+            Mbc1RomRomSectionMsg::SetUpperBank { viewed_upper } => {
+                self.viewed_upper.ne_assign(viewed_upper)
+            }
+        }
     }
 
     fn view(&self, ctx: &Context<Self>) -> Html {
         let rom = &ctx.props().rom;
+        let link = ctx.link();
+        let lower_bank = match self.viewed_lower {
+            Some(viewed_lower) => rom.clone().map(|rom| &rom.rom_banks()[viewed_lower][..]),
+            None => rom.clone().map(|rom| &rom.lower_bank()[..]),
+        };
+        let clearlower =
+            link.callback(|_| Mbc1RomRomSectionMsg::SetLowerBank { viewed_lower: None });
+        let upper_bank = match self.viewed_upper {
+            Some(viewed_upper) => rom.clone().map(|rom| &rom.rom_banks()[viewed_upper][..]),
+            None => rom.clone().map(|rom| &rom.upper_bank()[..]),
+        };
+        let clearupper =
+            link.callback(|_| Mbc1RomRomSectionMsg::SetUpperBank { viewed_upper: None });
         html! {<>
             <h4 class="subsection">{"Internal Registers"}</h4>
             <div class="line write-only">
@@ -122,8 +152,76 @@ impl Component for Mbc1RomRomSection {
                     }
                 </span>
             </div>
-
+            <h4 class="subsection">{"Lower ROM Bank"}</h4>
+            <div class="bankselect">
+                <button class={classes!("choosebank", "auto", self.viewed_lower.is_none().then(|| "viewed"))}
+                    onclick={clearlower}>
+                    <span class="banknum">{rom.selected_lower_bank()}</span>
+                    <span class="material-icons">{"hdr_auto"}</span>
+                </button>
+                { for (0..rom.rom_banks().len()).step_by(32).map(|i| {
+                    let is_viewed = self.viewed_lower == Some(i);
+                    let is_selected = rom.selected_lower_bank() == i;
+                    let class = classes!("choosebank", is_viewed.then(|| "viewed"));
+                    let onclick = link.callback(move |_| Mbc1RomRomSectionMsg::SetLowerBank { viewed_lower: Some(i) });
+                    html! {<button {class}  {onclick}>
+                        <span class="banknum">{i}</span>
+                        if is_selected {
+                            <span class="material-icons">{"radio_button_checked"}</span>
+                        } else {
+                            <span class="material-icons">{"radio_button_unchecked"}</span>
+                        }
+                    </button>}
+                }) }
+            </div>
+            <ViewByteSlice start_addr={0x0000} slice={lower_bank} class={classes!("read-only", match self.viewed_lower {
+                None => None,
+                Some(viewed_lower) if viewed_lower == rom.selected_lower_bank() => None,
+                _ => Some("disabled"),
+            })} />
+            <h4 class="subsection">{"Upper ROM Bank"}</h4>
+            <div class="bankselect">
+                <button class={classes!("choosebank", "auto", self.viewed_upper.is_none().then(|| "viewed"))}
+                    onclick={clearupper}>
+                    <span class="banknum">{rom.selected_upper_bank()}</span>
+                    <span class="material-icons">{"hdr_auto"}</span>
+                </button>
+                { for (1..rom.rom_banks().len()).filter(|&i| i % 32 != 0).map(|i| {
+                    let is_viewed = self.viewed_upper == Some(i);
+                    let is_selected = rom.selected_upper_bank() == i;
+                    let class = classes!("choosebank", is_viewed.then(|| "viewed"));
+                    let onclick = link.callback(move |_| Mbc1RomRomSectionMsg::SetUpperBank { viewed_upper: Some(i) });
+                    html! {<button {class} {onclick}>
+                        <span class="banknum">{i}</span>
+                        if is_selected {
+                            <span class="material-icons">{"radio_button_checked"}</span>
+                        } else {
+                            <span class="material-icons">{"radio_button_unchecked"}</span>
+                        }
+                    </button>}
+                }) }
+            </div>
+            <ViewByteSlice start_addr={0x4000} slice={upper_bank} class={classes!("read-only", match self.viewed_upper {
+                None => None,
+                Some(viewed_upper) if viewed_upper == rom.selected_upper_bank() => None,
+                _ => Some("disabled"),
+            })} />
         </>}
+    }
+
+    fn changed(&mut self, ctx: &Context<Self>) -> bool {
+        let rom = &ctx.props().rom;
+        if let Some(view) = self.viewed_lower {
+            if view >= rom.rom_banks().len() {
+                self.viewed_lower = None;
+            }
+        }
+        if let Some(view) = self.viewed_upper {
+            if view >= rom.rom_banks().len() {
+                self.viewed_upper = None;
+            }
+        }
+        true
     }
 }
 

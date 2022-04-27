@@ -18,6 +18,8 @@ pub struct ViewByteSliceProps {
 #[function_component(ViewByteSlice)]
 pub fn view_byte_slice(props: &ViewByteSliceProps) -> Html {
     let mut lines = vec![];
+    // Note: Collapsing zero-lines causes performance issues when bank-switching since
+    // many lines will need to be expanded/collapsed.
     let mut zero_lines = vec![];
 
     fn collect_zero_lines(lines: &mut Vec<Html>, zero_lines: &mut Vec<(usize, u16, MemSlice)>) {
@@ -104,11 +106,21 @@ fn view_byte_slice_line(props: &ViewByteSliceProps) -> Html {
             <td class={classes!(idx_classes(i), "byte")}>
                 if let Some(&byte) = props.slice.get(i) {
                     {hexbyte(byte)}
+                    <div class="tooltip">
+                        {format!("{:#06x}", props.start_addr + i as u16)}
+                    </div>
                 }
             </td>
         }) }
-        { for props.slice.iter().enumerate().map(|(i, &byte)| html! {
-            <td class={classes!(idx_classes(i), "ascii")}>{interpret_as_char(byte)}</td>
+        { for (0..BYTES_PER_LINE).map(|i| html! {
+            <td class={classes!(idx_classes(i), "ascii")}>
+                if let Some(&byte) = props.slice.get(i) {
+                    {interpret_as_char(byte)}
+                    <div class="tooltip">
+                        {format!("{:#06x}", props.start_addr + i as u16)}
+                    </div>
+                }
+            </td>
         }) }
     </tr>}
 }
