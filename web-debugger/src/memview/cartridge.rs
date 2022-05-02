@@ -263,7 +263,7 @@ fn rom_only_ram_section(props: &RomOnlyProps) -> Html {
     match props.rom.ram_bank {
         None => html! {<div class="line bad">
             {addr_range(0xa000..=0xbfff)}
-            <span>{"No cartridge ram"}</span>
+            <span>{"No cartridge RAM"}</span>
         </div>},
         Some(_) => {
             let ram = props
@@ -275,23 +275,69 @@ fn rom_only_ram_section(props: &RomOnlyProps) -> Html {
     }
 }
 
-enum Mbc1RomRamSectionMsg {}
+enum Mbc1RomRamSectionMsg {
+    SetBank { viewed: Option<usize> },
+}
 
-struct Mbc1RomRamSection {}
+struct Mbc1RomRamSection {
+    viewed: Option<usize>,
+}
 
 impl Component for Mbc1RomRamSection {
     type Properties = Mbc1RomProps;
     type Message = Mbc1RomRamSectionMsg;
 
     fn create(_ctx: &Context<Self>) -> Self {
-        Mbc1RomRamSection {}
+        Mbc1RomRamSection { viewed: None }
     }
 
     fn update(&mut self, _ctx: &Context<Self>, msg: Self::Message) -> bool {
-        match msg {}
+        match msg {
+            Mbc1RomRamSectionMsg::SetBank { viewed } => self.viewed.ne_assign(viewed),
+        }
     }
 
     fn view(&self, ctx: &Context<Self>) -> Html {
-        html! {}
+        let rom = &ctx.props().rom;
+        if rom.ram_banks().is_empty() {
+            html! {<div class="line bad">
+                {addr_range(0xa000..=0xbfff)}
+                <span>{"No cartridge RAM"}</span>
+            </div>}
+        } else {
+            let link = ctx.link();
+            let clearviewed = link.callback(|_| Mbc1RomRamSectionMsg::SetBank { viewed: None });
+            let bank = rom
+                .clone()
+                .map(|rom| &rom.ram_banks()[self.viewed.unwrap_or_default()][..]);
+            html! {<>
+                <div class="bankselect">
+                    <button class={classes!("choosebank", "auto", self.viewed.is_none().then(|| "viewed"))}
+                        onclick={clearviewed}>
+                        <span class="banknum">{rom.selected_ram_bank()}</span>
+                        <span class="material-icons">{"hdr_auto"}</span>
+                    </button>
+                    { for (0..rom.ram_banks().len()).map(|i| {
+                        let is_viewed = self.viewed == Some(i);
+                        let is_selected = rom.selected_ram_bank() == i;
+                        let class = classes!("choosebank", is_viewed.then(|| "viewed"));
+                        let onclick = link.callback(move |_| Mbc1RomRamSectionMsg::SetBank { viewed: Some(i) });
+                        html! {<button {class} {onclick}>
+                            <span class="banknum">{i}</span>
+                            if is_selected {
+                                <span class="material-icons">{"radio_button_checked"}</span>
+                            } else {
+                                <span class="material-icons">{"radio_button_unchecked"}</span>
+                            }
+                        </button>}
+                    }) }
+                </div>
+                <ViewByteSlice start_addr={0xa000} slice={bank} class={classes!(match self.viewed {
+                    None if rom.ram_enable() => None,
+                    Some(lower) if rom.ram_enable() && lower == rom.selected_ram_bank() => None,
+                    _ => Some("disabled"),
+                })} />
+            </>}
+        }
     }
 }

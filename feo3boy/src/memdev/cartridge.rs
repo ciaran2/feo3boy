@@ -466,6 +466,16 @@ impl Mbc1Rom {
         (low_order | high_order) as usize % self.rom_banks.len()
     }
 
+    /// Get the currently selected ram bank indes, regardless of whether ram is enabled.
+    #[inline]
+    pub fn selected_ram_bank(&self) -> usize {
+        if self.ram_banks.is_empty() || !self.advanced_banking_mode {
+            0
+        } else {
+            self.bank_set as usize % self.ram_banks.len()
+        }
+    }
+
     /// Get a reference to the set of rom banks.
     pub fn rom_banks(&self) -> &[RomBank] {
         self.rom_banks.as_ref()
@@ -491,11 +501,9 @@ impl Mbc1Rom {
     pub fn ram_bank(&self) -> Option<&RamBank> {
         if self.ram_banks.is_empty() || !self.ram_enable {
             None
-        } else if self.advanced_banking_mode {
-            let bank = self.bank_set as usize % self.ram_banks.len();
-            Some(&self.ram_banks[bank])
         } else {
-            Some(&self.ram_banks[0])
+            let bank = self.selected_ram_bank();
+            Some(&self.ram_banks[bank])
         }
     }
 
@@ -503,11 +511,9 @@ impl Mbc1Rom {
     fn ram_bank_mut(&mut self) -> Option<&mut RamBank> {
         if self.ram_banks.is_empty() || !self.ram_enable {
             None
-        } else if self.advanced_banking_mode {
-            let bank = self.bank_set as usize % self.ram_banks.len();
-            Some(&mut self.ram_banks[bank])
         } else {
-            Some(&mut self.ram_banks[0])
+            let bank = self.selected_ram_bank();
+            Some(&mut self.ram_banks[bank])
         }
     }
 }
