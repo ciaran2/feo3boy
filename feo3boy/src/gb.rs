@@ -2,6 +2,7 @@ use crate::gbz80core::{self, CpuContext, Gbz80State};
 use crate::interrupts::InterruptContext;
 use crate::memdev::{BiosRom, Cartridge, GbMmu, IoRegsContext, MemContext};
 use crate::serial::{self, SerialContext, SerialState};
+use crate::ppu::{PpuContext, PpuBackend};
 
 /// Represents a "real" gameboy, by explicitly using the GbMmu for memory.
 #[derive(Clone, Debug, Eq, PartialEq)]
