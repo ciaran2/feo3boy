@@ -244,6 +244,16 @@ pub struct MemMappedIo {
     pub serial_data: u8,
     pub serial_control: u8,
     pub bios_enabled: bool,
+    // ppu status and settings
+    pub scroll_y: u8,
+    pub lcdc_y: u8,
+    pub lcdc_y_compare: u8,
+    pub dma_addr: u8,
+    pub bg_palette: u8,
+    pub obj0_palette: u8,
+    pub obj1_palette: u8,
+    pub window_y: u8,
+    pub window_x: u8,
     pub interrupt_flags: InterruptFlags,
 }
 
@@ -254,6 +264,16 @@ impl MemMappedIo {
             serial_data: 0x00,
             serial_control: 0x00,
             bios_enabled: true,
+            // ppu status and settings
+            scroll_y: 0x00,
+            lcdc_y: 0x00,
+            lcdc_y_compare: 0x00,
+            dma_addr: 0x00,
+            bg_palette: 0x00,
+            obj0_palette: 0x00,
+            obj1_palette: 0x00,
+            window_y: 0x00,
+            window_x: 0x00,
             interrupt_flags: InterruptFlags::empty(),
         }
     }
@@ -278,7 +298,18 @@ impl MemDevice for MemMappedIo {
             0x02 => self.serial_control,
             0x03..=0x0e => 0xff,
             0x0f => self.interrupt_flags.bits(),
-            0x10..=0x4f => 0xff,
+            0x10..=0x41 => 0xff,
+            0x42 => self.scroll_y,
+            0x43 => 0xff,
+            0x44 => self.lcdc_y,
+            0x45 => self.lcdc_y_compare,
+            0x46 => self.dma_addr,
+            0x47 => self.bg_palette,
+            0x48 => self.obj0_palette,
+            0x49 => self.obj1_palette,
+            0x4a => self.window_y,
+            0x4b => self.window_x,
+            0x4c..=0x4f => 0xff,
             0x50 => self.bios_enabled as u8,
             0x51..=0x7f => 0xff,
             _ => panic!("Address {} out of range for Mem Mapped IO", addr),
@@ -293,6 +324,17 @@ impl MemDevice for MemMappedIo {
             0x03..=0x0e => {}
             0x0f => self.interrupt_flags = InterruptFlags::from_bits_truncate(value),
             0x10..=0x4f => {}
+            0x42 => self.scroll_y = value,
+            0x43 => {},
+            0x44 => {},
+            0x45 => self.lcdc_y_compare = value,
+            0x46 => self.dma_addr = value,
+            0x47 => self.bg_palette = value,
+            0x48 => self.obj0_palette = value,
+            0x49 => self.obj1_palette = value,
+            0x4a => self.window_y = value,
+            0x4b => self.window_x = value,
+            0x4c..=0x4f => {},
             0x50 => {
                 if value & 1 != 0 {
                     self.bios_enabled = false;
@@ -319,6 +361,69 @@ impl IoRegs for MemMappedIo {
 
     fn set_serial_control(&mut self, val: u8) {
         self.serial_control = val;
+    }
+
+    fn scroll_y(&self) -> u8 {
+        self.scroll_y
+    }
+    fn set_scroll_y(&mut self, val: u8) {
+        self.scroll_y = val;
+    }
+
+    fn lcdc_y(&self) -> u8 {
+        self.lcdc_y
+    }
+    fn set_lcdc_y(&mut self, val: u8) {
+        self.lcdc_y = val;
+    }
+
+    fn lcdc_y_compare(&self) -> u8 {
+        self.lcdc_y_compare
+    }
+    fn set_lcdc_y_compare(&mut self, val: u8) {
+        self.lcdc_y_compare = val;
+    }
+
+    fn dma_addr(&self) -> u8 {
+        self.dma_addr
+    }
+    fn set_dma_addr(&mut self, val: u8) {
+        self.dma_addr = val;
+    }
+
+    fn bg_palette(&self) -> u8 {
+        self.bg_palette
+    }
+    fn set_bg_palette(&mut self, val: u8) {
+        self.bg_palette = val;
+    }
+
+    fn obj0_palette(&self) -> u8 {
+        self.obj0_palette
+    }
+    fn set_obj0_palette(&mut self, val: u8) {
+        self.obj0_palette = val;
+    }
+
+    fn obj1_palette(&self) -> u8 {
+        self.obj1_palette
+    }
+    fn set_obj1_palette(&mut self, val: u8) {
+        self.obj1_palette = val;
+    }
+
+    fn window_y(&self) -> u8 {
+        self.window_y
+    }
+    fn set_window_y(&mut self, val: u8) {
+        self.window_y = val;
+    }
+
+    fn window_x(&self) -> u8 {
+        self.window_x
+    }
+    fn set_window_x(&mut self, val: u8) {
+        self.window_x = val;
     }
 }
 
