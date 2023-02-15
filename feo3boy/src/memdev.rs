@@ -227,6 +227,38 @@ impl<const N: usize> MemDevice for [u8; N] {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MaskableMem<const N: usize> {
+    data: [u8; N],
+    masked: bool,
+}
+
+impl<const N: usize> MaskableMem<N> {
+    pub fn new() -> Self {
+        MaskableMem {
+            data: [0; N],
+            masked: false,
+        }
+    }
+}
+
+impl<const N: usize> MemDevice for MaskableMem<N> {
+    fn read(&self, addr: Addr) -> u8 {
+        if !self.masked {
+            self.data.read(addr)
+        }
+        else {
+            0xff
+        }
+    }
+
+    fn write(&mut self, addr: Addr, value: u8) {
+        if !self.masked {
+            self.data.write(addr, value)
+        }
+    }
+}
+
 // This makes sure that Box<dyn MemDevice> implements MemDevice (as well as Box<Anything that
 // implements MemDevice>).
 impl<D: MemDevice + ?Sized> MemDevice for Box<D> {
@@ -493,11 +525,11 @@ pub struct GbMmu {
     /// The inserted cartridge. Mapped to 0..0x8000 (rom) and 0xA000..0xC000 (ram).
     pub cart: Cartridge,
     /// Video Ram. Mapped to 0x8000..0xA000
-    pub vram: [u8; 0x2000],
+    pub vram: MaskableMem::<0x2000>,
     /// Working Ram. Mapped to 0xC000..0xE000 and duplicately mapped at 0xE000..0xFE00.
     pub wram: [u8; 0x2000],
     /// Spirte info. Mapped to 0xFE00..0xFEA0.
-    pub oam: [u8; 160],
+    pub oam: MaskableMem::<160>,
     /// Memory mapped IO. Mapped to 0xff00..FF80.
     // TODO: don't require this to be exposed directly (use traits like for interrupts).
     pub io: MemMappedIo,
@@ -515,9 +547,9 @@ impl GbMmu {
         GbMmu {
             bios,
             cart,
-            vram: [0; 0x2000],
+            vram: MaskableMem::<0x2000>::new(),
             wram: [0; 0x2000],
-            oam: [0; 160],
+            oam: MaskableMem::<160>::new(),
             io: MemMappedIo::new(),
             zram: [0; 127],
             interrupt_enable: InterruptEnable(InterruptFlags::empty()),
