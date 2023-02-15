@@ -4,6 +4,21 @@ use crate::interrupts::{InterruptContext, InterruptFlags, Interrupts};
 use crate::memdev::{IoRegs, IoRegsContext};
 
 bitflags! {
+    /// Lcd control status flags
+    #[derive(Default)]
+    pub struct LcdStat: u8 {
+        const READ_WRITE = 0b1111000;
+
+        const MODE = 0b0000011;
+        const Y_COINCIDENCE = 0b0000100;
+        const HBLANK_INTERRUPT_ENABLE = 0b0001000;
+        const VBLANK_INTERRUPT_ENABLE = 0b0010000;
+        const OAM_INTERRUPT_ENABLE = 0b0100000;
+        const Y_COINCIDENCE_INTERRUPT_ENABLE = 0b1000000;
+    }
+}
+
+bitflags! {
     /// Available set of interrupt flags.
     #[derive(Default)]
     pub struct LcdFlags: u8 {
