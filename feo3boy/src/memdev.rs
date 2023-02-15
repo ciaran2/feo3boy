@@ -5,6 +5,7 @@ use log::trace;
 use thiserror::Error;
 
 use crate::interrupts::{InterruptContext, InterruptEnable, InterruptFlags, Interrupts};
+use crate::ppu::{LcdFlags};
 
 pub use cartridge::{Cartridge, Mbc1Rom, ParseCartridgeError, RamBank, RomBank};
 
@@ -245,6 +246,7 @@ pub struct MemMappedIo {
     pub serial_control: u8,
     pub bios_enabled: bool,
     // ppu status and settings
+    pub lcd_control: LcdFlags,
     pub scroll_y: u8,
     pub lcdc_y: u8,
     pub lcdc_y_compare: u8,
@@ -265,6 +267,7 @@ impl MemMappedIo {
             serial_control: 0x00,
             bios_enabled: true,
             // ppu status and settings
+            lcd_control: LcdFlags::empty(),
             scroll_y: 0x00,
             lcdc_y: 0x00,
             lcdc_y_compare: 0x00,
@@ -323,7 +326,8 @@ impl MemDevice for MemMappedIo {
             0x02 => self.serial_control = value,
             0x03..=0x0e => {}
             0x0f => self.interrupt_flags = InterruptFlags::from_bits_truncate(value),
-            0x10..=0x4f => {}
+            0x10..=0x3f => {},
+            0x40 => self.lcd_control = LcdFlags::from_bits_truncate(value),
             0x42 => self.scroll_y = value,
             0x43 => {},
             0x44 => {},
@@ -452,6 +456,32 @@ pub trait IoRegs {
     /// Set the current value of the serial control register.
     fn set_serial_control(&mut self, val: u8);
 
+    fn scroll_y(&self) -> u8;
+    fn set_scroll_y(&mut self, val: u8);
+
+    fn lcdc_y(&self) -> u8;
+    fn set_lcdc_y(&mut self, val: u8);
+
+    fn lcdc_y_compare(&self) -> u8;
+    fn set_lcdc_y_compare(&mut self, val: u8);
+
+    fn dma_addr(&self) -> u8;
+    fn set_dma_addr(&mut self, val: u8);
+
+    fn bg_palette(&self) -> u8;
+    fn set_bg_palette(&mut self, val: u8);
+
+    fn obj0_palette(&self) -> u8;
+    fn set_obj0_palette(&mut self, val: u8);
+
+    fn obj1_palette(&self) -> u8;
+    fn set_obj1_palette(&mut self, val: u8);
+
+    fn window_y(&self) -> u8;
+    fn set_window_y(&mut self, val: u8);
+
+    fn window_x(&self) -> u8;
+    fn set_window_x(&mut self, val: u8);
     // TODO: other IO registers.
 }
 

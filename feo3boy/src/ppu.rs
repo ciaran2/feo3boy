@@ -1,6 +1,29 @@
 use std::error::Error;
+use bitflags::bitflags;
 use crate::interrupts::{InterruptContext, InterruptFlags, Interrupts};
 use crate::memdev::{IoRegs, IoRegsContext};
+
+bitflags! {
+    /// Available set of interrupt flags.
+    #[derive(Default)]
+    pub struct LcdFlags: u8 {
+        const BG_DISPLAY = 0b00000001;
+
+        const OBJ_DISPLAY_ENABLE = 0b00000010;
+
+        const OBJ_SIZE = 0b00000100;
+
+        const BG_TILE_MAP_SELECT = 0b00001000;
+
+        const BG_TILE_DATA_SELECT = 0b00010000;
+
+        const WINDOW_DISPLAY_ENABLE = 0b00100000;
+
+        const WINDOW_TILE_MAP_SELECT = 0b01000000;
+
+        const DISPLAY_ENABLE = 0b10000000;
+    }
+}
 
 /// Context trait providing access to fields needed to service graphics.
 pub trait PpuContext: IoRegsContext + InterruptContext {
@@ -29,4 +52,7 @@ impl Default for PpuState {
       screen_buffer: [0xff; 92160],
     }
   }
+}
+
+pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
 }
