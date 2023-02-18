@@ -1,7 +1,7 @@
 use std::error::Error;
 use bitflags::bitflags;
 use crate::interrupts::{InterruptContext, InterruptFlags, Interrupts};
-use crate::memdev::{IoRegs, IoRegsContext};
+use crate::memdev::{IoRegs, IoRegsContext, MaskableMem};
 
 bitflags! {
     /// Lcd control status flags
@@ -11,6 +11,7 @@ bitflags! {
 
         const MODE = 0b0000011;
         const Y_COINCIDENCE = 0b0000100;
+
         const HBLANK_INTERRUPT_ENABLE = 0b0001000;
         const VBLANK_INTERRUPT_ENABLE = 0b0010000;
         const OAM_INTERRUPT_ENABLE = 0b0100000;
@@ -47,6 +48,12 @@ pub trait PpuContext: IoRegsContext + InterruptContext {
 
     /// Get mutable access to the ppu state.
     fn ppu_mut(&mut self) -> &mut PpuState;
+
+    fn vram(&self) -> &MaskableMem<0x2000>;
+    fn vram_mut(&mut self) -> &mut MaskableMem<0x2000>;
+
+    fn oam(&self) -> &MaskableMem<160>;
+    fn oam_mut(&mut self) -> &mut MaskableMem<160>;
 }
 
 /// Allows core ppu implementation to be agnostic of render implementation
@@ -58,13 +65,15 @@ pub trait PpuBackend {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PpuState {
-  screen_buffer: [u8; 92160]
+  screen_buffer: [u8; 92160],
+  scanline_progress: u64
 }
 
 impl Default for PpuState {
   fn default() -> PpuState {
     PpuState {
       screen_buffer: [0xff; 92160],
+      scanline_progress: 0,
     }
   }
 }
