@@ -5,7 +5,7 @@ use log::trace;
 use thiserror::Error;
 
 use crate::interrupts::{InterruptContext, InterruptEnable, InterruptFlags, Interrupts};
-use crate::ppu::{LcdFlags};
+use crate::ppu::{LcdFlags, LcdStat};
 
 pub use cartridge::{Cartridge, Mbc1Rom, ParseCartridgeError, RamBank, RomBank};
 
@@ -279,6 +279,7 @@ pub struct MemMappedIo {
     pub bios_enabled: bool,
     // ppu status and settings
     pub lcd_control: LcdFlags,
+    pub lcd_status: LcdStat,
     pub scroll_y: u8,
     pub lcdc_y: u8,
     pub lcdc_y_compare: u8,
@@ -300,6 +301,7 @@ impl MemMappedIo {
             bios_enabled: true,
             // ppu status and settings
             lcd_control: LcdFlags::empty(),
+            lcd_status: LcdStat::empty(),
             scroll_y: 0x00,
             lcdc_y: 0x00,
             lcdc_y_compare: 0x00,
@@ -333,7 +335,9 @@ impl MemDevice for MemMappedIo {
             0x02 => self.serial_control,
             0x03..=0x0e => 0xff,
             0x0f => self.interrupt_flags.bits(),
-            0x10..=0x41 => 0xff,
+            0x10..=0x3f => 0xff,
+            0x40 => self.lcd_control.bits(),
+            0x41 => self.lcd_status.bits(),
             0x42 => self.scroll_y,
             0x43 => 0xff,
             0x44 => self.lcdc_y,
@@ -360,6 +364,9 @@ impl MemDevice for MemMappedIo {
             0x0f => self.interrupt_flags = InterruptFlags::from_bits_truncate(value),
             0x10..=0x3f => {},
             0x40 => self.lcd_control = LcdFlags::from_bits_truncate(value),
+            0x41 => self.lcd_status = (self.lcd_status & !LcdStat::READ_WRITE) |
+                                      (LcdStat::from_bits_truncate(value) &
+                                       LcdStat::READ_WRITE),
             0x42 => self.scroll_y = value,
             0x43 => {},
             0x44 => {},
