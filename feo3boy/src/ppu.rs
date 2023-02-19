@@ -3,6 +3,14 @@ use bitflags::bitflags;
 use crate::interrupts::{InterruptContext, InterruptFlags, Interrupts};
 use crate::memdev::{IoRegs, IoRegsContext, MaskableMem};
 
+
+pub enum LcdMode {
+    HBlank,
+    VBlank,
+    OamScan,
+    WriteScreen,
+}
+
 bitflags! {
     /// Lcd control status flags
     #[derive(Default)]
@@ -16,6 +24,34 @@ bitflags! {
         const VBLANK_INTERRUPT_ENABLE = 0b0010000;
         const OAM_INTERRUPT_ENABLE = 0b0100000;
         const Y_COINCIDENCE_INTERRUPT_ENABLE = 0b1000000;
+    }
+}
+
+impl LcdStat {
+
+    pub fn get_mode(&self) -> LcdMode {
+        match (*self | LcdStat::MODE).bits() {
+            0 => LcdMode::HBlank,
+            1 => LcdMode::VBlank,
+            2 => LcdMode::OamScan,
+            3 => LcdMode::WriteScreen,
+            _ => panic!("Illegal mode number encountered. This should be impossible.")
+        }
+    }
+
+    pub fn set_mode(&self, mode: LcdMode) -> LcdStat {
+        (*self & !LcdStat::MODE) |
+            LcdStat::from_bits_truncate(match mode {
+                LcdMode::HBlank       => 0,
+                LcdMode::VBlank       => 1,
+                LcdMode::OamScan      => 2,
+                LcdMode::WriteScreen  => 3
+            })
+    }
+
+    pub fn set_writeable(&self, data: u8) -> LcdStat {
+        (*self & !LcdStat::READ_WRITE) | 
+            (LcdStat::from_bits_truncate(data) & LcdStat::READ_WRITE)
     }
 }
 
@@ -79,4 +115,16 @@ impl Default for PpuState {
 }
 
 pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
+    ctx.ppu_mut().scanline_progress += tcycles;
+
+    match ctx.ioregs().lcd_stat().get_mode() {
+        LcdMode::HBlank       => {
+        }
+        LcdMode::VBlank       => {
+        }
+        LcdMode::OamScan      => {
+        }
+        LcdMode::WriteScreen  => {
+        }
+    }
 }

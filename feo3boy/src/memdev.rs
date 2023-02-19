@@ -364,9 +364,7 @@ impl MemDevice for MemMappedIo {
             0x0f => self.interrupt_flags = InterruptFlags::from_bits_truncate(value),
             0x10..=0x3f => {},
             0x40 => self.lcd_control = LcdFlags::from_bits_truncate(value),
-            0x41 => self.lcd_status = (self.lcd_status & !LcdStat::READ_WRITE) |
-                                      (LcdStat::from_bits_truncate(value) &
-                                       LcdStat::READ_WRITE),
+            0x41 => self.lcd_status = self.lcd_status.set_writeable(value),
             0x42 => self.scroll_y = value,
             0x43 => {},
             0x44 => {},
@@ -404,6 +402,17 @@ impl IoRegs for MemMappedIo {
 
     fn set_serial_control(&mut self, val: u8) {
         self.serial_control = val;
+    }
+
+    fn lcd_control(&self) -> LcdFlags {
+        self.lcd_control
+    }
+
+    fn lcd_stat(&self) -> LcdStat {
+        self.lcd_status
+    }
+    fn set_lcd_stat(&mut self, val: LcdStat) {
+        self.lcd_status = val;
     }
 
     fn scroll_y(&self) -> u8 {
@@ -494,6 +503,11 @@ pub trait IoRegs {
 
     /// Set the current value of the serial control register.
     fn set_serial_control(&mut self, val: u8);
+
+    fn lcd_control(&self) -> LcdFlags;
+
+    fn lcd_stat(&self) -> LcdStat;
+    fn set_lcd_stat(&mut self, val: LcdStat);
 
     fn scroll_y(&self) -> u8;
     fn set_scroll_y(&mut self, val: u8);
