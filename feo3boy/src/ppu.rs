@@ -119,12 +119,25 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
 
     match ctx.ioregs().lcd_stat().get_mode() {
         LcdMode::HBlank       => {
+            if ctx.ppu().scanline_progress > 456 {
+                ctx.ppu_mut().scanline_progress -= 456;
+                let lcd_stat = ctx.ioregs().lcd_stat().set_mode(LcdMode::OamScan);
+                ctx.ioregs_mut().set_lcd_stat(lcd_stat)
+            }
         }
         LcdMode::VBlank       => {
         }
         LcdMode::OamScan      => {
+            if ctx.ppu().scanline_progress > 80 {
+                let lcd_stat = ctx.ioregs().lcd_stat().set_mode(LcdMode::WriteScreen);
+                ctx.ioregs_mut().set_lcd_stat(lcd_stat)
+            }
         }
         LcdMode::WriteScreen  => {
+            if ctx.ppu().scanline_progress > 248 {
+                let lcd_stat = ctx.ioregs().lcd_stat().set_mode(LcdMode::HBlank);
+                ctx.ioregs_mut().set_lcd_stat(lcd_stat)
+            }
         }
     }
 }
