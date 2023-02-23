@@ -240,6 +240,14 @@ impl<const N: usize> MaskableMem<N> {
             masked: false,
         }
     }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.data
+    }
+
+    pub fn bytes_mut(&mut self) -> &mut [u8] {
+        &mut self.data
+    }
 }
 
 impl<const N: usize> MemDevice for MaskableMem<N> {

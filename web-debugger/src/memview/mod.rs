@@ -78,7 +78,7 @@ impl Memview {
         html! {<div class="vram">
             <h4>{"Video RAM"}</h4>
             <ViewByteSlice start_addr={0x8000}
-                slice={ctx.props().mem.clone().map(|mem| mem.vram.as_ref())} />
+                slice={ctx.props().mem.clone().map(|mem| mem.vram.bytes())} />
         </div>}
     }
 
@@ -100,7 +100,7 @@ impl Memview {
         html! {<div class="oam">
             <h4>{"Sprite Info"}</h4>
             <ViewByteSlice start_addr={0xfe00}
-                slice={ctx.props().mem.clone().map(|mem| mem.oam.as_ref())} />
+                slice={ctx.props().mem.clone().map(|mem| mem.oam.bytes())} />
         </div>}
     }
 
