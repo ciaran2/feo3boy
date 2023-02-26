@@ -2,6 +2,7 @@ use std::error::Error;
 use bitflags::bitflags;
 use crate::interrupts::{InterruptContext, InterruptFlags, Interrupts};
 use crate::memdev::{IoRegs, IoRegsContext, MaskableMem};
+use log::{debug, trace};
 
 
 pub enum LcdMode {
@@ -105,6 +106,12 @@ pub struct PpuState {
   scanline_progress: u64
 }
 
+impl PpuState {
+    pub fn new() -> PpuState {
+        Default::default()
+    }
+}
+
 impl Default for PpuState {
   fn default() -> PpuState {
     PpuState {
@@ -115,64 +122,70 @@ impl Default for PpuState {
 }
 
 pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
-    ctx.ppu_mut().scanline_progress += tcycles;
-    let lcd_stat = ctx.ioregs().lcd_stat();
-    let mut lcdc_y = ctx.ioregs().lcdc_y();
+    if ctx.ioregs().lcd_control().contains(LcdFlags::DISPLAY_ENABLE) {
+        ctx.ppu_mut().scanline_progress += tcycles;
+        let lcd_stat = ctx.ioregs().lcd_stat();
+        let mut lcdc_y = ctx.ioregs().lcdc_y();
+        trace!("LCD is enabled.");
 
-    match ctx.ioregs().lcd_stat().get_mode() {
-        LcdMode::HBlank       => {
-            if ctx.ppu().scanline_progress > 456 {
-                ctx.ppu_mut().scanline_progress -= 456;
-                lcdc_y += 1;
-                ctx.ioregs_mut().set_lcdc_y(lcdc_y);
+        match ctx.ioregs().lcd_stat().get_mode() {
+            LcdMode::HBlank       => {
+                if ctx.ppu().scanline_progress > 456 {
+                    ctx.ppu_mut().scanline_progress -= 456;
+                    lcdc_y += 1;
+                    ctx.ioregs_mut().set_lcdc_y(lcdc_y);
 
-                if lcdc_y == ctx.ioregs().lcdc_y_compare() &&
-                    lcd_stat.contains(LcdStat::Y_COINCIDENCE_INTERRUPT_ENABLE) {
-                    ctx.interrupts_mut().send(InterruptFlags::STAT);
-                }
-
-                if lcdc_y < 144 {
-                    ctx.ioregs_mut().set_lcd_stat(lcd_stat.set_mode(LcdMode::OamScan));
-                    if lcd_stat.contains(LcdStat::OAM_INTERRUPT_ENABLE) {
+                    if lcdc_y == ctx.ioregs().lcdc_y_compare() &&
+                        lcd_stat.contains(LcdStat::Y_COINCIDENCE_INTERRUPT_ENABLE) {
                         ctx.interrupts_mut().send(InterruptFlags::STAT);
                     }
-                }
-                else {
-                    ctx.ioregs_mut().set_lcd_stat(lcd_stat.set_mode(LcdMode::VBlank));
-                    ctx.interrupts_mut().send(InterruptFlags::VBLANK);
-                    if lcd_stat.contains(LcdStat::VBLANK_INTERRUPT_ENABLE) {
-                        ctx.interrupts_mut().send(InterruptFlags::STAT);
-                    }
-                }
-            }
-        }
-        LcdMode::VBlank       => {
-            if ctx.ppu().scanline_progress > 456 {
-                ctx.ppu_mut().scanline_progress -= 456;
-                lcdc_y += 1;
-                ctx.ioregs_mut().set_lcdc_y(lcdc_y);
 
-                if lcdc_y > 153 {
-                    ctx.ioregs_mut().set_lcd_stat(lcd_stat.set_mode(LcdMode::OamScan));
-                    if lcd_stat.contains(LcdStat::OAM_INTERRUPT_ENABLE) {
-                        ctx.interrupts_mut().send(InterruptFlags::STAT);
+                    if lcdc_y < 144 {
+                        ctx.ioregs_mut().set_lcd_stat(lcd_stat.set_mode(LcdMode::OamScan));
+                        if lcd_stat.contains(LcdStat::OAM_INTERRUPT_ENABLE) {
+                            ctx.interrupts_mut().send(InterruptFlags::STAT);
+                        }
+                    }
+                    else {
+                        ctx.ioregs_mut().set_lcd_stat(lcd_stat.set_mode(LcdMode::VBlank));
+                        ctx.interrupts_mut().send(InterruptFlags::VBLANK);
+                        if lcd_stat.contains(LcdStat::VBLANK_INTERRUPT_ENABLE) {
+                            ctx.interrupts_mut().send(InterruptFlags::STAT);
+                        }
                     }
                 }
             }
-        }
-        LcdMode::OamScan      => {
-            if ctx.ppu().scanline_progress > 80 {
-                ctx.ioregs_mut().set_lcd_stat(lcd_stat.set_mode(LcdMode::WriteScreen))
+            LcdMode::VBlank       => {
+                if ctx.ppu().scanline_progress > 456 {
+                    ctx.ppu_mut().scanline_progress -= 456;
+                    lcdc_y += 1;
+                    ctx.ioregs_mut().set_lcdc_y(lcdc_y);
+
+                    if lcdc_y > 153 {
+                        ctx.ioregs_mut().set_lcd_stat(lcd_stat.set_mode(LcdMode::OamScan));
+                        if lcd_stat.contains(LcdStat::OAM_INTERRUPT_ENABLE) {
+                            ctx.interrupts_mut().send(InterruptFlags::STAT);
+                        }
+                    }
+                }
             }
-        }
-        LcdMode::WriteScreen  => {
-            //fixed cycles as a stand-in for now, should be variable based on sprites
-            if ctx.ppu().scanline_progress > 248 {
-                ctx.ioregs_mut().set_lcd_stat(lcd_stat.set_mode(LcdMode::HBlank));
-                if lcd_stat.contains(LcdStat::HBLANK_INTERRUPT_ENABLE) {
-                    ctx.interrupts_mut().send(InterruptFlags::STAT)
+            LcdMode::OamScan      => {
+                if ctx.ppu().scanline_progress > 80 {
+                    ctx.ioregs_mut().set_lcd_stat(lcd_stat.set_mode(LcdMode::WriteScreen))
+                }
+            }
+            LcdMode::WriteScreen  => {
+                //fixed cycles as a stand-in for now, should be variable based on sprites
+                if ctx.ppu().scanline_progress > 248 {
+                    ctx.ioregs_mut().set_lcd_stat(lcd_stat.set_mode(LcdMode::HBlank));
+                    if lcd_stat.contains(LcdStat::HBLANK_INTERRUPT_ENABLE) {
+                        ctx.interrupts_mut().send(InterruptFlags::STAT)
+                    }
                 }
             }
         }
+    }
+    else {
+        trace!("LCD is disabled.");
     }
 }
