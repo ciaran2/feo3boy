@@ -31,7 +31,7 @@ bitflags! {
 impl LcdStat {
 
     pub fn get_mode(&self) -> LcdMode {
-        match (*self | LcdStat::MODE).bits() {
+        match (*self & LcdStat::MODE).bits() {
             0 => LcdMode::HBlank,
             1 => LcdMode::VBlank,
             2 => LcdMode::OamScan,
@@ -41,6 +41,13 @@ impl LcdStat {
     }
 
     pub fn set_mode(&self, mode: LcdMode) -> LcdStat {
+        /*debug!("Set mode result {:b}", (*self & !LcdStat::MODE) |
+            LcdStat::from_bits_truncate(match mode {
+                LcdMode::HBlank       => 0,
+                LcdMode::VBlank       => 1,
+                LcdMode::OamScan      => 2,
+                LcdMode::WriteScreen  => 3
+            }));*/
         (*self & !LcdStat::MODE) |
             LcdStat::from_bits_truncate(match mode {
                 LcdMode::HBlank       => 0,
@@ -126,11 +133,16 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
         ctx.ppu_mut().scanline_progress += tcycles;
         let lcd_stat = ctx.ioregs().lcd_stat();
         let mut lcdc_y = ctx.ioregs().lcdc_y();
-        trace!("LCD is enabled.");
+        debug!("LCD is enabled.");
+        debug!("LCD status {:b}", lcd_stat);
+        debug!("Current scanline: {}", lcdc_y);
+        debug!("Scanline progress: {}", ctx.ppu().scanline_progress);
 
         match ctx.ioregs().lcd_stat().get_mode() {
             LcdMode::HBlank       => {
+                debug!("HBlank");
                 if ctx.ppu().scanline_progress > 456 {
+                    debug!("End of scan line {}", lcdc_y);
                     ctx.ppu_mut().scanline_progress -= 456;
                     lcdc_y += 1;
                     ctx.ioregs_mut().set_lcdc_y(lcdc_y);
@@ -141,12 +153,14 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
                     }
 
                     if lcdc_y < 144 {
+                        debug!("Video mode transition from 0 (HBlank) to 2 (OAMScan)");
                         ctx.ioregs_mut().set_lcd_stat(lcd_stat.set_mode(LcdMode::OamScan));
                         if lcd_stat.contains(LcdStat::OAM_INTERRUPT_ENABLE) {
                             ctx.interrupts_mut().send(InterruptFlags::STAT);
                         }
                     }
                     else {
+                        debug!("Video mode transition from 0 (HBlank) to 1 (VBlank)");
                         ctx.ioregs_mut().set_lcd_stat(lcd_stat.set_mode(LcdMode::VBlank));
                         ctx.interrupts_mut().send(InterruptFlags::VBLANK);
                         if lcd_stat.contains(LcdStat::VBLANK_INTERRUPT_ENABLE) {
@@ -156,12 +170,16 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
                 }
             }
             LcdMode::VBlank       => {
+                debug!("VBlank");
                 if ctx.ppu().scanline_progress > 456 {
+                    debug!("End of scan line {}", lcdc_y);
                     ctx.ppu_mut().scanline_progress -= 456;
                     lcdc_y += 1;
                     ctx.ioregs_mut().set_lcdc_y(lcdc_y);
 
                     if lcdc_y > 153 {
+                        debug!("Video mode transition from 1 (VBlank) to 2 (OAMScan)");
+                        ctx.ioregs_mut().set_lcdc_y(0);
                         ctx.ioregs_mut().set_lcd_stat(lcd_stat.set_mode(LcdMode::OamScan));
                         if lcd_stat.contains(LcdStat::OAM_INTERRUPT_ENABLE) {
                             ctx.interrupts_mut().send(InterruptFlags::STAT);
@@ -170,13 +188,17 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
                 }
             }
             LcdMode::OamScan      => {
+                debug!("OAMScan");
                 if ctx.ppu().scanline_progress > 80 {
+                    debug!("Video mode transition from 2 (OAMScan) to 3 (WriteScreen)");
                     ctx.ioregs_mut().set_lcd_stat(lcd_stat.set_mode(LcdMode::WriteScreen))
                 }
             }
             LcdMode::WriteScreen  => {
+                debug!("WriteScreen");
                 //fixed cycles as a stand-in for now, should be variable based on sprites
                 if ctx.ppu().scanline_progress > 248 {
+                    debug!("Video mode transition from 3 (WriteScreen) to 0 (HBlank)");
                     ctx.ioregs_mut().set_lcd_stat(lcd_stat.set_mode(LcdMode::HBlank));
                     if lcd_stat.contains(LcdStat::HBLANK_INTERRUPT_ENABLE) {
                         ctx.interrupts_mut().send(InterruptFlags::STAT)
