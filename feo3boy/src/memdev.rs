@@ -311,6 +311,7 @@ impl MemMappedIo {
             lcd_control: LcdFlags::empty(),
             lcd_status: LcdStat::empty(),
             scroll_y: 0x00,
+            scroll_x: 0x00,
             lcdc_y: 0x00,
             lcdc_y_compare: 0x00,
             dma_addr: 0x00,
@@ -347,7 +348,7 @@ impl MemDevice for MemMappedIo {
             0x40 => self.lcd_control.bits(),
             0x41 => self.lcd_status.bits(),
             0x42 => self.scroll_y,
-            0x43 => 0xff,
+            0x43 => self.scroll_x,
             0x44 => self.lcdc_y,
             0x45 => self.lcdc_y_compare,
             0x46 => self.dma_addr,
@@ -374,7 +375,7 @@ impl MemDevice for MemMappedIo {
             0x40 => self.lcd_control = LcdFlags::from_bits_truncate(value),
             0x41 => self.lcd_status = self.lcd_status.set_writeable(value),
             0x42 => self.scroll_y = value,
-            0x43 => {},
+            0x43 => self.scroll_x = value,
             0x44 => {},
             0x45 => self.lcdc_y_compare = value,
             0x46 => self.dma_addr = value,
@@ -428,6 +429,13 @@ impl IoRegs for MemMappedIo {
     }
     fn set_scroll_y(&mut self, val: u8) {
         self.scroll_y = val;
+    }
+
+    fn scroll_x(&self) -> u8 {
+        self.scroll_x
+    }
+    fn set_scroll_x(&mut self, val: u8) {
+        self.scroll_x = val;
     }
 
     fn lcdc_y(&self) -> u8 {
