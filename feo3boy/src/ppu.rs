@@ -109,7 +109,7 @@ pub trait PpuBackend {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PpuState {
-  screen_buffer: [u8; 92160],
+  screen_buffer: [(u8, u8, u8); 23040],
   scanline_progress: u64
 }
 
@@ -122,13 +122,13 @@ impl PpuState {
 impl Default for PpuState {
   fn default() -> PpuState {
     PpuState {
-      screen_buffer: [0xff; 92160],
+      screen_buffer: [(0xff, 0xff, 0xff); 23040],
       scanline_progress: 0,
     }
   }
 }
 
-pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
+pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) -> Option<&[(u8, u8, u8)]> {
     if ctx.ioregs().lcd_control().contains(LcdFlags::DISPLAY_ENABLE) {
         ctx.ppu_mut().scanline_progress += tcycles;
         let lcd_stat = ctx.ioregs().lcd_stat();
@@ -158,6 +158,7 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
                         if lcd_stat.contains(LcdStat::OAM_INTERRUPT_ENABLE) {
                             ctx.interrupts_mut().send(InterruptFlags::STAT);
                         }
+                        None
                     }
                     else {
                         debug!("Video mode transition from 0 (HBlank) to 1 (VBlank)");
@@ -166,7 +167,11 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
                         if lcd_stat.contains(LcdStat::VBLANK_INTERRUPT_ENABLE) {
                             ctx.interrupts_mut().send(InterruptFlags::STAT);
                         }
+                        Some(&ctx.ppu().screen_buffer)
                     }
+                }
+                else {
+                    None
                 }
             }
             LcdMode::VBlank       => {
@@ -186,6 +191,7 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
                         }
                     }
                 }
+                None
             }
             LcdMode::OamScan      => {
                 debug!("OAMScan");
@@ -193,6 +199,7 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
                     debug!("Video mode transition from 2 (OAMScan) to 3 (WriteScreen)");
                     ctx.ioregs_mut().set_lcd_stat(lcd_stat.set_mode(LcdMode::WriteScreen))
                 }
+                None
             }
             LcdMode::WriteScreen  => {
                 debug!("WriteScreen");
@@ -204,10 +211,12 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
                         ctx.interrupts_mut().send(InterruptFlags::STAT)
                     }
                 }
+                None
             }
         }
     }
     else {
         trace!("LCD is disabled.");
+        None
     }
 }

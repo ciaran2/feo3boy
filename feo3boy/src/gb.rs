@@ -30,10 +30,10 @@ impl Gb {
 
     /// Tick forward by one instruction, executing background and graphics processing
     /// operations as needed.
-    pub fn tick(&mut self) {
+    pub fn tick(&mut self) -> Option<&[(u8, u8, u8)]> {
         gbz80core::tick(self);
         serial::tick(self, 4);
-        ppu::tick(self, 4);
+        ppu::tick(self, 4)
     }
 }
 
