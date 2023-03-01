@@ -109,6 +109,7 @@ pub trait PpuBackend {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PpuState {
+  truecolor_palette: [(u8, u8, u8); 4],
   screen_buffer: [(u8, u8, u8); 23040],
   scanline_progress: u64
 }
@@ -122,10 +123,39 @@ impl PpuState {
 impl Default for PpuState {
   fn default() -> PpuState {
     PpuState {
-      screen_buffer: [(0xff, 0xff, 0xff); 23040],
-      scanline_progress: 0,
+        truecolor_palette: [(0xff, 0xff, 0xff), (0xd3, 0xd3, 0xd3), (0x5a, 0x5a, 0x5a), (0x00, 0x00, 0x00)],
+        screen_buffer: [(0xff, 0xff, 0xff); 23040],
+        scanline_progress: 0,
     }
   }
+}
+
+fn generate_pixel(ctx: &impl PpuContext, x: u8, y: u8) -> (u8, u8, u8) {
+    let in_window = ctx.ioregs().lcd_control().contains(LcdFlags::WINDOW_DISPLAY_ENABLE) &&
+        ctx.ioregs().window_y() <= y && ctx.ioregs().window_x() <= x + 7;
+
+    let tile_map_x = if in_window {
+        x + 7 - ctx.ioregs().window_x()
+    } else {
+        x.wrapping_add(ctx.ioregs().scroll_x())
+    };
+
+    let tile_map_y = if in_window {
+        y - ctx.ioregs().window_y()
+    } else {
+        y.wrapping_add(ctx.ioregs().scroll_y())
+    };
+
+    let tile_map = if in_window {
+        ctx.ioregs().lcd_control().contains(LcdFlags::WINDOW_TILE_MAP_SELECT)
+    } else {
+        ctx.ioregs().lcd_control().contains(LcdFlags::BG_TILE_MAP_SELECT)
+    };
+
+    let tile_id = 32 * (tile_map_y / 8) + (tile_map_x / 8);
+    let tile_pixel = 8 * (tile_map_y % 8) + (tile_map_x % 8);
+
+    (0xff, 0xff, 0xff)
 }
 
 pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) -> Option<&[(u8, u8, u8)]> {
@@ -154,6 +184,7 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) -> Option<&[(u8, u8, u8)]> 
 
                     if lcdc_y < 144 {
                         debug!("Video mode transition from 0 (HBlank) to 2 (OAMScan)");
+                        ctx.oam_mut().mask();
                         ctx.ioregs_mut().set_lcd_stat(lcd_stat.set_mode(LcdMode::OamScan));
                         if lcd_stat.contains(LcdStat::OAM_INTERRUPT_ENABLE) {
                             ctx.interrupts_mut().send(InterruptFlags::STAT);
@@ -197,7 +228,9 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) -> Option<&[(u8, u8, u8)]> 
                 debug!("OAMScan");
                 if ctx.ppu().scanline_progress > 80 {
                     debug!("Video mode transition from 2 (OAMScan) to 3 (WriteScreen)");
+                    ctx.vram_mut().mask();
                     ctx.ioregs_mut().set_lcd_stat(lcd_stat.set_mode(LcdMode::WriteScreen))
+
                 }
                 None
             }
@@ -206,6 +239,8 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) -> Option<&[(u8, u8, u8)]> 
                 //fixed cycles as a stand-in for now, should be variable based on sprites
                 if ctx.ppu().scanline_progress > 248 {
                     debug!("Video mode transition from 3 (WriteScreen) to 0 (HBlank)");
+                    ctx.oam_mut().unmask();
+                    ctx.vram_mut().unmask();
                     ctx.ioregs_mut().set_lcd_stat(lcd_stat.set_mode(LcdMode::HBlank));
                     if lcd_stat.contains(LcdStat::HBLANK_INTERRUPT_ENABLE) {
                         ctx.interrupts_mut().send(InterruptFlags::STAT)

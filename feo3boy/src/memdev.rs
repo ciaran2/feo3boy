@@ -241,6 +241,14 @@ impl<const N: usize> MaskableMem<N> {
         }
     }
 
+    pub fn mask(&mut self) {
+        self.masked = true;
+    }
+
+    pub fn unmask(&mut self) {
+        self.masked = false;
+    }
+
     pub fn bytes(&self) -> &[u8] {
         &self.data
     }
@@ -289,6 +297,7 @@ pub struct MemMappedIo {
     pub lcd_control: LcdFlags,
     pub lcd_status: LcdStat,
     pub scroll_y: u8,
+    pub scroll_x: u8,
     pub lcdc_y: u8,
     pub lcdc_y_compare: u8,
     pub dma_addr: u8,
@@ -527,6 +536,9 @@ pub trait IoRegs {
 
     fn scroll_y(&self) -> u8;
     fn set_scroll_y(&mut self, val: u8);
+
+    fn scroll_x(&self) -> u8;
+    fn set_scroll_x(&mut self, val: u8);
 
     fn lcdc_y(&self) -> u8;
     fn set_lcdc_y(&mut self, val: u8);
