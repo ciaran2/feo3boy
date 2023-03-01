@@ -3,9 +3,22 @@ use std::io::{self, Read, Write};
 
 use clap::{App, Arg};
 use log::info;
+//use pixels::Pixels;
 
 use feo3boy::gb::Gb;
 use feo3boy::memdev::{BiosRom, Cartridge};
+
+fn ascii_render(screen_buffer: &[(u8, u8, u8)]) {
+    let brightness_scale = ".'`^\",:;Il!i><~+_-?][}{1)(|\\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$";
+
+    for line in screen_buffer.chunks(160) {
+        let mut ascii_buffer = Vec::new();
+        for pixel in line {
+            ascii_buffer.push(brightness_scale.as_bytes()[brightness_scale.len() * ((pixel.0 as usize + pixel.1 as usize + pixel.2 as usize) / 3) / 256]);
+        }
+        print!("{}", std::str::from_utf8(&ascii_buffer).unwrap())
+    }
+}
 
 fn main() {
     env_logger::init();
@@ -55,7 +68,10 @@ fn main() {
 
     let mut stdout = io::stdout();
     loop {
-        gb.tick();
+        match gb.tick() {
+            Some(screen_buffer) => ascii_render(screen_buffer),
+            None => (),
+        }
         let bytes = gb.serial.stream.receive_bytes();
         if bytes.len() != 0 {
             for byte in bytes {
