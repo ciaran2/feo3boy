@@ -107,16 +107,53 @@ pub trait PpuBackend {
   fn process_buffer(&self, screen_buffer: &[u8]) -> Result<(), &dyn Error>;
 }
 
+fn get_tile_line(ctx: &impl PpuContext, tile_id: u8, line: u8, high_map: bool) -> Vec<u8> {
+    let base_address = if high_map { 0x1000 } else { 0x0 };
+    let tile_offset = (if high_map { tile_id as i8 as i16} else { tile_id as i16}) as isize;
+
+    let line_address = (base_address + 16 * tile_offset + 2 * line as isize) as usize;
+
+    let low_bits = ctx.vram().bytes()[line_address];
+    let high_bits = ctx.vram().bytes()[line_address + 1];
+
+    let mut output = Vec::new();
+    for i in 0..=7 {
+        let bit = 7 - i;
+        output.push(((low_bits & (1<<bit)) >> bit) + (2 * ((high_bits & (1<<bit)) >> bit)));
+    }
+    
+    output
+}
+
+fn get_object(ctx: &impl PpuContext, i: u8) -> &[u8] {
+    let base_index = i as usize * 4;
+    &ctx.oam().bytes()[base_index..base_index+3]
+}
+
+trait Object {
+    fn y(&self) -> u8;
+    fn x(&self) -> u8;
+    fn tile_id(&self) -> u8;
+    fn bg_priority(&self) -> bool;
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PpuState {
   truecolor_palette: [(u8, u8, u8); 4],
   screen_buffer: [(u8, u8, u8); 23040],
-  scanline_progress: u64
+  scanline_progress: u64,
+  bg_fifo: Vec<u8>,
+  //obj_fifo: Vec<TBD>, //object pixels require extra metadata
 }
 
 impl PpuState {
     pub fn new() -> PpuState {
         Default::default()
+    }
+
+    pub fn scanline_reset(&mut self) {
+        self.bg_fifo.clear();
+        self.scanline_progress -= 456;
     }
 }
 
@@ -126,36 +163,9 @@ impl Default for PpuState {
         truecolor_palette: [(0xff, 0xff, 0xff), (0xd3, 0xd3, 0xd3), (0x5a, 0x5a, 0x5a), (0x00, 0x00, 0x00)],
         screen_buffer: [(0xff, 0xff, 0xff); 23040],
         scanline_progress: 0,
+        bg_fifo: Vec::new(),
     }
   }
-}
-
-fn generate_pixel(ctx: &impl PpuContext, x: u8, y: u8) -> (u8, u8, u8) {
-    let in_window = ctx.ioregs().lcd_control().contains(LcdFlags::WINDOW_DISPLAY_ENABLE) &&
-        ctx.ioregs().window_y() <= y && ctx.ioregs().window_x() <= x + 7;
-
-    let tile_map_x = if in_window {
-        x + 7 - ctx.ioregs().window_x()
-    } else {
-        x.wrapping_add(ctx.ioregs().scroll_x())
-    };
-
-    let tile_map_y = if in_window {
-        y - ctx.ioregs().window_y()
-    } else {
-        y.wrapping_add(ctx.ioregs().scroll_y())
-    };
-
-    let tile_map = if in_window {
-        ctx.ioregs().lcd_control().contains(LcdFlags::WINDOW_TILE_MAP_SELECT)
-    } else {
-        ctx.ioregs().lcd_control().contains(LcdFlags::BG_TILE_MAP_SELECT)
-    };
-
-    let tile_id = 32 * (tile_map_y / 8) + (tile_map_x / 8);
-    let tile_pixel = 8 * (tile_map_y % 8) + (tile_map_x % 8);
-
-    (0xff, 0xff, 0xff)
 }
 
 pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) -> Option<&[(u8, u8, u8)]> {
@@ -173,7 +183,7 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) -> Option<&[(u8, u8, u8)]> 
                 debug!("HBlank");
                 if ctx.ppu().scanline_progress > 456 {
                     debug!("End of scan line {}", lcdc_y);
-                    ctx.ppu_mut().scanline_progress -= 456;
+                    ctx.ppu_mut().scanline_reset();
                     lcdc_y += 1;
                     ctx.ioregs_mut().set_lcdc_y(lcdc_y);
 
