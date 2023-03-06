@@ -41,6 +41,12 @@ fn main() {
                 .takes_value(true)
                 .help("File containing ROM dump"),
         )
+        .arg(
+            Arg::with_name("ascii-video")
+                .long("ascii-video")
+                .takes_value(false)
+                .help("File containing ROM dump"),
+        )
         .get_matches();
 
     let bios = match argparser.value_of("bios") {
@@ -69,7 +75,7 @@ fn main() {
     let mut stdout = io::stdout();
     loop {
         match gb.tick() {
-            Some(screen_buffer) => ascii_render(screen_buffer),
+            Some(screen_buffer) => if argparser.is_present("ascii-video") { ascii_render(screen_buffer) },
             None => (),
         }
         let bytes = gb.serial.stream.receive_bytes();
