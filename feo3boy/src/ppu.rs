@@ -73,13 +73,13 @@ bitflags! {
 
         const OBJ_SIZE = 0b00000100;
 
-        const BG_TILE_MAP_SELECT = 0b00001000;
+        const BG_TILE_MAP = 0b00001000;
 
-        const BG_TILE_DATA_SELECT = 0b00010000;
+        const BG_TILE_DATA = 0b00010000;
 
-        const WINDOW_DISPLAY_ENABLE = 0b00100000;
+        const WINDOW_ENABLE = 0b00100000;
 
-        const WINDOW_TILE_MAP_SELECT = 0b01000000;
+        const WINDOW_TILE_MAP = 0b01000000;
 
         const DISPLAY_ENABLE = 0b10000000;
     }
@@ -107,9 +107,13 @@ pub trait PpuBackend {
   fn process_buffer(&self, screen_buffer: &[u8]) -> Result<(), &dyn Error>;
 }
 
-fn get_tile_line(ctx: &impl PpuContext, tile_id: u8, line: u8, high_map: bool) -> Vec<u8> {
-    let base_address = if high_map { 0x1000 } else { 0x0 };
-    let tile_offset = (if high_map { tile_id as i8 as i16} else { tile_id as i16}) as isize;
+pub fn palette_lookup(palette: u8, color: u8) -> usize {
+    ((palette & (3 << color * 2)) >> color * 2) as usize
+}
+
+fn get_tile_line(ctx: &impl PpuContext, tile_id: u8, line: u8, high_data: bool) -> Vec<u8> {
+    let base_address = if high_data { 0x1000 } else { 0x0 };
+    let tile_offset = (if high_data { tile_id as i8 as i16} else { tile_id as i16}) as isize;
 
     let line_address = (base_address + 16 * tile_offset + 2 * line as isize) as usize;
 
@@ -141,8 +145,11 @@ trait Object {
 pub struct PpuState {
   truecolor_palette: [(u8, u8, u8); 4],
   screen_buffer: [(u8, u8, u8); 23040],
-  scanline_progress: u64,
+  scanline_ticks: u64,
+  scanline_x: u8,
+  fetcher_x: usize,
   bg_fifo: Vec<u8>,
+  in_window: bool,
   //obj_fifo: Vec<TBD>, //object pixels require extra metadata
 }
 
@@ -153,7 +160,10 @@ impl PpuState {
 
     pub fn scanline_reset(&mut self) {
         self.bg_fifo.clear();
-        self.scanline_progress -= 456;
+        self.scanline_ticks -= 456;
+        self.scanline_x = 0;
+        self.fetcher_x = 0;
+        self.in_window = false;
     }
 }
 
@@ -162,26 +172,49 @@ impl Default for PpuState {
     PpuState {
         truecolor_palette: [(0xff, 0xff, 0xff), (0xd3, 0xd3, 0xd3), (0x5a, 0x5a, 0x5a), (0x00, 0x00, 0x00)],
         screen_buffer: [(0xff, 0xff, 0xff); 23040],
-        scanline_progress: 0,
+        scanline_ticks: 0,
+        scanline_x: 0,
+        fetcher_x: 0,
         bg_fifo: Vec::new(),
+        in_window: false,
     }
   }
 }
 
+pub fn bg_tile_fetch(ctx: &mut impl PpuContext) {
+    let tile_map_flag = if ctx.ppu().in_window { LcdFlags::WINDOW_TILE_MAP }
+                        else { LcdFlags::BG_TILE_MAP };
+
+    let scroll_offset = if ctx.ppu().in_window { 0 } else { ctx.ioregs().scroll_x() as usize / 8 };
+
+    let tile_id_base = if ctx.ioregs().lcd_control().contains(tile_map_flag) {0x1800} else {0x1c00};
+
+    let tile_id_offset = (ctx.ioregs().lcdc_y() as usize / 8) * 32 + ctx.ppu().fetcher_x + scroll_offset;
+
+    let tile_id = ctx.vram().bytes()[tile_id_base + tile_id_offset];
+
+    let line = if ctx.ppu().in_window { ctx.ioregs().lcdc_y() - ctx.ioregs().window_y() }
+               else { ctx.ioregs().lcdc_y().wrapping_add(ctx.ioregs().scroll_y()) } & 0x7;
+
+    let mut tile_line = get_tile_line(ctx, tile_id, line, ctx.ioregs().lcd_control().contains(LcdFlags::BG_TILE_DATA));
+
+    ctx.ppu_mut().bg_fifo.append(&mut tile_line);
+}
+
 pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) -> Option<&[(u8, u8, u8)]> {
     if ctx.ioregs().lcd_control().contains(LcdFlags::DISPLAY_ENABLE) {
-        ctx.ppu_mut().scanline_progress += tcycles;
+        ctx.ppu_mut().scanline_ticks += tcycles;
         let lcd_stat = ctx.ioregs().lcd_stat();
         let mut lcdc_y = ctx.ioregs().lcdc_y();
         debug!("LCD is enabled.");
         debug!("LCD status {:b}", lcd_stat);
         debug!("Current scanline: {}", lcdc_y);
-        debug!("Scanline progress: {}", ctx.ppu().scanline_progress);
+        debug!("Scanline progress: {}", ctx.ppu().scanline_ticks);
 
         match ctx.ioregs().lcd_stat().get_mode() {
             LcdMode::HBlank       => {
                 debug!("HBlank");
-                if ctx.ppu().scanline_progress > 456 {
+                if ctx.ppu().scanline_ticks > 456 {
                     debug!("End of scan line {}", lcdc_y);
                     ctx.ppu_mut().scanline_reset();
                     lcdc_y += 1;
@@ -217,9 +250,9 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) -> Option<&[(u8, u8, u8)]> 
             }
             LcdMode::VBlank       => {
                 debug!("VBlank");
-                if ctx.ppu().scanline_progress > 456 {
+                if ctx.ppu().scanline_ticks > 456 {
                     debug!("End of scan line {}", lcdc_y);
-                    ctx.ppu_mut().scanline_progress -= 456;
+                    ctx.ppu_mut().scanline_ticks -= 456;
                     lcdc_y += 1;
                     ctx.ioregs_mut().set_lcdc_y(lcdc_y);
 
@@ -236,7 +269,7 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) -> Option<&[(u8, u8, u8)]> 
             }
             LcdMode::OamScan      => {
                 debug!("OAMScan");
-                if ctx.ppu().scanline_progress > 80 {
+                if ctx.ppu().scanline_ticks > 80 {
                     debug!("Video mode transition from 2 (OAMScan) to 3 (WriteScreen)");
                     ctx.vram_mut().mask();
                     ctx.ioregs_mut().set_lcd_stat(lcd_stat.set_mode(LcdMode::WriteScreen))
@@ -246,9 +279,34 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) -> Option<&[(u8, u8, u8)]> 
             }
             LcdMode::WriteScreen  => {
                 debug!("WriteScreen");
-                //fixed cycles as a stand-in for now, should be variable based on sprites
-                if ctx.ppu().scanline_progress > 248 {
-                    debug!("Video mode transition from 3 (WriteScreen) to 0 (HBlank)");
+
+                for _i in 0..tcycles {
+                    if ctx.ioregs().lcd_control().contains(LcdFlags::WINDOW_ENABLE) &&
+                        ctx.ppu().scanline_x + 7 == ctx.ioregs().window_x() &&
+                        lcdc_y >= ctx.ioregs().window_y() {
+                        ctx.ppu_mut().bg_fifo.clear();
+                        ctx.ppu_mut().in_window = true;
+                    }
+
+                    if ctx.ppu().bg_fifo.len() < 8 {
+                        bg_tile_fetch(ctx);
+                    }
+
+                    let buffer_index = (lcdc_y as usize * 160 + ctx.ppu().scanline_x as usize);
+                    let bg_color = ctx.ppu_mut().bg_fifo.pop().unwrap();
+
+                    //standin for later checks against object pixel properties
+                    if true {
+                        let gb_color = palette_lookup(ctx.ioregs().bg_palette(), bg_color);
+                        let truecolor = ctx.ppu().truecolor_palette[gb_color];
+                        ctx.ppu_mut().screen_buffer[buffer_index] =  truecolor;
+                    }
+
+                    ctx.ppu_mut().scanline_x += 1;
+                }
+
+                if ctx.ppu().scanline_x > 159 {
+                    debug!("Video mode transition from 3 (WriteScreen) to 0 (HBlank) after {} cycles.", ctx.ppu().scanline_ticks - 80);
                     ctx.oam_mut().unmask();
                     ctx.vram_mut().unmask();
                     ctx.ioregs_mut().set_lcd_stat(lcd_stat.set_mode(LcdMode::HBlank));
