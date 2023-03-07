@@ -8,5 +8,7 @@ edition = "2018"
 [dependencies]
 clap = "2"
 env_logger = "0.9"
+pixels = "0.11.0"
+winit = "0.28.2"
 feo3boy = { path = "../feo3boy" }
 log = "0.4"
