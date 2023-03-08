@@ -111,9 +111,9 @@ pub fn palette_lookup(palette: u8, color: u8) -> usize {
     ((palette & (3 << color * 2)) >> color * 2) as usize
 }
 
-fn get_tile_line(ctx: &impl PpuContext, tile_id: u8, line: u8, high_data: bool) -> Vec<u8> {
-    let base_address = if high_data { 0x1000 } else { 0x0 };
-    let tile_offset = (if high_data { tile_id as i8 as i16} else { tile_id as i16}) as isize;
+fn get_tile_line(ctx: &impl PpuContext, tile_id: u8, line: u8, low_data: bool) -> Vec<u8> {
+    let base_address = if low_data { 0x0 } else { 0x1000 };
+    let tile_offset = (if low_data { tile_id as i16 } else { tile_id as i8 as i16 }) as isize;
 
     let line_address = (base_address + 16 * tile_offset + 2 * line as isize) as usize;
 
@@ -122,7 +122,7 @@ fn get_tile_line(ctx: &impl PpuContext, tile_id: u8, line: u8, high_data: bool) 
 
     let mut output = Vec::new();
     for i in 0..=7 {
-        let bit = 7 - i;
+        let bit = i;
         output.push(((low_bits & (1<<bit)) >> bit) + (2 * ((high_bits & (1<<bit)) >> bit)));
     }
     
@@ -187,7 +187,7 @@ pub fn bg_tile_fetch(ctx: &mut impl PpuContext) {
 
     let scroll_offset = if ctx.ppu().in_window { 0 } else { ctx.ioregs().scroll_x() as usize / 8 };
 
-    let tile_id_base = if ctx.ioregs().lcd_control().contains(tile_map_flag) {0x1800} else {0x1c00};
+    let tile_id_base = if ctx.ioregs().lcd_control().contains(tile_map_flag) {0x1c00} else {0x1800};
 
     let tile_id_offset = (ctx.ioregs().lcdc_y() as usize / 8) * 32 + ctx.ppu().fetcher_x + scroll_offset;
 
@@ -196,9 +196,13 @@ pub fn bg_tile_fetch(ctx: &mut impl PpuContext) {
     let line = if ctx.ppu().in_window { ctx.ioregs().lcdc_y() - ctx.ioregs().window_y() }
                else { ctx.ioregs().lcdc_y().wrapping_add(ctx.ioregs().scroll_y()) } & 0x7;
 
+    trace!("Fetching line {} of tile {}", line, tile_id);
+
     let mut tile_line = get_tile_line(ctx, tile_id, line, ctx.ioregs().lcd_control().contains(LcdFlags::BG_TILE_DATA));
 
     ctx.ppu_mut().bg_fifo.append(&mut tile_line);
+
+    ctx.ppu_mut().fetcher_x += 1;
 }
 
 pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) -> Option<&[(u8, u8, u8)]> {
