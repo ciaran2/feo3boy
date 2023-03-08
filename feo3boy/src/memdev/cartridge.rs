@@ -282,7 +282,7 @@ const ROM_BANK_SIZE: usize = 0x4000;
 pub type RomBank = ReadOnly<[u8; ROM_BANK_SIZE]>;
 
 /// Ram banks are 0x2000 = 8 KiB.
-const RAM_BANK_SIZE: usize = 0x4000;
+const RAM_BANK_SIZE: usize = 0x2000;
 
 /// A single 8 KiB ram bank within a cartridge.
 pub type RamBank = [u8; RAM_BANK_SIZE];
@@ -291,9 +291,9 @@ pub type RamBank = [u8; RAM_BANK_SIZE];
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RomOnly {
     /// Rom banks. Both are always accessible.
-    rom_banks: Box<[RomBank; 2]>,
+    pub rom_banks: Box<[RomBank; 2]>,
     /// Ram bank, may or may not be included.
-    ram_bank: Option<Box<RamBank>>,
+    pub ram_bank: Option<Box<RamBank>>,
     /// Whether ram is saved when the device is powered off. (Does the ram have a battery?)
     save_ram: bool,
 }
@@ -411,34 +411,99 @@ impl Mbc1Rom {
         }
     }
 
-    /// Convenient access to the "fixed" lower rom bank. This bank only changes in Advanced rom
-    /// mode.
-    fn lower_bank(&self) -> &RomBank {
+    /// Whether ram is enabled for reading/writing. Otherwise writes are ignored and reads return
+    /// dummy values.
+    #[inline]
+    pub fn ram_enable(&self) -> bool {
+        self.ram_enable
+    }
+
+    /// Rom bank select. This is the low-order 5 bits (0..5) of the rom bank.
+    #[inline]
+    pub fn rom_bank(&self) -> NonZeroU8 {
+        self.rom_bank
+    }
+
+    /// Bank set is a 2 bit register that either selects the ram-bank or the high-order 2 bits
+    /// (5..7) of the rom bank, depending on the mode register. Note that because these two bits
+    /// are shared between rom and ram, if mode is 0, only ram bank 0 is accessible, and if mode is
+    /// 1, only rom banks 0..32 are accessible. Note also that the behavior depends on the relative
+    /// size of ram and rom.
+    #[inline]
+    pub fn bank_set(&self) -> u8 {
+        self.bank_set
+    }
+
+    /// Switches between simple and advanced banking mode.
+    ///
+    /// In simple banking mode, ram banking is disabled, and rom banking only affects the 4000-7FFF
+    /// range.
+    ///
+    /// In advanced mode the banking behavior depends on the size of the ram/rom. If the cartridge
+    /// is large-ram, advanced banking mode switches between ram banks using the bank_set register.
+    /// If the cartridge is large-rom, the bank set register instead applies to both the high order
+    /// bits of the bank set *and* to select the "fixed" bank.
+    #[inline]
+    pub fn advanced_banking_mode(&self) -> bool {
+        self.advanced_banking_mode
+    }
+
+    /// Get the index of the lower rom bank currently selected.
+    #[inline]
+    pub fn selected_lower_bank(&self) -> usize {
         if self.advanced_banking_mode {
-            let bank = (self.bank_set as usize * 32) % self.rom_banks.len();
-            &self.rom_banks[bank]
+            (self.bank_set as usize * 32) % self.rom_banks.len()
         } else {
-            &self.rom_banks[0]
+            0
         }
     }
 
-    /// Get the currently selected rom bank. This will never be bank 0, 32, 64, or 96.
-    fn upper_bank(&self) -> &RomBank {
+    /// Get the index of the upper rom bank currently selected.
+    #[inline]
+    pub fn selected_upper_bank(&self) -> usize {
         let low_order = self.rom_bank.get();
         let high_order = self.bank_set << 5;
-        let rom = (low_order | high_order) as usize % self.rom_banks.len();
-        &self.rom_banks[rom]
+        (low_order | high_order) as usize % self.rom_banks.len()
+    }
+
+    /// Get the currently selected ram bank indes, regardless of whether ram is enabled.
+    #[inline]
+    pub fn selected_ram_bank(&self) -> usize {
+        if self.ram_banks.is_empty() || !self.advanced_banking_mode {
+            0
+        } else {
+            self.bank_set as usize % self.ram_banks.len()
+        }
+    }
+
+    /// Get a reference to the set of rom banks.
+    pub fn rom_banks(&self) -> &[RomBank] {
+        self.rom_banks.as_ref()
+    }
+
+    /// Get a reference to the set of rom banks.
+    pub fn ram_banks(&self) -> &[RamBank] {
+        self.ram_banks.as_ref()
+    }
+
+    /// Convenient access to the "fixed" lower rom bank. This bank only changes in Advanced rom
+    /// mode.
+    pub fn lower_bank(&self) -> &RomBank {
+        &self.rom_banks[self.selected_lower_bank()]
+    }
+
+    /// Get the currently selected rom bank. This will never be bank 0, 32, 64, or 96.
+    pub fn upper_bank(&self) -> &RomBank {
+        &self.rom_banks[self.selected_upper_bank()]
     }
 
     /// Gets the currently selected ram bank, if the rom has ram and ram is enabled.
-    fn ram_bank(&self) -> Option<&RamBank> {
+    pub fn ram_bank(&self) -> Option<&RamBank> {
         if self.ram_banks.is_empty() || !self.ram_enable {
             None
-        } else if self.advanced_banking_mode {
-            let bank = self.bank_set as usize % self.ram_banks.len();
-            Some(&self.ram_banks[bank])
         } else {
-            Some(&self.ram_banks[0])
+            let bank = self.selected_ram_bank();
+            Some(&self.ram_banks[bank])
         }
     }
 
@@ -446,11 +511,9 @@ impl Mbc1Rom {
     fn ram_bank_mut(&mut self) -> Option<&mut RamBank> {
         if self.ram_banks.is_empty() || !self.ram_enable {
             None
-        } else if self.advanced_banking_mode {
-            let bank = self.bank_set as usize % self.ram_banks.len();
-            Some(&mut self.ram_banks[bank])
         } else {
-            Some(&mut self.ram_banks[0])
+            let bank = self.selected_ram_bank();
+            Some(&mut self.ram_banks[bank])
         }
     }
 }

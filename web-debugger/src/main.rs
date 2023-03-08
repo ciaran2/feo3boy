@@ -32,6 +32,23 @@ mod romload;
 mod serial;
 mod speedctl;
 
+trait CompareAssign {
+    /// "Not Equals - Assign". Apply a change to self. If `self == val`, return `false`
+    /// (no change applied), otherwise set self to `val` and return `true` (change made).
+    fn ne_assign(&mut self, val: Self) -> bool;
+}
+
+impl<T: PartialEq> CompareAssign for T {
+    fn ne_assign(&mut self, val: Self) -> bool {
+        if *self != val {
+            *self = val;
+            true
+        } else {
+            false
+        }
+    }
+}
+
 const SAVED_STATE_KEY: &str = "feo3boy.webdebugger.savestate-v1";
 
 /// Saved debugger state.
@@ -382,7 +399,7 @@ impl Component for App {
                                     </div>
                                     <SpeedCtl speed={self.auto_tick_speed} {changespeed} />
                                 </div>
-                                <Regs regs={self.gb.cpustate.regs.clone()} />
+                                <Regs regs={self.gb.cpustate.regs.clone()} ime={self.gb.cpustate.interrupt_master_enable} />
                             </div>
                             <div class="column">
                                 <Derefs derefs={ComputedDerefs::from(&*self.gb)} />

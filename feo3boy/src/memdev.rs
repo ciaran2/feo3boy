@@ -1,12 +1,13 @@
 use std::convert::TryFrom;
 use std::fmt;
+use std::ops::Deref;
 
 use log::trace;
 use thiserror::Error;
 
 use crate::interrupts::{InterruptContext, InterruptEnable, InterruptFlags, Interrupts};
 
-pub use cartridge::{Cartridge, Mbc1Rom, ParseCartridgeError, RamBank, RomBank};
+pub use cartridge::{Cartridge, Mbc1Rom, ParseCartridgeError, RamBank, RomBank, RomOnly};
 
 mod cartridge;
 
@@ -93,6 +94,14 @@ pub trait MemContext {
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub struct ReadOnly<M>(M);
 
+impl<M> Deref for ReadOnly<M> {
+    type Target = M;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 impl<M> ReadOnly<M> {
     /// Constructs a ReadOnly memory device that wraps the given underlying memory.
     pub fn new(mem: M) -> Self {
@@ -159,10 +168,13 @@ impl BiosRom {
     pub fn try_from_slice(data: &[u8]) -> Result<Self, BiosSizeError> {
         Self::try_from(data)
     }
+}
 
-    /// View the contents of the memory as a slice.
-    pub fn bytes(&self) -> &[u8] {
-        &self.0 .0[..]
+impl Deref for BiosRom {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
     }
 }
 
