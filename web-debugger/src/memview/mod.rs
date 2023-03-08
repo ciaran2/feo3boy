@@ -128,6 +128,23 @@ impl Memview {
                 </table>
             </div>
             <div class="line">
+                {addr(0xff40)}
+                <table class="namedbytes">
+                    <thead>
+                        <tr>
+                            <th>{"LCD Control"}</th>
+                            <th>{"LCD Status"}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td class="byte">{hexbyte(io.lcd_control.bits())}</td>
+                            <td class="byte">{hexbyte(io.lcd_status.bits())}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="line">
                 {addr(0xff0f)}
                 <div class="desc">{"Interrupt Vector"}</div>
                 {view_interrupt_flags(io.interrupt_flags)}
