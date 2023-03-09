@@ -1,9 +1,10 @@
-use feo3boy::gbz80core::{Flags, Regs as CpuRegs};
+use feo3boy::gbz80core::{Flags, InterruptMasterState, Regs as CpuRegs};
 use yew::prelude::*;
 
 #[derive(Properties, PartialEq)]
 pub struct Props {
     pub regs: CpuRegs,
+    pub ime: InterruptMasterState,
 }
 
 pub enum Msg {}
@@ -135,6 +136,14 @@ impl Component for Regs {
                             </tbody>
                         </table>
                     </div>
+                </div>
+                <div class="ime">
+                    <h4>{"IME:"}</h4>
+                    <span>{ match ctx.props().ime {
+                        InterruptMasterState::Disabled => "Disabled",
+                        InterruptMasterState::Enabled => "Enabled",
+                        InterruptMasterState::Pending => "Enable After Next Instr",
+                    } }</span>
                 </div>
             </div>
         }
