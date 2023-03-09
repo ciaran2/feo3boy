@@ -149,6 +149,7 @@ pub struct PpuState {
   scanline_x: u8,
   fetcher_x: usize,
   bg_fifo: Vec<u8>,
+  bg_discard: u8,
   in_window: bool,
   //obj_fifo: Vec<TBD>, //object pixels require extra metadata
 }
@@ -163,6 +164,7 @@ impl PpuState {
         self.scanline_ticks -= 456;
         self.scanline_x = 0;
         self.fetcher_x = 0;
+        self.bg_discard = 0;
         self.in_window = false;
     }
 }
@@ -176,6 +178,7 @@ impl Default for PpuState {
         scanline_x: 0,
         fetcher_x: 0,
         bg_fifo: Vec::new(),
+        bg_discard: 0,
         in_window: false,
     }
   }
@@ -189,7 +192,8 @@ pub fn bg_tile_fetch(ctx: &mut impl PpuContext) {
 
     let tile_id_base = if ctx.ioregs().lcd_control().contains(tile_map_flag) {0x1c00} else {0x1800};
 
-    let tile_id_offset = (ctx.ioregs().lcdc_y() as usize / 8) * 32 + ctx.ppu().fetcher_x + scroll_offset;
+    let tile_id_offset = ((ctx.ioregs().lcdc_y() as usize / 8) & 0x1f) * 32 + ((ctx.ppu().fetcher_x + scroll_offset) & 0x1f);
+    debug!("tile_id_offset: {}", tile_id_offset);
 
     let tile_id = ctx.vram().bytes()[tile_id_base + tile_id_offset];
 
@@ -233,6 +237,7 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) -> Option<&[(u8, u8, u8)]> 
                         debug!("Video mode transition from 0 (HBlank) to 2 (OAMScan)");
                         ctx.oam_mut().mask();
                         ctx.ioregs_mut().set_lcd_stat(lcd_stat.set_mode(LcdMode::OamScan));
+                        ctx.ppu_mut().bg_discard = ctx.ioregs().scroll_x() & 0x7;
                         if lcd_stat.contains(LcdStat::OAM_INTERRUPT_ENABLE) {
                             ctx.interrupts_mut().send(InterruptFlags::STAT);
                         }
@@ -264,6 +269,7 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) -> Option<&[(u8, u8, u8)]> 
                         debug!("Video mode transition from 1 (VBlank) to 2 (OAMScan)");
                         ctx.ioregs_mut().set_lcdc_y(0);
                         ctx.ioregs_mut().set_lcd_stat(lcd_stat.set_mode(LcdMode::OamScan));
+                        ctx.ppu_mut().bg_discard = ctx.ioregs().scroll_x() & 0x7;
                         if lcd_stat.contains(LcdStat::OAM_INTERRUPT_ENABLE) {
                             ctx.interrupts_mut().send(InterruptFlags::STAT);
                         }
@@ -294,6 +300,12 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) -> Option<&[(u8, u8, u8)]> 
 
                     if ctx.ppu().bg_fifo.len() < 8 {
                         bg_tile_fetch(ctx);
+                    }
+
+                    if !ctx.ppu().in_window && ctx.ppu().scanline_x == 0 {
+                        for _i in 0..ctx.ppu().bg_discard {
+                            ctx.ppu_mut().bg_fifo.pop();
+                        }
                     }
 
                     let buffer_index = (lcdc_y as usize * 160 + ctx.ppu().scanline_x as usize);
