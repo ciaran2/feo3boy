@@ -1,7 +1,8 @@
 use crate::gbz80core::{self, CpuContext, Gbz80State};
 use crate::interrupts::InterruptContext;
-use crate::memdev::{BiosRom, Cartridge, GbMmu, IoRegsContext, MemContext};
+use crate::memdev::{BiosRom, Cartridge, GbMmu, MaskableMem, IoRegsContext, MemContext};
 use crate::serial::{self, SerialContext, SerialState};
+use crate::ppu::{self, PpuState, PpuContext};
 
 /// Represents a "real" gameboy, by explicitly using the GbMmu for memory.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -12,6 +13,8 @@ pub struct Gb {
     pub mmu: Box<GbMmu>,
     /// State of serial data transfer.
     pub serial: SerialState,
+    /// State of video rendering
+    pub ppu: PpuState,
 }
 
 impl Gb {
@@ -21,14 +24,16 @@ impl Gb {
             cpustate: Gbz80State::new(),
             mmu: Box::new(GbMmu::new(bios, cart)),
             serial: SerialState::new(),
+            ppu: PpuState::new(),
         }
     }
 
     /// Tick forward by one instruction, executing background and graphics processing
     /// operations as needed.
-    pub fn tick(&mut self) {
+    pub fn tick(&mut self) -> Option<&[(u8, u8, u8)]> {
         gbz80core::tick(self);
         serial::tick(self, 4);
+        ppu::tick(self, 4)
     }
 }
 
@@ -101,4 +106,30 @@ impl SerialContext for Gb {
     fn serial_mut(&mut self) -> &mut SerialState {
         &mut self.serial
     }
+}
+
+impl PpuContext for Gb {
+    #[inline]
+    fn ppu(&self) -> &PpuState {
+        &self.ppu
+    }
+
+    fn ppu_mut(&mut self) -> &mut PpuState {
+        &mut self.ppu
+    }
+
+    fn vram(&self) -> &MaskableMem<0x2000> {
+        &self.mmu.vram
+    }
+    fn vram_mut(&mut self) -> &mut MaskableMem<0x2000> {
+        &mut self.mmu.vram
+    }
+    
+    fn oam(&self) -> &MaskableMem<160> {
+        &self.mmu.oam
+    }
+    fn oam_mut(&mut self) -> &mut MaskableMem<160> {
+        &mut self.mmu.oam
+    }
+    
 }

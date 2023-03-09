@@ -6,6 +6,7 @@ use log::trace;
 use thiserror::Error;
 
 use crate::interrupts::{InterruptContext, InterruptEnable, InterruptFlags, Interrupts};
+use crate::ppu::{LcdFlags, LcdStat};
 
 pub use cartridge::{Cartridge, Mbc1Rom, ParseCartridgeError, RamBank, RomBank, RomOnly};
 
@@ -238,6 +239,54 @@ impl<const N: usize> MemDevice for [u8; N] {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MaskableMem<const N: usize> {
+    data: [u8; N],
+    masked: bool,
+}
+
+impl<const N: usize> MaskableMem<N> {
+    pub fn new() -> Self {
+        MaskableMem {
+            data: [0; N],
+            masked: false,
+        }
+    }
+
+    pub fn mask(&mut self) {
+        self.masked = true;
+    }
+
+    pub fn unmask(&mut self) {
+        self.masked = false;
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.data
+    }
+
+    pub fn bytes_mut(&mut self) -> &mut [u8] {
+        &mut self.data
+    }
+}
+
+impl<const N: usize> MemDevice for MaskableMem<N> {
+    fn read(&self, addr: Addr) -> u8 {
+        if !self.masked {
+            self.data.read(addr)
+        }
+        else {
+            0xff
+        }
+    }
+
+    fn write(&mut self, addr: Addr, value: u8) {
+        if !self.masked {
+            self.data.write(addr, value)
+        }
+    }
+}
+
 // This makes sure that Box<dyn MemDevice> implements MemDevice (as well as Box<Anything that
 // implements MemDevice>).
 impl<D: MemDevice + ?Sized> MemDevice for Box<D> {
@@ -256,6 +305,19 @@ pub struct MemMappedIo {
     pub serial_data: u8,
     pub serial_control: u8,
     pub bios_enabled: bool,
+    // ppu status and settings
+    pub lcd_control: LcdFlags,
+    pub lcd_status: LcdStat,
+    pub scroll_y: u8,
+    pub scroll_x: u8,
+    pub lcdc_y: u8,
+    pub lcdc_y_compare: u8,
+    pub dma_addr: u8,
+    pub bg_palette: u8,
+    pub obj0_palette: u8,
+    pub obj1_palette: u8,
+    pub window_y: u8,
+    pub window_x: u8,
     pub interrupt_flags: InterruptFlags,
 }
 
@@ -266,6 +328,19 @@ impl MemMappedIo {
             serial_data: 0x00,
             serial_control: 0x00,
             bios_enabled: true,
+            // ppu status and settings
+            lcd_control: LcdFlags::empty(),
+            lcd_status: LcdStat::empty(),
+            scroll_y: 0x00,
+            scroll_x: 0x00,
+            lcdc_y: 0x00,
+            lcdc_y_compare: 0x00,
+            dma_addr: 0x00,
+            bg_palette: 0x00,
+            obj0_palette: 0x00,
+            obj1_palette: 0x00,
+            window_y: 0x00,
+            window_x: 0x00,
             interrupt_flags: InterruptFlags::empty(),
         }
     }
@@ -290,7 +365,20 @@ impl MemDevice for MemMappedIo {
             0x02 => self.serial_control,
             0x03..=0x0e => 0xff,
             0x0f => self.interrupt_flags.bits(),
-            0x10..=0x4f => 0xff,
+            0x10..=0x3f => 0xff,
+            0x40 => self.lcd_control.bits(),
+            0x41 => self.lcd_status.bits(),
+            0x42 => self.scroll_y,
+            0x43 => self.scroll_x,
+            0x44 => self.lcdc_y,
+            0x45 => self.lcdc_y_compare,
+            0x46 => self.dma_addr,
+            0x47 => self.bg_palette,
+            0x48 => self.obj0_palette,
+            0x49 => self.obj1_palette,
+            0x4a => self.window_y,
+            0x4b => self.window_x,
+            0x4c..=0x4f => 0xff,
             0x50 => self.bios_enabled as u8,
             0x51..=0x7f => 0xff,
             _ => panic!("Address {} out of range for Mem Mapped IO", addr),
@@ -304,7 +392,20 @@ impl MemDevice for MemMappedIo {
             0x02 => self.serial_control = value,
             0x03..=0x0e => {}
             0x0f => self.interrupt_flags = InterruptFlags::from_bits_truncate(value),
-            0x10..=0x4f => {}
+            0x10..=0x3f => {},
+            0x40 => self.lcd_control = LcdFlags::from_bits_truncate(value),
+            0x41 => self.lcd_status = self.lcd_status.set_writeable(value),
+            0x42 => self.scroll_y = value,
+            0x43 => self.scroll_x = value,
+            0x44 => {},
+            0x45 => self.lcdc_y_compare = value,
+            0x46 => self.dma_addr = value,
+            0x47 => self.bg_palette = value,
+            0x48 => self.obj0_palette = value,
+            0x49 => self.obj1_palette = value,
+            0x4a => self.window_y = value,
+            0x4b => self.window_x = value,
+            0x4c..=0x4f => {},
             0x50 => {
                 if value & 1 != 0 {
                     self.bios_enabled = false;
@@ -331,6 +432,87 @@ impl IoRegs for MemMappedIo {
 
     fn set_serial_control(&mut self, val: u8) {
         self.serial_control = val;
+    }
+
+    fn lcd_control(&self) -> LcdFlags {
+        self.lcd_control
+    }
+
+    fn lcd_stat(&self) -> LcdStat {
+        self.lcd_status
+    }
+    fn set_lcd_stat(&mut self, val: LcdStat) {
+        self.lcd_status = val;
+    }
+
+    fn scroll_y(&self) -> u8 {
+        self.scroll_y
+    }
+    fn set_scroll_y(&mut self, val: u8) {
+        self.scroll_y = val;
+    }
+
+    fn scroll_x(&self) -> u8 {
+        self.scroll_x
+    }
+    fn set_scroll_x(&mut self, val: u8) {
+        self.scroll_x = val;
+    }
+
+    fn lcdc_y(&self) -> u8 {
+        self.lcdc_y
+    }
+    fn set_lcdc_y(&mut self, val: u8) {
+        self.lcdc_y = val;
+    }
+
+    fn lcdc_y_compare(&self) -> u8 {
+        self.lcdc_y_compare
+    }
+    fn set_lcdc_y_compare(&mut self, val: u8) {
+        self.lcdc_y_compare = val;
+    }
+
+    fn dma_addr(&self) -> u8 {
+        self.dma_addr
+    }
+    fn set_dma_addr(&mut self, val: u8) {
+        self.dma_addr = val;
+    }
+
+    fn bg_palette(&self) -> u8 {
+        self.bg_palette
+    }
+    fn set_bg_palette(&mut self, val: u8) {
+        self.bg_palette = val;
+    }
+
+    fn obj0_palette(&self) -> u8 {
+        self.obj0_palette
+    }
+    fn set_obj0_palette(&mut self, val: u8) {
+        self.obj0_palette = val;
+    }
+
+    fn obj1_palette(&self) -> u8 {
+        self.obj1_palette
+    }
+    fn set_obj1_palette(&mut self, val: u8) {
+        self.obj1_palette = val;
+    }
+
+    fn window_y(&self) -> u8 {
+        self.window_y
+    }
+    fn set_window_y(&mut self, val: u8) {
+        self.window_y = val;
+    }
+
+    fn window_x(&self) -> u8 {
+        self.window_x
+    }
+    fn set_window_x(&mut self, val: u8) {
+        self.window_x = val;
     }
 }
 
@@ -359,6 +541,40 @@ pub trait IoRegs {
     /// Set the current value of the serial control register.
     fn set_serial_control(&mut self, val: u8);
 
+    fn lcd_control(&self) -> LcdFlags;
+
+    fn lcd_stat(&self) -> LcdStat;
+    fn set_lcd_stat(&mut self, val: LcdStat);
+
+    fn scroll_y(&self) -> u8;
+    fn set_scroll_y(&mut self, val: u8);
+
+    fn scroll_x(&self) -> u8;
+    fn set_scroll_x(&mut self, val: u8);
+
+    fn lcdc_y(&self) -> u8;
+    fn set_lcdc_y(&mut self, val: u8);
+
+    fn lcdc_y_compare(&self) -> u8;
+    fn set_lcdc_y_compare(&mut self, val: u8);
+
+    fn dma_addr(&self) -> u8;
+    fn set_dma_addr(&mut self, val: u8);
+
+    fn bg_palette(&self) -> u8;
+    fn set_bg_palette(&mut self, val: u8);
+
+    fn obj0_palette(&self) -> u8;
+    fn set_obj0_palette(&mut self, val: u8);
+
+    fn obj1_palette(&self) -> u8;
+    fn set_obj1_palette(&mut self, val: u8);
+
+    fn window_y(&self) -> u8;
+    fn set_window_y(&mut self, val: u8);
+
+    fn window_x(&self) -> u8;
+    fn set_window_x(&mut self, val: u8);
     // TODO: other IO registers.
 }
 
@@ -370,11 +586,11 @@ pub struct GbMmu {
     /// The inserted cartridge. Mapped to 0..0x8000 (rom) and 0xA000..0xC000 (ram).
     pub cart: Cartridge,
     /// Video Ram. Mapped to 0x8000..0xA000
-    pub vram: [u8; 0x2000],
+    pub vram: MaskableMem::<0x2000>,
     /// Working Ram. Mapped to 0xC000..0xE000 and duplicately mapped at 0xE000..0xFE00.
     pub wram: [u8; 0x2000],
     /// Spirte info. Mapped to 0xFE00..0xFEA0.
-    pub oam: [u8; 160],
+    pub oam: MaskableMem::<160>,
     /// Memory mapped IO. Mapped to 0xff00..FF80.
     // TODO: don't require this to be exposed directly (use traits like for interrupts).
     pub io: MemMappedIo,
@@ -392,9 +608,9 @@ impl GbMmu {
         GbMmu {
             bios,
             cart,
-            vram: [0; 0x2000],
+            vram: MaskableMem::<0x2000>::new(),
             wram: [0; 0x2000],
-            oam: [0; 160],
+            oam: MaskableMem::<160>::new(),
             io: MemMappedIo::new(),
             zram: [0; 127],
             interrupt_enable: InterruptEnable(InterruptFlags::empty()),

@@ -51,7 +51,7 @@ impl Component for Memview {
             <div class="mem-section vram">
                 <h4>{"Video RAM"}</h4>
                 <ViewByteSlice start_addr={0x8000}
-                    slice={mem.clone().map(|mem| mem.vram.as_ref())} />
+                    slice={mem.clone().map(|mem| mem.vram.bytes().as_ref())} />
             </div>
             <CartridgeRamSection cart={mem.clone().map(|mem| &mem.cart)} />
             <div class="mem-section wram">
@@ -62,7 +62,7 @@ impl Component for Memview {
             <div class="mem-section oam">
                 <h4>{"Sprite Info"}</h4>
                 <ViewByteSlice start_addr={0xfe00}
-                    slice={mem.clone().map(|mem| mem.oam.as_ref())} />
+                    slice={mem.clone().map(|mem| mem.oam.bytes().as_ref())} />
             </div>
             <div class="mem-section unused">
                 <h4>{"Unmapped Region"}</h4>
@@ -242,6 +242,66 @@ pub fn view_io(props: &ViewIoProps) -> Html {
             {addr_range(0xff40..=0xff4b)}
             {named("LCD")}
             <span>{"(Unimplemented)"}</span>
+        </div>
+        <div class="line">
+            {addr(0xff40)}
+            {named("LCD Control")}
+            <span class="byte">{hexbyte(props.io.lcd_control.bits())}</span>
+        </div>
+        <div class="line">
+            {addr(0xff41)}
+            {named("LCD Status")}
+            <span class="byte">{hexbyte(props.io.lcd_status.bits())}</span>
+        </div>
+        <div class="line">
+            {addr(0xff42)}
+            {named("SCX")}
+            <span class="byte">{hexbyte(props.io.scroll_x)}</span>
+        </div>
+        <div class="line">
+            {addr(0xff43)}
+            {named("SCY")}
+            <span class="byte">{hexbyte(props.io.scroll_y)}</span>
+        </div>
+        <div class="line">
+            {addr(0xff44)}
+            {named("LY")}
+            <span class="byte">{hexbyte(props.io.lcdc_y)}</span>
+        </div>
+        <div class="line">
+            {addr(0xff45)}
+            {named("LYC")}
+            <span class="byte">{hexbyte(props.io.lcdc_y_compare)}</span>
+        </div>
+        <div class="line">
+            {addr(0xff46)}
+            {named("DMA")}
+            <span class="byte">{hexbyte(props.io.dma_addr)}</span>
+        </div>
+        <div class="line">
+            {addr(0xff47)}
+            {named("BGP")}
+            <span class="byte">{hexbyte(props.io.bg_palette)}</span>
+        </div>
+        <div class="line">
+            {addr(0xff48)}
+            {named("OBP0")}
+            <span class="byte">{hexbyte(props.io.obj0_palette)}</span>
+        </div>
+        <div class="line">
+            {addr(0xff49)}
+            {named("OBP1")}
+            <span class="byte">{hexbyte(props.io.obj1_palette)}</span>
+        </div>
+        <div class="line">
+            {addr(0xff4a)}
+            {named("WY")}
+            <span class="byte">{hexbyte(props.io.window_y)}</span>
+        </div>
+        <div class="line">
+            {addr(0xff4b)}
+            {named("WX")}
+            <span class="byte">{hexbyte(props.io.window_x)}</span>
         </div>
         <div class="line bad">
             {addr_range(0xff4c..=0xff4f)}

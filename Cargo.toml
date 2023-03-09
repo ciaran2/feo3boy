@@ -4,3 +4,4 @@ members = [
   "feo3boy-player",
   "web-debugger",
 ]
+resolver = "2"
