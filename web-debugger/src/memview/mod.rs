@@ -134,12 +134,24 @@ impl Memview {
                         <tr>
                             <th>{"LCD Control"}</th>
                             <th>{"LCD Status"}</th>
+                            <th>{"SCX"}</th>
+                            <th>{"SCY"}</th>
+                            <th>{"LY"}</th>
+                            <th>{"LYC"}</th>
+                            <th>{"WY"}</th>
+                            <th>{"WX"}</th>
                         </tr>
                     </thead>
                     <tbody>
                         <tr>
                             <td class="byte">{hexbyte(io.lcd_control.bits())}</td>
                             <td class="byte">{hexbyte(io.lcd_status.bits())}</td>
+                            <td class="byte">{hexbyte(io.scroll_x)}</td>
+                            <td class="byte">{hexbyte(io.scroll_y)}</td>
+                            <td class="byte">{hexbyte(io.lcdc_y)}</td>
+                            <td class="byte">{hexbyte(io.lcdc_y_compare)}</td>
+                            <td class="byte">{hexbyte(io.window_y)}</td>
+                            <td class="byte">{hexbyte(io.window_x)}</td>
                         </tr>
                     </tbody>
                 </table>
