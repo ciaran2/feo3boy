@@ -1,8 +1,9 @@
 use std::error::Error;
+use std::collections::VecDeque;
 use bitflags::bitflags;
 use crate::interrupts::{InterruptContext, InterruptFlags, Interrupts};
 use crate::memdev::{IoRegs, IoRegsContext, MaskableMem};
-use log::{debug, trace};
+use log::{debug, trace, info};
 
 
 pub enum LcdMode {
@@ -111,7 +112,7 @@ pub fn palette_lookup(palette: u8, color: u8) -> usize {
     ((palette & (3 << color * 2)) >> color * 2) as usize
 }
 
-fn get_tile_line(ctx: &impl PpuContext, tile_id: u8, line: u8, low_data: bool) -> Vec<u8> {
+fn get_tile_line(ctx: &impl PpuContext, tile_id: u8, line: u8, low_data: bool) -> VecDeque<u8> {
     let base_address = if low_data { 0x0 } else { 0x1000 };
     let tile_offset = (if low_data { tile_id as i16 } else { tile_id as i8 as i16 }) as isize;
 
@@ -120,10 +121,10 @@ fn get_tile_line(ctx: &impl PpuContext, tile_id: u8, line: u8, low_data: bool) -
     let low_bits = ctx.vram().bytes()[line_address];
     let high_bits = ctx.vram().bytes()[line_address + 1];
 
-    let mut output = Vec::new();
+    let mut output = VecDeque::new();
     for i in 0..=7 {
-        let bit = i;
-        output.push(((low_bits & (1<<bit)) >> bit) + (2 * ((high_bits & (1<<bit)) >> bit)));
+        let bit = 7 - i;
+        output.push_back(((low_bits & (1<<bit)) >> bit) + (2 * ((high_bits & (1<<bit)) >> bit)));
     }
     
     output
@@ -148,10 +149,10 @@ pub struct PpuState {
   scanline_ticks: u64,
   scanline_x: u8,
   fetcher_x: usize,
-  bg_fifo: Vec<u8>,
+  bg_fifo: VecDeque<u8>,
   bg_discard: u8,
   in_window: bool,
-  //obj_fifo: Vec<TBD>, //object pixels require extra metadata
+  //obj_fifo: VecDeque<TBD>, //object pixels require extra metadata
 }
 
 impl PpuState {
@@ -177,7 +178,7 @@ impl Default for PpuState {
         scanline_ticks: 0,
         scanline_x: 0,
         fetcher_x: 0,
-        bg_fifo: Vec::new(),
+        bg_fifo: VecDeque::new(),
         bg_discard: 0,
         in_window: false,
     }
@@ -193,9 +194,12 @@ pub fn bg_tile_fetch(ctx: &mut impl PpuContext) {
     let tile_id_base = if ctx.ioregs().lcd_control().contains(tile_map_flag) {0x1c00} else {0x1800};
 
     let tile_id_offset = ((ctx.ioregs().lcdc_y() as usize / 8) & 0x1f) * 32 + ((ctx.ppu().fetcher_x + scroll_offset) & 0x1f);
-    debug!("tile_id_offset: {}", tile_id_offset);
 
     let tile_id = ctx.vram().bytes()[tile_id_base + tile_id_offset];
+
+    if ctx.ioregs().lcdc_y() / 8 == 0 {
+        debug!("tile_id_offset: {}, fetcher_x: {}, scroll_offset: {}, tile_id: {:x}", tile_id_offset, ctx.ppu().fetcher_x, scroll_offset, tile_id);
+    }
 
     let line = if ctx.ppu().in_window { ctx.ioregs().lcdc_y() - ctx.ioregs().window_y() }
                else { ctx.ioregs().lcdc_y().wrapping_add(ctx.ioregs().scroll_y()) } & 0x7;
@@ -295,6 +299,7 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) -> Option<&[(u8, u8, u8)]> 
                         ctx.ppu().scanline_x + 7 == ctx.ioregs().window_x() &&
                         lcdc_y >= ctx.ioregs().window_y() {
                         ctx.ppu_mut().bg_fifo.clear();
+                        ctx.ppu_mut().fetcher_x = 0;
                         ctx.ppu_mut().in_window = true;
                     }
 
@@ -304,12 +309,19 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) -> Option<&[(u8, u8, u8)]> 
 
                     if !ctx.ppu().in_window && ctx.ppu().scanline_x == 0 {
                         for _i in 0..ctx.ppu().bg_discard {
-                            ctx.ppu_mut().bg_fifo.pop();
+                            ctx.ppu_mut().bg_fifo.pop_front();
                         }
                     }
 
+                    //if lcdc_y == 15 && ctx.ppu().scanline_x % 8 == 0 {
+                    //    info!("scanline_x: {}, bg_fifo: {:?}", ctx.ppu().scanline_x, ctx.ppu().bg_fifo);
+                    //}
+                    //if ctx.ppu().bg_fifo.len() > 8 {
+                    //    info!("scanline_x: {}, bg_fifo: {:?}", ctx.ppu().scanline_x, ctx.ppu().bg_fifo);
+                    //}
+
                     let buffer_index = (lcdc_y as usize * 160 + ctx.ppu().scanline_x as usize);
-                    let bg_color = ctx.ppu_mut().bg_fifo.pop().unwrap();
+                    let bg_color = ctx.ppu_mut().bg_fifo.pop_front().unwrap();
 
                     //standin for later checks against object pixel properties
                     if true {
@@ -319,17 +331,17 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) -> Option<&[(u8, u8, u8)]> 
                     }
 
                     ctx.ppu_mut().scanline_x += 1;
-                }
-
-                if ctx.ppu().scanline_x > 159 {
-                    debug!("Video mode transition from 3 (WriteScreen) to 0 (HBlank) after {} cycles.", ctx.ppu().scanline_ticks - 80);
-                    ctx.oam_mut().unmask();
-                    ctx.vram_mut().unmask();
-                    ctx.ioregs_mut().set_lcd_stat(lcd_stat.set_mode(LcdMode::HBlank));
-                    if lcd_stat.contains(LcdStat::HBLANK_INTERRUPT_ENABLE) {
-                        ctx.interrupts_mut().send(InterruptFlags::STAT)
+                    if ctx.ppu().scanline_x > 159 {
+                        debug!("Video mode transition from 3 (WriteScreen) to 0 (HBlank) after {} cycles.", ctx.ppu().scanline_ticks - 80);
+                        ctx.oam_mut().unmask();
+                        ctx.vram_mut().unmask();
+                        ctx.ioregs_mut().set_lcd_stat(lcd_stat.set_mode(LcdMode::HBlank));
+                        if lcd_stat.contains(LcdStat::HBLANK_INTERRUPT_ENABLE) {
+                            ctx.interrupts_mut().send(InterruptFlags::STAT)
+                        }
                     }
                 }
+
                 None
             }
         }
