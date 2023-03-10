@@ -304,7 +304,7 @@ impl<D: MemDevice + ?Sized> MemDevice for Box<D> {
 pub struct MemMappedIo {
     pub serial_data: u8,
     pub serial_control: u8,
-    pub divider: u8,
+    pub divider: u16,
     pub timer: u8,
     pub timer_mod: u8,
     pub timer_control: u8,
@@ -331,7 +331,7 @@ impl MemMappedIo {
         MemMappedIo {
             serial_data: 0x00,
             serial_control: 0x00,
-            divider: 0x00,
+            divider: 0x0000,
             timer: 0x00,
             timer_mod: 0x00,
             timer_control: 0x00,
@@ -372,7 +372,7 @@ impl MemDevice for MemMappedIo {
             0x01 => self.serial_data,
             0x02 => self.serial_control,
             0x03 => 0xff,
-            0x04 => self.divider,
+            0x04 => self.divider / 0x100,
             0x05 => self.timer,
             0x06 => self.timer_mod,
             0x07 => self.timer_control,
@@ -404,7 +404,7 @@ impl MemDevice for MemMappedIo {
             0x01 => self.serial_data = value,
             0x02 => self.serial_control = value,
             0x03 => {},
-            0x04 => self.divider = 0,
+            0x04 => self.divider = 0x0000,
             0x05 => self.timer = value,
             0x06 => self.timer_mod = value,
             0x07 => self.timer_control = value & 0x7,
@@ -584,8 +584,8 @@ pub trait IoRegs {
     /// Set the current value of the serial control register.
     fn set_serial_control(&mut self, val: u8);
 
-    fn divider(&self) -> u8;
-    fn set_divider(&mut self, val: u8);
+    fn divider(&self) -> u16;
+    fn set_divider(&mut self, val: u16);
     fn timer(&self) -> u8;
     fn set_timer(&mut self, val: u8);
     fn timer_mod(&self) -> u8;
