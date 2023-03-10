@@ -372,7 +372,7 @@ impl MemDevice for MemMappedIo {
             0x01 => self.serial_data,
             0x02 => self.serial_control,
             0x03 => 0xff,
-            0x04 => self.divider / 0x100,
+            0x04 => (self.divider / 0x100) as u8,
             0x05 => self.timer,
             0x06 => self.timer_mod,
             0x07 => self.timer_control,
@@ -452,10 +452,10 @@ impl IoRegs for MemMappedIo {
         self.serial_control = val;
     }
 
-    fn divider(&self) -> u8 {
+    fn divider(&self) -> u16 {
         self.divider
     }
-    fn set_divider(&mut self, val: u8) {
+    fn set_divider(&mut self, val: u16) {
         self.divider = val;
     }
     fn timer(&self) -> u8 {
