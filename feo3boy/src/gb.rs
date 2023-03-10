@@ -3,6 +3,7 @@ use crate::interrupts::InterruptContext;
 use crate::memdev::{BiosRom, Cartridge, GbMmu, MaskableMem, IoRegsContext, MemContext};
 use crate::serial::{self, SerialContext, SerialState};
 use crate::ppu::{self, PpuState, PpuContext};
+use crate::timer::{self, TimerState, TimerContext};
 
 /// Represents a "real" gameboy, by explicitly using the GbMmu for memory.
 #[derive(Clone, Debug, Eq, PartialEq)]
