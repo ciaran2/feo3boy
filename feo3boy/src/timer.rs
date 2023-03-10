@@ -16,12 +16,12 @@ bitflags! {
 
 impl TimerControl {
 
-    pub fn get_period(&self) -> u64 {
+    pub fn get_edge_bit(&self) -> u64 {
         match (*self & TimerControl::TIMER_PERIOD).bits() {
-            0 => 1024,
-            1 => 16,
-            2 => 64,
-            3 => 256,
+            0 => 0x0200,
+            1 => 0x08,
+            2 => 0x20,
+            3 => 0x80,
             _ => panic!("Illegal timer period number encountered. This should be impossible.")
         }
     }
