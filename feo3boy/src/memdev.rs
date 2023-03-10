@@ -304,6 +304,10 @@ impl<D: MemDevice + ?Sized> MemDevice for Box<D> {
 pub struct MemMappedIo {
     pub serial_data: u8,
     pub serial_control: u8,
+    pub divider: u8,
+    pub timer: u8,
+    pub timer_mod: u8,
+    pub timer_control: u8,
     pub bios_enabled: bool,
     // ppu status and settings
     pub lcd_control: LcdFlags,
@@ -327,6 +331,10 @@ impl MemMappedIo {
         MemMappedIo {
             serial_data: 0x00,
             serial_control: 0x00,
+            divider: 0x00,
+            timer: 0x00,
+            timer_mod: 0x00,
+            timer_control: 0x00,
             bios_enabled: true,
             // ppu status and settings
             lcd_control: LcdFlags::empty(),
@@ -363,7 +371,12 @@ impl MemDevice for MemMappedIo {
             0x00 => 0xff,
             0x01 => self.serial_data,
             0x02 => self.serial_control,
-            0x03..=0x0e => 0xff,
+            0x03 => 0xff,
+            0x04 => self.divider,
+            0x05 => self.timer,
+            0x06 => self.timer_mod,
+            0x07 => self.timer_control,
+            0x08..=0x0e => 0xff,
             0x0f => self.interrupt_flags.bits(),
             0x10..=0x3f => 0xff,
             0x40 => self.lcd_control.bits(),
@@ -390,7 +403,12 @@ impl MemDevice for MemMappedIo {
             0x00 => {}
             0x01 => self.serial_data = value,
             0x02 => self.serial_control = value,
-            0x03..=0x0e => {}
+            0x03 => {},
+            0x04 => self.divider = 0,
+            0x05 => self.timer = value,
+            0x06 => self.timer_mod = value,
+            0x07 => self.timer_control = value & 0x7,
+            0x08..=0x0e => {},
             0x0f => self.interrupt_flags = InterruptFlags::from_bits_truncate(value),
             0x10..=0x3f => {},
             0x40 => self.lcd_control = LcdFlags::from_bits_truncate(value),
@@ -432,6 +450,31 @@ impl IoRegs for MemMappedIo {
 
     fn set_serial_control(&mut self, val: u8) {
         self.serial_control = val;
+    }
+
+    fn divider(&self) -> u8 {
+        self.divider
+    }
+    fn set_divider(&mut self, val: u8) {
+        self.divider = val;
+    }
+    fn timer(&self) -> u8 {
+        self.timer
+    }
+    fn set_timer(&mut self, val: u8) {
+        self.timer = val;
+    }
+    fn timer_mod(&self) -> u8 {
+        self.timer_mod
+    }
+    fn set_timer_mod(&mut self, val: u8) {
+        self.timer_mod = val;
+    }
+    fn timer_control(&self) -> u8 {
+        self.timer_control
+    }
+    fn set_timer_control(&mut self, val: u8) {
+        self.timer_control = val & 0x7;
     }
 
     fn lcd_control(&self) -> LcdFlags {
@@ -540,6 +583,15 @@ pub trait IoRegs {
 
     /// Set the current value of the serial control register.
     fn set_serial_control(&mut self, val: u8);
+
+    fn divider(&self) -> u8;
+    fn set_divider(&mut self, val: u8);
+    fn timer(&self) -> u8;
+    fn set_timer(&mut self, val: u8);
+    fn timer_mod(&self) -> u8;
+    fn set_timer_mod(&mut self, val: u8);
+    fn timer_control(&self) -> u8;
+    fn set_timer_control(&mut self, val: u8);
 
     fn lcd_control(&self) -> LcdFlags;
 
