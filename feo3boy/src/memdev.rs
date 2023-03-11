@@ -7,6 +7,7 @@ use thiserror::Error;
 
 use crate::interrupts::{InterruptContext, InterruptEnable, InterruptFlags, Interrupts};
 use crate::ppu::{LcdFlags, LcdStat};
+use crate::timer::{TimerControl};
 
 pub use cartridge::{Cartridge, Mbc1Rom, ParseCartridgeError, RamBank, RomBank, RomOnly};
 
@@ -307,7 +308,7 @@ pub struct MemMappedIo {
     pub divider: u16,
     pub timer: u8,
     pub timer_mod: u8,
-    pub timer_control: u8,
+    pub timer_control: TimerControl,
     pub bios_enabled: bool,
     // ppu status and settings
     pub lcd_control: LcdFlags,
@@ -334,7 +335,7 @@ impl MemMappedIo {
             divider: 0x0000,
             timer: 0x00,
             timer_mod: 0x00,
-            timer_control: 0x00,
+            timer_control: TimerControl::empty(),
             bios_enabled: true,
             // ppu status and settings
             lcd_control: LcdFlags::empty(),
@@ -375,7 +376,7 @@ impl MemDevice for MemMappedIo {
             0x04 => (self.divider / 0x100) as u8,
             0x05 => self.timer,
             0x06 => self.timer_mod,
-            0x07 => self.timer_control,
+            0x07 => self.timer_control.bits(),
             0x08..=0x0e => 0xff,
             0x0f => self.interrupt_flags.bits(),
             0x10..=0x3f => 0xff,
@@ -407,7 +408,7 @@ impl MemDevice for MemMappedIo {
             0x04 => self.divider = 0x0000,
             0x05 => self.timer = value,
             0x06 => self.timer_mod = value,
-            0x07 => self.timer_control = value & 0x7,
+            0x07 => self.timer_control = TimerControl::from_bits_truncate(value),
             0x08..=0x0e => {},
             0x0f => self.interrupt_flags = InterruptFlags::from_bits_truncate(value),
             0x10..=0x3f => {},
@@ -470,11 +471,11 @@ impl IoRegs for MemMappedIo {
     fn set_timer_mod(&mut self, val: u8) {
         self.timer_mod = val;
     }
-    fn timer_control(&self) -> u8 {
+    fn timer_control(&self) -> TimerControl {
         self.timer_control
     }
-    fn set_timer_control(&mut self, val: u8) {
-        self.timer_control = val & 0x7;
+    fn set_timer_control(&mut self, val: TimerControl) {
+        self.timer_control = val;
     }
 
     fn lcd_control(&self) -> LcdFlags {
@@ -590,8 +591,8 @@ pub trait IoRegs {
     fn set_timer(&mut self, val: u8);
     fn timer_mod(&self) -> u8;
     fn set_timer_mod(&mut self, val: u8);
-    fn timer_control(&self) -> u8;
-    fn set_timer_control(&mut self, val: u8);
+    fn timer_control(&self) -> TimerControl;
+    fn set_timer_control(&mut self, val: TimerControl);
 
     fn lcd_control(&self) -> LcdFlags;
 

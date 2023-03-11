@@ -16,7 +16,7 @@ bitflags! {
 
 impl TimerControl {
 
-    pub fn get_period(&self) -> u64 {
+    pub fn get_period(&self) -> u16 {
         match (*self & TimerControl::TIMER_PERIOD).bits() {
             0 => 1024,
             1 => 16,
@@ -40,15 +40,73 @@ pub trait TimerContext: IoRegsContext + InterruptContext {
 pub struct TimerState {
     timer_ticks: u64,
     old_divider: u16,
-    overflow: bool,
+    interrupt_queued: bool,
+    interrupt_delay: u64,
 }
 
 impl TimerState {
     pub fn new() -> TimerState {
         Default::default()
     }
+
+    fn queue_interrupt(&mut self) {
+        self.interrupt_queued = true;
+        self.interrupt_delay = 4;
+    }
+}
+
+fn increment_timer(ctx: &mut impl TimerContext) {
+    let (mut timer, overflow) = ctx.ioregs().timer().overflowing_add(1);
+
+    if overflow {
+        ctx.timer_mut().queue_interrupt();
+    }
+
+    ctx.ioregs_mut().set_timer(timer)
+}
+
+fn check_interrupt(ctx: &mut impl TimerContext, tcycles: u64) {
+    // an intervening write to the timer will discard the interrupt
+    if ctx.timer().interrupt_queued && ctx.ioregs().timer() == 0 {
+        if tcycles >= ctx.timer().interrupt_delay as u64 {
+            ctx.timer_mut().interrupt_queued = false;
+            let timer_mod = ctx.ioregs_mut().timer_mod();
+            ctx.ioregs_mut().set_timer(timer_mod);
+            ctx.interrupts_mut().send(InterruptFlags::TIMER);
+        }
+        else {
+            ctx.timer_mut().interrupt_delay -= tcycles;
+        }
+    }
+    else {
+        ctx.timer_mut().interrupt_queued = false;
+    }
 }
 
 pub fn tick(ctx: &mut impl TimerContext, tcycles: u64) {
+    let mut divider = ctx.ioregs().divider();
+
+    check_interrupt(ctx, tcycles);
+
+    if ctx.ioregs().timer_control().contains(TimerControl::TIMER_ENABLE) {
+        let period = ctx.ioregs().timer_control().get_period();
+
+        // falling edge case when divider has been reset
+        if (ctx.timer().old_divider & (period >> 1)) != 0 &&
+           (divider & (period >> 1)) == 0 {
+            increment_timer(ctx);
+        }
+        else {
+            let mask = period - 1;
+
+            if divider & mask + tcycles as u16 & mask > period ||
+               tcycles > period as u64 {
+                increment_timer(ctx)
+            }
+        }
+    }
+
+    divider = divider.wrapping_add(tcycles as u16);
     ctx.timer_mut().old_divider = ctx.ioregs().divider();
+    ctx.ioregs_mut().set_divider(divider);
 }
