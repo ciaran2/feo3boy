@@ -16,12 +16,12 @@ bitflags! {
 
 impl TimerControl {
 
-    pub fn get_edge_bit(&self) -> u64 {
+    pub fn get_period(&self) -> u64 {
         match (*self & TimerControl::TIMER_PERIOD).bits() {
-            0 => 0x0200,
-            1 => 0x08,
-            2 => 0x20,
-            3 => 0x80,
+            0 => 1024,
+            1 => 16,
+            2 => 64,
+            3 => 256,
             _ => panic!("Illegal timer period number encountered. This should be impossible.")
         }
     }
@@ -39,6 +39,7 @@ pub trait TimerContext: IoRegsContext + InterruptContext {
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct TimerState {
     timer_ticks: u64,
+    old_divider: u16,
     overflow: bool,
 }
 
@@ -49,4 +50,5 @@ impl TimerState {
 }
 
 pub fn tick(ctx: &mut impl TimerContext, tcycles: u64) {
+    ctx.timer_mut().old_divider = ctx.ioregs().divider();
 }
