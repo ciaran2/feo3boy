@@ -148,6 +148,10 @@ fn hexbyte(byte: u8) -> String {
     format!("{:02x}", byte)
 }
 
+/// Get a string representing a single byte in hex.
+fn hex16(byte: u16) -> String {
+    format!("{:04x}", byte)
+}
 /// Get HTML for the given address.
 fn addr(addr: u16) -> Html {
     html! {<div class="addr"><h5>{format!("{:#06x}", addr)}</h5></div> }
@@ -210,10 +214,25 @@ pub fn view_io(props: &ViewIoProps) -> Html {
             {addr(0xff03)}
             {named("Unused")}
         </div>
-        <div class="line unimplemented">
-            {addr_range(0xff04..=0xff07)}
-            {named("Timer & Divider")}
-            <span>{"(Unimplemented)"}</span>
+        <div class="line">
+            {addr(0xff04)}
+            {named("Divider")}
+            <span class="byte">{hex16(props.io.divider)}</span>
+        </div>
+        <div class="line">
+            {addr(0xff05)}
+            {named("Timer Accumulator")}
+            <span class="byte">{hexbyte(props.io.timer)}</span>
+        </div>
+        <div class="line">
+            {addr_range(0xff05)}
+            {named("Timer Modulo")}
+            <span class="byte">{hexbyte(props.io.timer_mod)}</span>
+        </div>
+        <div class="line">
+            {addr_range(0xff07)}
+            {named("Timer Control")}
+            <span class="byte">{hexbyte(props.io.timer_control.bits())}</span>
         </div>
         <div class="line bad">
             {addr_range(0xff08..=0xff0e)}
@@ -236,11 +255,6 @@ pub fn view_io(props: &ViewIoProps) -> Html {
         <div class="line unimplemented">
             {addr_range(0xff30..=0xff3f)}
             {named("Wave Pattern")}
-            <span>{"(Unimplemented)"}</span>
-        </div>
-        <div class="line unimplemented">
-            {addr_range(0xff40..=0xff4b)}
-            {named("LCD")}
             <span>{"(Unimplemented)"}</span>
         </div>
         <div class="line">
@@ -273,7 +287,7 @@ pub fn view_io(props: &ViewIoProps) -> Html {
             {named("LYC")}
             <span class="byte">{hexbyte(props.io.lcdc_y_compare)}</span>
         </div>
-        <div class="line">
+        <div class="line unimplemented">
             {addr(0xff46)}
             {named("DMA")}
             <span class="byte">{hexbyte(props.io.dma_addr)}</span>
