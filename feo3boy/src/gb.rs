@@ -14,6 +14,8 @@ pub struct Gb {
     pub mmu: Box<GbMmu>,
     /// State of serial data transfer.
     pub serial: SerialState,
+    /// State of timer updates
+    pub timer: TimerState,
     /// State of video rendering
     pub ppu: PpuState,
 }
@@ -25,6 +27,7 @@ impl Gb {
             cpustate: Gbz80State::new(),
             mmu: Box::new(GbMmu::new(bios, cart)),
             serial: SerialState::new(),
+            timer: TimerState::new(),
             ppu: PpuState::new(),
         }
     }
@@ -34,6 +37,7 @@ impl Gb {
     pub fn tick(&mut self) -> Option<&[(u8, u8, u8)]> {
         gbz80core::tick(self);
         serial::tick(self, 4);
+        timer::tick(self, 4);
         ppu::tick(self, 4)
     }
 }
@@ -106,6 +110,17 @@ impl SerialContext for Gb {
 
     fn serial_mut(&mut self) -> &mut SerialState {
         &mut self.serial
+    }
+}
+
+impl TimerContext for Gb {
+    #[inline]
+    fn timer(&self) -> &TimerState {
+        &self.timer
+    }
+
+    fn timer_mut(&mut self) -> &mut TimerState {
+        &mut self.timer
     }
 }
 
