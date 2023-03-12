@@ -257,11 +257,6 @@ pub fn view_io(props: &ViewIoProps) -> Html {
             {named("Wave Pattern")}
             <span>{"(Unimplemented)"}</span>
         </div>
-        <div class="line unimplemented">
-            {addr_range(0xff40..=0xff4b)}
-            {named("LCD")}
-            <span>{"(Unimplemented)"}</span>
-        </div>
         <div class="line">
             {addr(0xff40)}
             {named("LCD Control")}
@@ -292,7 +287,7 @@ pub fn view_io(props: &ViewIoProps) -> Html {
             {named("LYC")}
             <span class="byte">{hexbyte(props.io.lcdc_y_compare)}</span>
         </div>
-        <div class="line">
+        <div class="line unimplemented">
             {addr(0xff46)}
             {named("DMA")}
             <span class="byte">{hexbyte(props.io.dma_addr)}</span>
