@@ -235,7 +235,7 @@ pub fn view_io(props: &ViewIoProps) -> Html {
             <span class="byte">{hexbyte(props.io.timer_control.bits())}</span>
         </div>
         <div class="line bad">
-            {addr(0xff08..=0xff0e)}
+            {addr_range(0xff08..=0xff0e)}
             {named("Unused")}
         </div>
         <div class="line">
