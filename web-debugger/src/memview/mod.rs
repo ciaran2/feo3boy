@@ -225,17 +225,17 @@ pub fn view_io(props: &ViewIoProps) -> Html {
             <span class="byte">{hexbyte(props.io.timer)}</span>
         </div>
         <div class="line">
-            {addr_range(0xff05)}
+            {addr(0xff06)}
             {named("Timer Modulo")}
             <span class="byte">{hexbyte(props.io.timer_mod)}</span>
         </div>
         <div class="line">
-            {addr_range(0xff07)}
+            {addr(0xff07)}
             {named("Timer Control")}
             <span class="byte">{hexbyte(props.io.timer_control.bits())}</span>
         </div>
         <div class="line bad">
-            {addr_range(0xff08..=0xff0e)}
+            {addr(0xff08..=0xff0e)}
             {named("Unused")}
         </div>
         <div class="line">
