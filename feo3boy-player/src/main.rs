@@ -123,8 +123,7 @@ fn main() {
                 }
             }
             Event::MainEventsCleared => {
-                let mut output_state = gb.tick();
-                while output_state == None {
+                for _i in 0..100 {
                     {
                         let bytes = gb.serial.stream.receive_bytes();
                         if bytes.len() != 0 {
@@ -134,18 +133,17 @@ fn main() {
                             stdout.flush().unwrap();
                         }
                     }
-                    output_state = gb.tick();
-                }
-                match output_state {
-                    Some(screen_buffer) => {
-                        pixels_render(&mut pixels, screen_buffer);
-                        if let Err(err) = pixels.render() {
-                            error!("Render failed: {}", err);
-                            control_flow.set_exit()
-                        }
-                        //window.request_redraw();
-                    },
-                    None => (),
+                    match gb.tick() {
+                        Some(screen_buffer) => {
+                            pixels_render(&mut pixels, screen_buffer);
+                            if let Err(err) = pixels.render() {
+                                error!("Render failed: {}", err);
+                                control_flow.set_exit()
+                            }
+                            //window.request_redraw();
+                        },
+                        None => (),
+                    }
                 }
             },
             //Event::RedrawRequested(_) => if let Err(err) = pixels.render() {
