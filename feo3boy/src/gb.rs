@@ -1,6 +1,7 @@
 use crate::gbz80core::{self, CpuContext, Gbz80State};
 use crate::interrupts::InterruptContext;
 use crate::memdev::{BiosRom, Cartridge, GbMmu, MaskableMem, IoRegsContext, MemContext};
+use crate::input::{self, InputContext, ButtonStates};
 use crate::serial::{self, SerialContext, SerialState};
 use crate::ppu::{self, PpuState, PpuContext};
 use crate::timer::{self, TimerState, TimerContext};
@@ -12,6 +13,8 @@ pub struct Gb {
     pub cpustate: Gbz80State,
     /// MMU for the system.
     pub mmu: Box<GbMmu>,
+    /// Joypad button states
+    pub button_states: ButtonStates,
     /// State of serial data transfer.
     pub serial: SerialState,
     /// State of timer updates
@@ -26,6 +29,7 @@ impl Gb {
         Gb {
             cpustate: Gbz80State::new(),
             mmu: Box::new(GbMmu::new(bios, cart)),
+            button_states: ButtonStates::empty(),
             serial: SerialState::new(),
             timer: TimerState::new(),
             ppu: PpuState::new(),
@@ -35,6 +39,7 @@ impl Gb {
     /// Tick forward by one instruction, executing background and graphics processing
     /// operations as needed.
     pub fn tick(&mut self) -> Option<&[(u8, u8, u8)]> {
+        input::update(self);
         gbz80core::tick(self);
         serial::tick(self, 4);
         timer::tick(self, 4);
@@ -99,6 +104,17 @@ impl IoRegsContext for Gb {
     #[inline]
     fn ioregs_mut(&mut self) -> &mut Self::IoRegs {
         self.mmu.ioregs_mut()
+    }
+}
+
+impl InputContext for Gb {
+    #[inline]
+    fn button_states(&self) -> ButtonStates {
+        self.button_states
+    }
+
+    fn set_button_states(&mut self, button_states: ButtonStates) {
+        self.button_states = button_states;
     }
 }
 

@@ -372,7 +372,7 @@ impl Default for MemMappedIo {
 impl MemDevice for MemMappedIo {
     fn read(&self, addr: Addr) -> u8 {
         match addr.relative() {
-            0x00 => 0xff,
+            0x00 => self.buttons.bits(),
             0x01 => self.serial_data,
             0x02 => self.serial_control,
             0x03 => 0xff,
@@ -404,7 +404,7 @@ impl MemDevice for MemMappedIo {
 
     fn write(&mut self, addr: Addr, value: u8) {
         match addr.relative() {
-            0x00 => {}
+            0x00 => self.buttons = self.buttons.set_writable(value),
             0x01 => self.serial_data = value,
             0x02 => self.serial_control = value,
             0x03 => {},
