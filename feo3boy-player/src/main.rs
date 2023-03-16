@@ -5,12 +5,13 @@ use clap::{App, Arg};
 use log::{info, error};
 
 use pixels::{Pixels, SurfaceTexture, Error};
-use winit::event::{Event, WindowEvent};
+use winit::event::{Event, DeviceEvent, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::WindowBuilder;
 
 use feo3boy::gb::Gb;
 use feo3boy::memdev::{BiosRom, Cartridge};
+use feo3boy::input::{ButtonStates};
 
 fn ascii_render(screen_buffer: &[(u8, u8, u8)]) {
     let brightness_scale = ".'`^\",:;Il!i><~+_-?][}{1)(|\\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$";
@@ -94,6 +95,8 @@ fn main() {
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new().build(&event_loop).unwrap();
 
+    let mut button_state = ButtonStates::empty();
+
     let mut pixels = {
         let window_size = window.inner_size();
         let surface_texture = SurfaceTexture::new(window_size.width, window_size.height, &window);
@@ -108,6 +111,17 @@ fn main() {
                 event: WindowEvent::CloseRequested,
                 ..
             } => control_flow.set_exit(),
+            Event::DeviceEvent {
+                event: device_event,
+                device_id,
+            } => {
+                match device_event {
+                    DeviceEvent::Key(keyboard_input) => {
+                        info!("{:#?} {} {:#?}", keyboard_input.virtual_keycode, keyboard_input.scancode, keyboard_input.state);
+                    }
+                    _ => ()
+                }
+            }
             Event::MainEventsCleared => {
                 let mut output_state = gb.tick();
                 while output_state == None {
