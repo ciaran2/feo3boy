@@ -78,5 +78,5 @@ pub fn update(ctx: &mut impl InputContext) {
         ctx.interrupts_mut().send(InterruptFlags::JOYPAD);
     }
 
-    ctx.ioregs_mut().set_buttons(button_reg & (ButtonRegister::BUTTON_SELECTORS | new_button_status));
+    ctx.ioregs_mut().set_buttons((button_reg & ButtonRegister::BUTTON_SELECTORS) | new_button_status);
 }
