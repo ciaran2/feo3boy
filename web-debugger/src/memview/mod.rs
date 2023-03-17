@@ -193,10 +193,10 @@ pub struct ViewIoProps {
 pub fn view_io(props: &ViewIoProps) -> Html {
     html! {<div class="mem-section io">
         <h4>{"Memory-Mapped IO"}</h4>
-        <div class="line unimplemented">
+        <div class="line">
             {addr(0xff00)}
             {named("Joypad Input")}
-            <span>{"(Unimplemented)"}</span>
+            <span class="byte">{hexbyte(props.io.buttons.bits())}</span>
         </div>
         <div class="line">
             {addr(0xff01)}
