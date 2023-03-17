@@ -39,10 +39,7 @@ impl Gb {
     /// Tick forward by one instruction, executing background and graphics processing
     /// operations as needed.
     pub fn tick(&mut self) -> Option<&[(u8, u8, u8)]> {
-        input::update(self);
         gbz80core::tick(self);
-        serial::tick(self, 4);
-        timer::tick(self, 4);
         ppu::tick(self, 4)
     }
 }
@@ -61,7 +58,9 @@ impl CpuContext for Gb {
     fn yield1m(&mut self) {
         // TODO: run background processing while yielded.
         // Continue processing serial while yielded.
+        input::update(self);
         serial::tick(self, 4);
+        timer::tick(self, 4);
     }
 }
 
