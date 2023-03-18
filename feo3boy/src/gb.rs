@@ -21,6 +21,8 @@ pub struct Gb {
     pub timer: TimerState,
     /// State of video rendering
     pub ppu: PpuState,
+    /// Whether display is ready to be sent to the outside world
+    pub display_ready: bool,
 }
 
 impl Gb {
@@ -33,6 +35,7 @@ impl Gb {
             serial: SerialState::new(),
             timer: TimerState::new(),
             ppu: PpuState::new(),
+            display_ready: false,
         }
     }
 
@@ -40,7 +43,14 @@ impl Gb {
     /// operations as needed.
     pub fn tick(&mut self) -> Option<&[(u8, u8, u8)]> {
         gbz80core::tick(self);
-        ppu::tick(self, 4)
+
+        if self.display_ready {
+            self.display_ready = false;
+            Some(self.ppu.screen_buffer())
+        }
+        else {
+            None
+        }
     }
 }
 
@@ -61,6 +71,7 @@ impl CpuContext for Gb {
         input::update(self);
         serial::tick(self, 4);
         timer::tick(self, 4);
+        ppu::tick(self, 4);
     }
 }
 
@@ -163,4 +174,7 @@ impl PpuContext for Gb {
         &mut self.mmu.oam
     }
     
+    fn display_ready(&mut self) {
+        self.display_ready = true;
+    }
 }

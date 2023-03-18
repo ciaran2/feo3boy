@@ -99,6 +99,8 @@ pub trait PpuContext: IoRegsContext + InterruptContext {
 
     fn oam(&self) -> &MaskableMem<160>;
     fn oam_mut(&mut self) -> &mut MaskableMem<160>;
+
+    fn display_ready(&mut self);
 }
 
 /// Allows core ppu implementation to be agnostic of render implementation
@@ -160,6 +162,10 @@ impl PpuState {
         Default::default()
     }
 
+    pub fn screen_buffer(&self) -> &[(u8, u8, u8)] {
+        &self.screen_buffer
+    }
+
     pub fn scanline_reset(&mut self) {
         self.bg_fifo.clear();
         self.scanline_ticks -= 456;
@@ -213,7 +219,7 @@ pub fn bg_tile_fetch(ctx: &mut impl PpuContext) {
     ctx.ppu_mut().fetcher_x += 1;
 }
 
-pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) -> Option<&[(u8, u8, u8)]> {
+pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
     if ctx.ioregs().lcd_control().contains(LcdFlags::DISPLAY_ENABLE) {
         ctx.ppu_mut().scanline_ticks += tcycles;
         let lcd_stat = ctx.ioregs().lcd_stat();
@@ -245,7 +251,6 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) -> Option<&[(u8, u8, u8)]> 
                         if lcd_stat.contains(LcdStat::OAM_INTERRUPT_ENABLE) {
                             ctx.interrupts_mut().send(InterruptFlags::STAT);
                         }
-                        None
                     }
                     else {
                         debug!("Video mode transition from 0 (HBlank) to 1 (VBlank)");
@@ -254,11 +259,8 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) -> Option<&[(u8, u8, u8)]> 
                         if lcd_stat.contains(LcdStat::VBLANK_INTERRUPT_ENABLE) {
                             ctx.interrupts_mut().send(InterruptFlags::STAT);
                         }
-                        Some(&ctx.ppu().screen_buffer)
+                        ctx.display_ready();
                     }
-                }
-                else {
-                    None
                 }
             }
             LcdMode::VBlank       => {
@@ -279,7 +281,6 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) -> Option<&[(u8, u8, u8)]> 
                         }
                     }
                 }
-                None
             }
             LcdMode::OamScan      => {
                 debug!("OAMScan");
@@ -289,7 +290,6 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) -> Option<&[(u8, u8, u8)]> 
                     ctx.ioregs_mut().set_lcd_stat(lcd_stat.set_mode(LcdMode::WriteScreen))
 
                 }
-                None
             }
             LcdMode::WriteScreen  => {
                 debug!("WriteScreen");
@@ -342,12 +342,10 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) -> Option<&[(u8, u8, u8)]> 
                     }
                 }
 
-                None
             }
         }
     }
     else {
         trace!("LCD is disabled.");
-        None
     }
 }
