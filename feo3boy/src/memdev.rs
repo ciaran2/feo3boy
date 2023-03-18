@@ -8,6 +8,7 @@ use thiserror::Error;
 use crate::interrupts::{InterruptContext, InterruptEnable, InterruptFlags, Interrupts};
 use crate::ppu::{LcdFlags, LcdStat};
 use crate::timer::{TimerControl};
+use crate::input::{ButtonRegister};
 
 pub use cartridge::{Cartridge, Mbc1Rom, ParseCartridgeError, RamBank, RomBank, RomOnly};
 
@@ -303,6 +304,7 @@ impl<D: MemDevice + ?Sized> MemDevice for Box<D> {
 /// Memory device connecting memory mapped IO.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MemMappedIo {
+    pub buttons: ButtonRegister,
     pub serial_data: u8,
     pub serial_control: u8,
     pub divider: u16,
@@ -330,6 +332,7 @@ impl MemMappedIo {
     /// Construct new memory-mapped IO manager.
     pub fn new() -> Self {
         MemMappedIo {
+            buttons: ButtonRegister::all(),
             serial_data: 0x00,
             serial_control: 0x00,
             divider: 0x0000,
@@ -369,7 +372,7 @@ impl Default for MemMappedIo {
 impl MemDevice for MemMappedIo {
     fn read(&self, addr: Addr) -> u8 {
         match addr.relative() {
-            0x00 => 0xff,
+            0x00 => self.buttons.bits(),
             0x01 => self.serial_data,
             0x02 => self.serial_control,
             0x03 => 0xff,
@@ -401,7 +404,7 @@ impl MemDevice for MemMappedIo {
 
     fn write(&mut self, addr: Addr, value: u8) {
         match addr.relative() {
-            0x00 => {}
+            0x00 => self.buttons = self.buttons.set_writable(value),
             0x01 => self.serial_data = value,
             0x02 => self.serial_control = value,
             0x03 => {},
@@ -437,6 +440,13 @@ impl MemDevice for MemMappedIo {
 }
 
 impl IoRegs for MemMappedIo {
+    fn buttons(&self) -> ButtonRegister {
+        self.buttons
+    }
+    fn set_buttons(&mut self, val: ButtonRegister) {
+        self.buttons = val;
+    }
+
     fn serial_data(&self) -> u8 {
         self.serial_data
     }
@@ -573,6 +583,12 @@ pub trait IoRegsContext {
 
 /// Trait for use with contexts to provide access to IO registers.
 pub trait IoRegs {
+    /// Get the current button control and status
+    fn buttons(&self) -> ButtonRegister;
+
+    /// Set the current button control and status
+    fn set_buttons(&mut self, val: ButtonRegister);
+    
     /// Get the current value of the serial data register.
     fn serial_data(&self) -> u8;
 

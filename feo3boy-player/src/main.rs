@@ -5,12 +5,14 @@ use clap::{App, Arg};
 use log::{info, error};
 
 use pixels::{Pixels, SurfaceTexture, Error};
-use winit::event::{Event, WindowEvent};
+use winit::event::{Event, DeviceEvent, WindowEvent, VirtualKeyCode, ElementState};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::WindowBuilder;
+use winit_input_helper::WinitInputHelper;
 
 use feo3boy::gb::Gb;
 use feo3boy::memdev::{BiosRom, Cartridge};
+use feo3boy::input::{InputContext, ButtonStates};
 
 fn ascii_render(screen_buffer: &[(u8, u8, u8)]) {
     let brightness_scale = ".'`^\",:;Il!i><~+_-?][}{1)(|\\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$";
@@ -35,6 +37,18 @@ fn pixels_render(pixels: &mut Pixels, screen_buffer: &[(u8,u8,u8)]) {
         out_pixel[2] = in_pixel.2;
         out_pixel[3] = 0xff;
     }
+}
+
+fn gen_button_states(input_helper: &WinitInputHelper, bindings: &Vec<(VirtualKeyCode, ButtonStates)>) -> ButtonStates {
+    let mut button_states = ButtonStates::empty();
+
+    for (key_code, button) in bindings {
+        if input_helper.key_held(*key_code) {
+            button_states.insert(*button);
+        }
+    }
+
+    button_states
 }
 
 fn main() {
@@ -93,6 +107,7 @@ fn main() {
 
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new().build(&event_loop).unwrap();
+    let mut input_helper = WinitInputHelper::new();
 
     let mut pixels = {
         let window_size = window.inner_size();
@@ -100,29 +115,34 @@ fn main() {
         Pixels::new(160, 144, surface_texture).unwrap()
     };
 
+    let mut bindings = vec![ (VirtualKeyCode::W, ButtonStates::UP),
+                              (VirtualKeyCode::A, ButtonStates::LEFT),
+                              (VirtualKeyCode::S, ButtonStates::DOWN),
+                              (VirtualKeyCode::D, ButtonStates::RIGHT),
+                              (VirtualKeyCode::C, ButtonStates::SELECT),
+                              (VirtualKeyCode::Return, ButtonStates::START),
+                              (VirtualKeyCode::Slash, ButtonStates::A),
+                              (VirtualKeyCode::Period, ButtonStates::B) ];
+
     event_loop.run(move |event, _, control_flow| {
         control_flow.set_poll();
 
-        match event {
-            Event::WindowEvent {
-                event: WindowEvent::CloseRequested,
-                ..
-            } => control_flow.set_exit(),
-            Event::MainEventsCleared => {
-                let mut output_state = gb.tick();
-                while output_state == None {
-                    {
-                        let bytes = gb.serial.stream.receive_bytes();
-                        if bytes.len() != 0 {
-                            for byte in bytes {
-                                stdout.write(&[byte]).unwrap();
-                            }
-                            stdout.flush().unwrap();
+        if input_helper.update(&event) {
+            if input_helper.close_requested() { control_flow.set_exit(); }
+
+            gb.set_button_states(gen_button_states(&input_helper, &bindings));
+
+            for _i in 0..100 {
+                {
+                    let bytes = gb.serial.stream.receive_bytes();
+                    if bytes.len() != 0 {
+                        for byte in bytes {
+                            stdout.write(&[byte]).unwrap();
                         }
+                        stdout.flush().unwrap();
                     }
-                    output_state = gb.tick();
                 }
-                match output_state {
+                match gb.tick() {
                     Some(screen_buffer) => {
                         pixels_render(&mut pixels, screen_buffer);
                         if let Err(err) = pixels.render() {
@@ -133,12 +153,7 @@ fn main() {
                     },
                     None => (),
                 }
-            },
-            //Event::RedrawRequested(_) => if let Err(err) = pixels.render() {
-            //    error!("Render failed: {}", err);
-            //    control_flow.set_exit()
-            //},
-            _ => ()
+            }
         }
     });
 }
