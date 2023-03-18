@@ -121,8 +121,8 @@ fn main() {
                               (VirtualKeyCode::D, ButtonStates::RIGHT),
                               (VirtualKeyCode::C, ButtonStates::SELECT),
                               (VirtualKeyCode::Return, ButtonStates::START),
-                              (VirtualKeyCode::Stop, ButtonStates::A),
-                              (VirtualKeyCode::Slash, ButtonStates::B) ];
+                              (VirtualKeyCode::Slash, ButtonStates::A),
+                              (VirtualKeyCode::Period, ButtonStates::B) ];
 
     event_loop.run(move |event, _, control_flow| {
         control_flow.set_poll();
