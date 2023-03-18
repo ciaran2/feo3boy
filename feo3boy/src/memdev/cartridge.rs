@@ -177,7 +177,7 @@ impl Cartridge {
                     Err(_) => unreachable!(),
                 }
                 match (code, ram_size(&header)) {
-                    (0, Ok(0)) | (8 | 9, Ok(2)) => {}
+                    (0, Ok(0)) | (8 | 9, Ok(1)) => {}
                     (0, Ok(size)) => warn!("RomOnly cartridge with no ram specified {} ram banks. It will be run without ram.", size),
                     (8 | 9, Ok(size)) => warn!("RomOnly cartridge with ram specified {} ram banks. It will be run with 1 ram bank.", size),
                     (_, Err(ParseCartridgeError::UnrecognizedRamSizeCode(code))) => warn!("RomOnly cartrige had an unrecognized ram size code {}.", code),
@@ -211,7 +211,7 @@ impl Cartridge {
                         0
                     }
                     (2 | 3, Err(e)) => return Err(e),
-                    (2 | 3, Ok(size @ (8 | 32))) => size,
+                    (2 | 3, Ok(size @ (1 | 4))) => size,
                     (2 | 3, Ok(ram_size)) => {
                         return Err(ParseCartridgeError::UnsupportedRamSize { rom_type, ram_size })
                     }
