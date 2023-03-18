@@ -9,14 +9,14 @@ bitflags! {
     /// Lcd control status flags
     #[derive(Default)]
     pub struct ButtonStates: u8 {
-        const START      = 0b00000001;
-        const SELECT     = 0b00000010;
-        const B          = 0b00000100;
-        const A          = 0b00001000;
-        const DOWN       = 0b00010000;
-        const UP         = 0b00100000;
-        const LEFT       = 0b01000000;
-        const RIGHT      = 0b10000000;
+        const A          = 0b00000001;
+        const B          = 0b00000010;
+        const SELECT     = 0b00000100;
+        const START      = 0b00001000;
+        const RIGHT      = 0b00010000;
+        const LEFT       = 0b00100000;
+        const UP         = 0b01000000;
+        const DOWN       = 0b10000000;
         const ACTIONS    = 0b00001111;
         const DIRECTIONS = 0b11110000;
     }
