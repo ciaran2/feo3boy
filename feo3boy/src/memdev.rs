@@ -1,6 +1,6 @@
 use std::convert::TryFrom;
 use std::fmt;
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 
 use log::trace;
 use thiserror::Error;
@@ -241,18 +241,27 @@ impl<const N: usize> MemDevice for [u8; N] {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MaskableMem<const N: usize> {
-    data: [u8; N],
+/// Workaround for the implementation of Default for arrays being so janky
+/// Separated from main MemDevice interface in case arrays get const defaults later
+pub trait CustomDefault {
+    fn custom_default() -> Self;
+}
+
+impl<const N: usize> CustomDefault for [u8; N] {
+    fn custom_default() -> Self {
+        [0; N]
+    }
+}
+
+#[derive(Clone, Default, Debug, PartialEq, Eq)]
+pub struct MaskableMem<M> {
+    device: M,
     masked: bool,
 }
 
-impl<const N: usize> MaskableMem<N> {
+impl<M: CustomDefault> MaskableMem<M> {
     pub fn new() -> Self {
-        MaskableMem {
-            data: [0; N],
-            masked: false,
-        }
+        MaskableMem::custom_default()
     }
 
     pub fn mask(&mut self) {
@@ -262,20 +271,21 @@ impl<const N: usize> MaskableMem<N> {
     pub fn unmask(&mut self) {
         self.masked = false;
     }
+}
 
-    pub fn bytes(&self) -> &[u8] {
-        &self.data
-    }
-
-    pub fn bytes_mut(&mut self) -> &mut [u8] {
-        &mut self.data
+impl<M: CustomDefault> CustomDefault for MaskableMem<M> {
+    fn custom_default() -> Self {
+        MaskableMem {
+            device: M::custom_default(),
+            masked: false,
+        }
     }
 }
 
-impl<const N: usize> MemDevice for MaskableMem<N> {
+impl<M: MemDevice> MemDevice for MaskableMem<M> {
     fn read(&self, addr: Addr) -> u8 {
         if !self.masked {
-            self.data.read(addr)
+            self.device.read(addr)
         }
         else {
             0xff
@@ -284,9 +294,18 @@ impl<const N: usize> MemDevice for MaskableMem<N> {
 
     fn write(&mut self, addr: Addr, value: u8) {
         if !self.masked {
-            self.data.write(addr, value)
+            self.device.write(addr, value)
         }
     }
+}
+
+impl<M> Deref for MaskableMem<M> {
+    type Target = M;
+    fn deref(&self) -> &Self::Target { &self.device }
+}
+
+impl<M> DerefMut for MaskableMem<M> {
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.device }
 }
 
 // This makes sure that Box<dyn MemDevice> implements MemDevice (as well as Box<Anything that
@@ -647,6 +666,9 @@ pub trait IoRegs {
     // TODO: other IO registers.
 }
 
+pub type Vram = MaskableMem::<MaskableMem<[u8; 0x2000]>>;
+pub type Oam = MaskableMem::<MaskableMem<[u8; 160]>>;
+
 /// MemoryDevice which configures the standard memory mapping of the real GameBoy.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GbMmu {
@@ -655,11 +677,11 @@ pub struct GbMmu {
     /// The inserted cartridge. Mapped to 0..0x8000 (rom) and 0xA000..0xC000 (ram).
     pub cart: Cartridge,
     /// Video Ram. Mapped to 0x8000..0xA000
-    pub vram: MaskableMem::<0x2000>,
+    pub vram: Vram,
     /// Working Ram. Mapped to 0xC000..0xE000 and duplicately mapped at 0xE000..0xFE00.
     pub wram: [u8; 0x2000],
     /// Spirte info. Mapped to 0xFE00..0xFEA0.
-    pub oam: MaskableMem::<160>,
+    pub oam: Oam,
     /// Memory mapped IO. Mapped to 0xff00..FF80.
     // TODO: don't require this to be exposed directly (use traits like for interrupts).
     pub io: MemMappedIo,
@@ -677,9 +699,9 @@ impl GbMmu {
         GbMmu {
             bios,
             cart,
-            vram: MaskableMem::<0x2000>::new(),
+            vram: Vram::new(),
             wram: [0; 0x2000],
-            oam: MaskableMem::<160>::new(),
+            oam: Oam::new(),
             io: MemMappedIo::new(),
             zram: [0; 127],
             interrupt_enable: InterruptEnable(InterruptFlags::empty()),

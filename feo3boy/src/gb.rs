@@ -1,6 +1,6 @@
 use crate::gbz80core::{self, CpuContext, Gbz80State};
 use crate::interrupts::InterruptContext;
-use crate::memdev::{BiosRom, Cartridge, GbMmu, MaskableMem, IoRegsContext, MemContext};
+use crate::memdev::{BiosRom, Cartridge, GbMmu, MaskableMem, IoRegsContext, MemContext, Vram, Oam};
 use crate::input::{self, InputContext, ButtonStates};
 use crate::serial::{self, SerialContext, SerialState};
 use crate::ppu::{self, PpuState, PpuContext};
@@ -160,17 +160,17 @@ impl PpuContext for Gb {
         &mut self.ppu
     }
 
-    fn vram(&self) -> &MaskableMem<0x2000> {
+    fn vram(&self) -> &Vram {
         &self.mmu.vram
     }
-    fn vram_mut(&mut self) -> &mut MaskableMem<0x2000> {
+    fn vram_mut(&mut self) -> &mut Vram {
         &mut self.mmu.vram
     }
     
-    fn oam(&self) -> &MaskableMem<160> {
+    fn oam(&self) -> &Oam {
         &self.mmu.oam
     }
-    fn oam_mut(&mut self) -> &mut MaskableMem<160> {
+    fn oam_mut(&mut self) -> &mut Oam {
         &mut self.mmu.oam
     }
     

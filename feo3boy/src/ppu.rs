@@ -1,8 +1,9 @@
 use std::error::Error;
 use std::collections::VecDeque;
+use std::ops::Deref;
 use bitflags::bitflags;
 use crate::interrupts::{InterruptContext, InterruptFlags, Interrupts};
-use crate::memdev::{IoRegs, IoRegsContext, MaskableMem};
+use crate::memdev::{Addr, MemDevice, IoRegs, IoRegsContext, Vram, Oam};
 use log::{debug, trace, info};
 
 
@@ -86,6 +87,13 @@ bitflags! {
     }
 }
 
+struct Object {
+    y: u8,
+    x: u8,
+    tile_id: u8,
+    attrs: u8
+}
+
 /// Context trait providing access to fields needed to service graphics.
 pub trait PpuContext: IoRegsContext + InterruptContext {
     /// Get the ppu state.
@@ -94,11 +102,11 @@ pub trait PpuContext: IoRegsContext + InterruptContext {
     /// Get mutable access to the ppu state.
     fn ppu_mut(&mut self) -> &mut PpuState;
 
-    fn vram(&self) -> &MaskableMem<0x2000>;
-    fn vram_mut(&mut self) -> &mut MaskableMem<0x2000>;
+    fn vram(&self) -> &Vram;
+    fn vram_mut(&mut self) -> &mut Vram;
 
-    fn oam(&self) -> &MaskableMem<160>;
-    fn oam_mut(&mut self) -> &mut MaskableMem<160>;
+    fn oam(&self) -> &Oam;
+    fn oam_mut(&mut self) -> &mut Oam;
 
     fn display_ready(&mut self);
 }
@@ -116,12 +124,12 @@ pub fn palette_lookup(palette: u8, color: u8) -> usize {
 
 fn get_tile_line(ctx: &impl PpuContext, tile_id: u8, line: u8, low_data: bool) -> VecDeque<u8> {
     let base_address = if low_data { 0x0 } else { 0x1000 };
-    let tile_offset = (if low_data { tile_id as i16 } else { tile_id as i8 as i16 }) as isize;
+    let tile_offset = if low_data { tile_id as i16 } else { tile_id as i8 as i16 };
 
-    let line_address = (base_address + 16 * tile_offset + 2 * line as isize) as usize;
+    let line_address = (base_address + 16 * tile_offset + 2 * line as i16) as u16;
 
-    let low_bits = ctx.vram().bytes()[line_address];
-    let high_bits = ctx.vram().bytes()[line_address + 1];
+    let low_bits = ctx.vram().deref().read(Addr::from(line_address));
+    let high_bits = ctx.vram().deref().read(Addr::from(line_address + 1));
 
     let mut output = VecDeque::new();
     for i in 0..=7 {
@@ -132,16 +140,14 @@ fn get_tile_line(ctx: &impl PpuContext, tile_id: u8, line: u8, low_data: bool) -
     output
 }
 
-fn get_object(ctx: &impl PpuContext, i: u8) -> &[u8] {
-    let base_index = i as usize * 4;
-    &ctx.oam().bytes()[base_index..base_index+3]
-}
-
-trait Object {
-    fn y(&self) -> u8;
-    fn x(&self) -> u8;
-    fn tile_id(&self) -> u8;
-    fn bg_priority(&self) -> bool;
+fn get_object(ctx: &impl PpuContext, i: u16) -> Object {
+    let base_index = i * 4;
+    Object {
+        y: ctx.oam().deref().read(Addr::from(base_index)),
+        x: ctx.oam().deref().read(Addr::from(base_index + 1)),
+        tile_id: ctx.oam().deref().read(Addr::from(base_index + 2)),
+        attrs: ctx.oam().deref().read(Addr::from(base_index + 3)),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -150,7 +156,7 @@ pub struct PpuState {
   screen_buffer: [(u8, u8, u8); 23040],
   scanline_ticks: u64,
   scanline_x: u8,
-  fetcher_x: usize,
+  fetcher_x: u16,
   bg_fifo: VecDeque<u8>,
   bg_discard: u8,
   in_window: bool,
@@ -195,13 +201,13 @@ pub fn bg_tile_fetch(ctx: &mut impl PpuContext) {
     let tile_map_flag = if ctx.ppu().in_window { LcdFlags::WINDOW_TILE_MAP }
                         else { LcdFlags::BG_TILE_MAP };
 
-    let scroll_offset = if ctx.ppu().in_window { 0 } else { ctx.ioregs().scroll_x() as usize / 8 };
+    let scroll_offset = if ctx.ppu().in_window { 0 } else { ctx.ioregs().scroll_x() as u16 / 8 };
 
     let tile_id_base = if ctx.ioregs().lcd_control().contains(tile_map_flag) {0x1c00} else {0x1800};
 
-    let tile_id_offset = ((ctx.ioregs().lcdc_y() as usize / 8) & 0x1f) * 32 + ((ctx.ppu().fetcher_x + scroll_offset) & 0x1f);
+    let tile_id_offset = ((ctx.ioregs().lcdc_y() as u16 / 8) & 0x1f) * 32 + ((ctx.ppu().fetcher_x + scroll_offset) & 0x1f);
 
-    let tile_id = ctx.vram().bytes()[tile_id_base + tile_id_offset];
+    let tile_id = ctx.vram().deref().read(Addr::from(tile_id_base + tile_id_offset));
 
     if ctx.ioregs().lcdc_y() / 8 == 0 {
         debug!("tile_id_offset: {}, fetcher_x: {}, scroll_offset: {}, tile_id: {:x}", tile_id_offset, ctx.ppu().fetcher_x, scroll_offset, tile_id);
