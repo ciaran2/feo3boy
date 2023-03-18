@@ -228,6 +228,7 @@ pub trait CpuContext: MemContext + InterruptContext {
 pub fn tick(ctx: &mut impl CpuContext) {
     if ctx.cpu().halted {
         if ctx.interrupts().active().is_empty() {
+            ctx.yield1m();
             return;
         }
         ctx.cpu_mut().halted = false;
