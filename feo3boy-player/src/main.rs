@@ -137,7 +137,7 @@ fn main() {
                     let bytes = gb.serial.stream.receive_bytes();
                     if bytes.len() != 0 {
                         for byte in bytes {
-                            stdout.write(&[byte]).unwrap();
+                            stdout.write_all(&[byte]).unwrap();
                         }
                         stdout.flush().unwrap();
                     }
