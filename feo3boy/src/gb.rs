@@ -69,6 +69,7 @@ impl CpuContext for Gb {
         // TODO: run background processing while yielded.
         // Continue processing serial while yielded.
         input::update(self);
+        self.mmu.tick(4);
         serial::tick(self, 4);
         timer::tick(self, 4);
         ppu::tick(self, 4);
