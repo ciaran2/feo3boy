@@ -1,24 +1,13 @@
 use bitflags::bitflags;
 
-#[cfg(feature = "microcode")]
-use log::{debug, trace};
-
 use crate::gbz80core::microcode::{
     Microcode, MicrocodeBuilder, MicrocodeReadable, MicrocodeWritable,
 };
-#[cfg(feature = "microcode")]
-use crate::gbz80core::microcode::{MicrocodeFlow, MicrocodeStack};
-#[cfg(not(feature = "microcode"))]
-use crate::interrupts::Interrupts;
 use crate::interrupts::{InterruptContext, MemInterrupts};
 use crate::memdev::{MemContext, MemDevice};
-pub use microcode::Instr;
-pub use opcode::{CBOpcode, CBOperation, Opcode};
-pub use opcode_args::{AluOp, AluUnaryOp, ConditionCode, Operand16, Operand8};
 
-mod microcode;
-mod opcode;
-mod opcode_args;
+pub mod microcode;
+pub mod opcode;
 mod oputils;
 
 bitflags! {
@@ -216,8 +205,7 @@ impl Default for InterruptMasterState {
 }
 
 /// Internal state of the CPU.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(not(feature = "microcode"), derive(Default))]
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct Gbz80State {
     /// Cpu registers.
     pub regs: Regs,
@@ -229,47 +217,15 @@ pub struct Gbz80State {
     /// counter.
     pub halt_bug: bool,
 
-    // These parts are only used when operating in Microcode mode.
-    /// Stack for the microcode of the processor.
+    /// Current state of the microcode.
     #[cfg(feature = "microcode")]
-    pub microcode_stack: MicrocodeStack,
-    /// Index into the currently executing microcode instruction where we are currently up
-    /// to.
-    #[cfg(feature = "microcode")]
-    pub microcode_pc: usize,
-    /// Previous IME state
-    #[cfg(feature = "microcode")]
-    pub prev_ime: Option<InterruptMasterState>,
-    /// Currently executing instruction.
-    #[cfg(feature = "microcode")]
-    pub instruction: Instr,
-    /// The last-executed microcode. Used to trigger breaking in some CPU ticking modes.
-    #[cfg(feature = "microcode")]
-    pub last_microcode: Microcode,
+    pub microcode: MicrocodeState,
 }
 
 impl Gbz80State {
     /// Create a new Gbz80State.
     pub fn new() -> Gbz80State {
         Default::default()
-    }
-}
-
-#[cfg(feature = "microcode")]
-impl Default for Gbz80State {
-    fn default() -> Self {
-        Gbz80State {
-            regs: Default::default(),
-            interrupt_master_enable: Default::default(),
-            halted: Default::default(),
-            halt_bug: Default::default(),
-
-            microcode_stack: Default::default(),
-            microcode_pc: Default::default(),
-            prev_ime: Default::default(),
-            instruction: Instr::internal_fetch(),
-            last_microcode: Microcode::FetchNextInstruction,
-        }
     }
 }
 
@@ -291,104 +247,156 @@ pub trait CpuContext: MemContext + InterruptContext {
     fn yield1m(&mut self);
 }
 
-/// Executes a single microcode instruction, returning the microcode flow result of that
-/// instruction.
 #[cfg(feature = "microcode")]
-fn step(ctx: &mut impl CpuContext) -> MicrocodeFlow {
-    let ucode = {
-        let cpu = ctx.cpu_mut();
-        if cpu.microcode_pc == 0 {
-            debug!("Starting Instr {}", cpu.instruction.label());
-        }
-        if cpu.microcode_pc < cpu.instruction.len() {
-            let ucode = cpu.instruction[cpu.microcode_pc];
-            cpu.microcode_pc += 1;
-            ucode
-        } else {
-            Microcode::FetchNextInstruction
-        }
-    };
-    trace!("Running microcode {:?}", ucode);
-    ctx.cpu_mut().last_microcode = ucode;
-    ucode.eval(ctx)
-}
+pub use microcode_executor::*;
 
-/// Runs the CPU for one m-cycle, executing until a 'yield' is encountered.
+/// Provides microcode-based CPU execution.
 #[cfg(feature = "microcode")]
-pub fn tick(ctx: &mut impl CpuContext) {
-    loop {
-        if let MicrocodeFlow::Yield1m = step(ctx) {
-            break;
+mod microcode_executor {
+    use log::{debug, trace};
+
+    use crate::gbz80core::microcode::{Instr, Microcode, MicrocodeFlow, MicrocodeStack};
+    use crate::gbz80core::{CpuContext, InterruptMasterState};
+
+    /// State of the microcode executor in the CPU.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct MicrocodeState {
+        /// Stack for the microcode of the processor.
+        pub stack: MicrocodeStack,
+        /// Index into the currently executing microcode instruction where we are
+        /// currently up to.
+        pub pc: usize,
+        /// Previous IME state. If set, will trigger an IME tick the next time there is a
+        /// "fetch next instruction".
+        pub prev_ime: Option<InterruptMasterState>,
+        /// Currently executing instruction.
+        pub instruction: Instr,
+        /// Whether the next microcode to execute is the start of a new instruction fetch
+        /// cycle. This is used to trigger breaking in some execution modes.
+        pub is_fetch_start: bool,
+    }
+
+    impl MicrocodeState {
+        /// Retrieve the current microcode instruction and advance the microcode program
+        /// counter. Also clears is_fetch_start.
+        fn next(&mut self) -> Microcode {
+            if self.pc == 0 {
+                debug!("Starting Instr {}", self.instruction.label());
+            }
+            // is_fetch_start is set by executing the FetchNextInstruction and cleared
+            // when retrieveing the first microcode of the new instruction being fetched.
+            self.is_fetch_start = false;
+            if self.pc < self.instruction.len() {
+                let ucode = self.instruction[self.pc];
+                self.pc += 1;
+                ucode
+            } else {
+                Microcode::FetchNextInstruction
+            }
+        }
+    }
+
+    impl Default for MicrocodeState {
+        fn default() -> Self {
+            Self {
+                stack: Default::default(),
+                pc: Default::default(),
+                prev_ime: Default::default(),
+                instruction: Instr::internal_fetch(),
+                is_fetch_start: true,
+            }
+        }
+    }
+
+    /// Executes a single microcode instruction, returning the microcode flow result of
+    /// that instruction.
+    fn step(ctx: &mut impl CpuContext) -> MicrocodeFlow {
+        let ucode = ctx.cpu_mut().microcode.next();
+        trace!("Running microcode {:?}", ucode);
+        ucode.eval(ctx)
+    }
+
+    /// Runs the CPU for one m-cycle, executing until a 'yield' is encountered.
+    pub fn tick(ctx: &mut impl CpuContext) {
+        while let MicrocodeFlow::Continue = step(ctx) {}
+    }
+
+    /// Runs the CPU until either right after FetchNextInstruction or a Yield1m is
+    /// executed. Returns a MicrocodeFlow indicating which was encountered. A return value
+    /// of [`MicrocodeFlow::Yield1m`] means that a yield was encountered, while a return
+    /// value of [`MicrocodeFlow::Continue`] means that `FetchNextInstruction` was
+    /// encountered.
+    ///
+    /// This can be useful when trying to get the CPU to the boundary between
+    /// instructions, for example when trying to perform a save-state.
+    pub fn tick_until_yield_or_fetch(ctx: &mut impl CpuContext) -> MicrocodeFlow {
+        loop {
+            if let MicrocodeFlow::Yield1m = step(ctx) {
+                return MicrocodeFlow::Yield1m;
+            }
+            if ctx.cpu().microcode.is_fetch_start {
+                return MicrocodeFlow::Continue;
+            }
+        }
+    }
+
+    /// Runs a single instruction on the CPU. This will execute the entirety of a single
+    /// instruction no matter how many m cycles it takes and will call `yield1m` on the
+    /// context whenever the system should process other things for 1 m cycle.
+    ///
+    /// Also stops after 1m cycle if the CPU is halted or after jumping to the interrupt
+    /// handler ("ISR" basically counts as an instruction) but before running the first
+    /// instruction of the interrupt handler itself.
+    ///
+    /// If you mix this with calls to `tick` it may run only part of an instruction, since
+    /// `tick` breaks on a `Yield1m` while this breaks only when `FetchNextInstruction` is
+    /// executed.
+    pub fn run_single_instruction(ctx: &mut impl CpuContext) {
+        loop {
+            if let MicrocodeFlow::Yield1m = step(ctx) {
+                ctx.yield1m();
+            }
+            if ctx.cpu().microcode.is_fetch_start {
+                break;
+            }
         }
     }
 }
 
-/// Runs the CPU until either right after FetchNextInstruction or a Yield1m is
-/// executed. Returns a MicrocodeFlow indicating which was encountered. A return value of
-/// [`MicrocodeFlow::Yield1m`] means that a yield was encountered, while a return value of
-/// [`MicrocodeFlow::Continue`] means that `FetchNextInstruction` was encountered.
-///
-/// This can be useful when trying to get the CPU to the boundary between instructions,
-/// for example when trying to perform a save-state.
-#[cfg(feature = "microcode")]
-pub fn tick_until_yield_or_fetch(ctx: &mut impl CpuContext) -> MicrocodeFlow {
-    loop {
-        if let MicrocodeFlow::Yield1m = step(ctx) {
-            return MicrocodeFlow::Yield1m;
-        }
-        if let Microcode::FetchNextInstruction = ctx.cpu().last_microcode {
-            return MicrocodeFlow::Continue;
-        }
-    }
-}
-
-/// Runs a single instruction on the CPU. This will execute the entirety of a single
-/// instruction no matter how many m cycles it takes and will call `yield1m` on the
-/// context whenever the system should process other things for 1 m cycle.
-///
-/// Also stops after 1m cycle if the CPU is halted or after jumping to the interrupt
-/// handler ("ISR" basically counts as an instruction) but before running the first
-/// instruction of the interrupt handler itself.
-///
-/// If you mix this with calls to `tick` it may run only part of an instruction, since
-/// `tick` breaks on a `Yield1m` while this breaks only when `FetchNextInstruction` is
-/// executed.
-#[cfg(feature = "microcode")]
-pub fn run_single_instruction(ctx: &mut impl CpuContext) {
-    loop {
-        if let MicrocodeFlow::Yield1m = step(ctx) {
-            ctx.yield1m();
-        }
-        if let Microcode::FetchNextInstruction = ctx.cpu().last_microcode {
-            break;
-        }
-    }
-}
-
-/// Runs a single instruction on the CPU. This will execute the entirety of a single
-/// instruction no matter how many m cycles it takes and will call `yield1m` on the
-/// context whenever the system should process other things for 1 m cycle.
-///
-/// Also stops after 1m cycle if the CPU is halted or after jumping to the interrupt
-/// handler ("ISR" basically counts as an instruction) but before running the first
-/// instruction of the interrupt handler itself.
 #[cfg(not(feature = "microcode"))]
-pub fn run_single_instruction(ctx: &mut impl CpuContext) {
-    if ctx.cpu().halted {
-        if ctx.interrupts().active().is_empty() {
-            ctx.yield1m();
+pub use direct_executor::*;
+
+/// Provides functions to run the CPU using the direct-execution method.
+#[cfg(not(feature = "microcode"))]
+mod direct_executor {
+    use crate::gbz80core::opcode::{service_interrupt, Opcode};
+    use crate::gbz80core::CpuContext;
+    use crate::interrupts::Interrupts;
+
+    /// Runs a single instruction on the CPU. This will execute the entirety of a single
+    /// instruction no matter how many m cycles it takes and will call `yield1m` on the
+    /// context whenever the system should process other things for 1 m cycle.
+    ///
+    /// Also stops after 1m cycle if the CPU is halted or after jumping to the interrupt
+    /// handler ("ISR" basically counts as an instruction) but before running the first
+    /// instruction of the interrupt handler itself.
+    pub fn run_single_instruction(ctx: &mut impl CpuContext) {
+        if ctx.cpu().halted {
+            if ctx.interrupts().active().is_empty() {
+                ctx.yield1m();
+                return;
+            }
+            ctx.cpu_mut().halted = false;
+        }
+
+        if service_interrupt(ctx) {
             return;
         }
-        ctx.cpu_mut().halted = false;
-    }
 
-    if opcode::service_interrupt(ctx) {
-        return;
+        let previous_ime = ctx.cpu().interrupt_master_enable;
+        Opcode::load_and_execute(ctx);
+        ctx.cpu_mut().interrupt_master_enable.tick(previous_ime);
     }
-
-    let previous_ime = ctx.cpu().interrupt_master_enable;
-    Opcode::load_and_execute(ctx);
-    ctx.cpu_mut().interrupt_master_enable.tick(previous_ime);
 }
 
 /////////////////////////////////////////

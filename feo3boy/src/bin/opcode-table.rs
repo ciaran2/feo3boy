@@ -1,6 +1,6 @@
 //! Prints out all opcodes in a CSV table for comparison against published opcode tables.
 
-use feo3boy::gbz80core::Opcode;
+use feo3boy::gbz80core::opcode::Opcode;
 
 fn main() {
     for l in 0u8..=0xF {
