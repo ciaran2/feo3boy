@@ -1,9 +1,8 @@
-use std::error::Error;
-use bitflags::bitflags;
 use crate::interrupts::{InterruptContext, InterruptFlags, Interrupts};
 use crate::memdev::{IoRegs, IoRegsContext};
-use log::{debug, trace, info};
-
+use bitflags::bitflags;
+use log::{debug, info, trace};
+use std::error::Error;
 
 bitflags! {
     /// Lcd control status flags
@@ -15,14 +14,13 @@ bitflags! {
 }
 
 impl TimerControl {
-
     pub fn get_period(&self) -> u16 {
         match (*self & TimerControl::TIMER_PERIOD).bits() {
             0 => 1024,
             1 => 16,
             2 => 64,
             3 => 256,
-            _ => panic!("Illegal timer period number encountered. This should be impossible.")
+            _ => panic!("Illegal timer period number encountered. This should be impossible."),
         }
     }
 }
@@ -73,12 +71,10 @@ fn check_interrupt(ctx: &mut impl TimerContext, tcycles: u64) {
             let timer_mod = ctx.ioregs_mut().timer_mod();
             ctx.ioregs_mut().set_timer(timer_mod);
             ctx.interrupts_mut().send(InterruptFlags::TIMER);
-        }
-        else {
+        } else {
             ctx.timer_mut().interrupt_delay -= tcycles;
         }
-    }
-    else {
+    } else {
         ctx.timer_mut().interrupt_queued = false;
     }
 }
@@ -88,19 +84,20 @@ pub fn tick(ctx: &mut impl TimerContext, tcycles: u64) {
 
     check_interrupt(ctx, tcycles);
 
-    if ctx.ioregs().timer_control().contains(TimerControl::TIMER_ENABLE) {
+    if ctx
+        .ioregs()
+        .timer_control()
+        .contains(TimerControl::TIMER_ENABLE)
+    {
         let period = ctx.ioregs().timer_control().get_period();
 
         // falling edge case when divider has been reset
-        if (ctx.timer().old_divider & (period >> 1)) != 0 &&
-           (divider & (period >> 1)) == 0 {
+        if (ctx.timer().old_divider & (period >> 1)) != 0 && (divider & (period >> 1)) == 0 {
             increment_timer(ctx);
-        }
-        else {
+        } else {
             let mask = period - 1;
 
-            if divider & mask + tcycles as u16 & mask > period ||
-               tcycles > period as u64 {
+            if divider & mask + tcycles as u16 & mask > period || tcycles > period as u64 {
                 increment_timer(ctx)
             }
         }

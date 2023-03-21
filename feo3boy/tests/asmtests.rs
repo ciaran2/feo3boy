@@ -10,7 +10,7 @@ fn fibonacci() {
     let mut mem = ExtendMem::from(include_bytes!("fibonacci.bin"));
     let mut cpu = Gbz80State::default();
     while !cpu.halted {
-        gbz80core::tick(&mut (&mut cpu, &mut mem));
+        gbz80core::run_single_instruction(&mut (&mut cpu, &mut mem));
     }
 
     let (mut f1, mut f2) = (0, 1);
@@ -37,7 +37,7 @@ fn fibonacci16() {
     let mut mem = ExtendMem::from(include_bytes!("fibonacci16.bin"));
     let mut cpu = Gbz80State::default();
     while !cpu.halted {
-        gbz80core::tick(&mut (&mut cpu, &mut mem));
+        gbz80core::run_single_instruction(&mut (&mut cpu, &mut mem));
     }
 
     let (mut f1, mut f2) = (0, 1);
@@ -65,7 +65,7 @@ fn squares() {
     let mut mem = ExtendMem::from(include_bytes!("squares.bin"));
     let mut cpu = Gbz80State::default();
     while !cpu.halted {
-        gbz80core::tick(&mut (&mut cpu, &mut mem));
+        gbz80core::run_single_instruction(&mut (&mut cpu, &mut mem));
     }
 
     for (i, square) in (1..).map(|x| x * x).enumerate() {

@@ -1,10 +1,19 @@
 use bitflags::bitflags;
 
-use crate::interrupts::{InterruptContext, Interrupts, MemInterrupts};
+use crate::gbz80core::microcode::{
+    Microcode, MicrocodeBuilder, MicrocodeReadable, MicrocodeWritable,
+};
+#[cfg(feature = "microcode")]
+use crate::gbz80core::microcode::{MicrocodeFlow, MicrocodeStack};
+#[cfg(not(feature = "microcode"))]
+use crate::interrupts::Interrupts;
+use crate::interrupts::{InterruptContext, MemInterrupts};
 use crate::memdev::{MemContext, MemDevice};
+pub use microcode::Instr;
 pub use opcode::{CBOpcode, CBOperation, Opcode};
 pub use opcode_args::{AluOp, AluUnaryOp, ConditionCode, Operand16, Operand8};
 
+mod microcode;
 mod opcode;
 mod opcode_args;
 mod oputils;
@@ -49,6 +58,24 @@ impl Flags {
         } else {
             Flags::empty()
         }
+    }
+}
+
+/// When used as a MicrocodeWritable, Flags causes a write to the Flags register which
+/// applies the given mask to the set of flags being written. In effect it is an
+/// instruction to overwrite the specified flags.
+impl MicrocodeWritable for Flags {
+    fn to_write(self) -> MicrocodeBuilder {
+        Microcode::SetFlagsMasked { mask: self }.into()
+    }
+}
+
+/// When used as a MicrocodeReadable, Flags causes a read from the Flags register which
+/// applies the given mask to the set of flags being read. In effect it is an
+/// instruction to read just the specified flags and put zeroes for all others.
+impl MicrocodeReadable for Flags {
+    fn to_read(self) -> MicrocodeBuilder {
+        Microcode::GetFlagsMasked { mask: self }.into()
     }
 }
 
@@ -128,7 +155,7 @@ impl Regs {
         sp
     }
 
-    /// Returns the current stack pointer and decrements the value.
+    /// Decrements the stack pointer and returns the new value.
     pub fn dec_sp(&mut self) -> u16 {
         self.sp = self.sp.wrapping_sub(1);
         self.sp
@@ -186,7 +213,8 @@ impl Default for InterruptMasterState {
 }
 
 /// Internal state of the CPU.
-#[derive(Default, Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(feature = "microcode"), derive(Default))]
 pub struct Gbz80State {
     /// Cpu registers.
     pub regs: Regs,
@@ -197,12 +225,48 @@ pub struct Gbz80State {
     /// Set to true when the halt bug is tripped until the double-read of the program
     /// counter.
     pub halt_bug: bool,
+
+    // These parts are only used when operating in Microcode mode.
+    /// Stack for the microcode of the processor.
+    #[cfg(feature = "microcode")]
+    pub microcode_stack: MicrocodeStack,
+    /// Index into the currently executing microcode instruction where we are currently up
+    /// to.
+    #[cfg(feature = "microcode")]
+    pub microcode_pc: usize,
+    /// Previous IME state
+    #[cfg(feature = "microcode")]
+    pub prev_ime: Option<InterruptMasterState>,
+    /// Currently executing instruction.
+    #[cfg(feature = "microcode")]
+    pub instruction: Instr,
+    /// The last-executed microcode. Used to trigger breaking in some CPU ticking modes.
+    #[cfg(feature = "microcode")]
+    pub last_microcode: Microcode,
 }
 
 impl Gbz80State {
     /// Create a new Gbz80State.
     pub fn new() -> Gbz80State {
         Default::default()
+    }
+}
+
+#[cfg(feature = "microcode")]
+impl Default for Gbz80State {
+    fn default() -> Self {
+        Gbz80State {
+            regs: Default::default(),
+            interrupt_master_enable: Default::default(),
+            halted: Default::default(),
+            halt_bug: Default::default(),
+
+            microcode_stack: Default::default(),
+            microcode_pc: Default::default(),
+            prev_ime: Default::default(),
+            instruction: Instr::internal_fetch(),
+            last_microcode: Microcode::FetchNextInstruction,
+        }
     }
 }
 
@@ -224,8 +288,85 @@ pub trait CpuContext: MemContext + InterruptContext {
     fn yield1m(&mut self);
 }
 
-/// Runs a single instruction on the CPU.
+/// Executes a single microcode instruction, returning the microcode flow result of that
+/// instruction.
+#[cfg(feature = "microcode")]
+fn step(ctx: &mut impl CpuContext) -> MicrocodeFlow {
+    let ucode = {
+        let cpu = ctx.cpu_mut();
+        if cpu.microcode_pc < cpu.instruction.len() {
+            let ucode = cpu.instruction[cpu.microcode_pc];
+            cpu.microcode_pc += 1;
+            ucode
+        } else {
+            Microcode::FetchNextInstruction
+        }
+    };
+    ctx.cpu_mut().last_microcode = ucode;
+    ucode.eval(ctx)
+}
+
+/// Runs the CPU for one m-cycle, executing until a 'yield' is encountered.
+#[cfg(feature = "microcode")]
 pub fn tick(ctx: &mut impl CpuContext) {
+    loop {
+        if let MicrocodeFlow::Yield1m = step(ctx) {
+            break;
+        }
+    }
+}
+
+/// Runs the CPU until either right after FetchNextInstruction or a Yield1m is
+/// executed. Returns a MicrocodeFlow indicating which was encountered. A return value of
+/// [`MicrocodeFlow::Yield1m`] means that a yield was encountered, while a return value of
+/// [`MicrocodeFlow::Continue`] means that `FetchNextInstruction` was encountered.
+///
+/// This can be useful when trying to get the CPU to the boundary between instructions,
+/// for example when trying to perform a save-state.
+#[cfg(feature = "microcode")]
+pub fn tick_until_yield_or_fetch(ctx: &mut impl CpuContext) -> MicrocodeFlow {
+    loop {
+        if let MicrocodeFlow::Yield1m = step(ctx) {
+            return MicrocodeFlow::Yield1m;
+        }
+        if let Microcode::FetchNextInstruction = ctx.cpu().last_microcode {
+            return MicrocodeFlow::Continue;
+        }
+    }
+}
+
+/// Runs a single instruction on the CPU. This will execute the entirety of a single
+/// instruction no matter how many m cycles it takes and will call `yield1m` on the
+/// context whenever the system should process other things for 1 m cycle.
+///
+/// Also stops after 1m cycle if the CPU is halted or after jumping to the interrupt
+/// handler ("ISR" basically counts as an instruction) but before running the first
+/// instruction of the interrupt handler itself.
+///
+/// If you mix this with calls to `tick` it may run only part of an instruction, since
+/// `tick` breaks on a `Yield1m` while this breaks only when `FetchNextInstruction` is
+/// executed.
+#[cfg(feature = "microcode")]
+pub fn run_single_instruction(ctx: &mut impl CpuContext) {
+    loop {
+        if let MicrocodeFlow::Yield1m = step(ctx) {
+            ctx.yield1m();
+        }
+        if let Microcode::FetchNextInstruction = ctx.cpu().last_microcode {
+            break;
+        }
+    }
+}
+
+/// Runs a single instruction on the CPU. This will execute the entirety of a single
+/// instruction no matter how many m cycles it takes and will call `yield1m` on the
+/// context whenever the system should process other things for 1 m cycle.
+///
+/// Also stops after 1m cycle if the CPU is halted or after jumping to the interrupt
+/// handler ("ISR" basically counts as an instruction) but before running the first
+/// instruction of the interrupt handler itself.
+#[cfg(not(feature = "microcode"))]
+pub fn run_single_instruction(ctx: &mut impl CpuContext) {
     if ctx.cpu().halted {
         if ctx.interrupts().active().is_empty() {
             ctx.yield1m();
@@ -233,6 +374,7 @@ pub fn tick(ctx: &mut impl CpuContext) {
         }
         ctx.cpu_mut().halted = false;
     }
+
     if opcode::service_interrupt(ctx) {
         return;
     }
@@ -354,19 +496,19 @@ mod tests {
         testmem[6] = 0x85;
         testmem[7] = 0x81;
 
-        tick(&mut (&mut cpu, &mut testmem));
+        run_single_instruction(&mut (&mut cpu, &mut testmem));
         assert_eq!(cpu.regs.acc, 0x80, "{:?}", cpu.regs);
 
-        tick(&mut (&mut cpu, &mut testmem));
+        run_single_instruction(&mut (&mut cpu, &mut testmem));
         assert_eq!(cpu.regs.b, 0x01, "{:?}", cpu.regs);
 
-        tick(&mut (&mut cpu, &mut testmem));
+        run_single_instruction(&mut (&mut cpu, &mut testmem));
         assert_eq!(cpu.regs.acc, 0x81, "{:?}", cpu.regs);
 
-        tick(&mut (&mut cpu, &mut testmem));
+        run_single_instruction(&mut (&mut cpu, &mut testmem));
         assert_eq!(cpu.regs.c, 0x85, "{:?}", cpu.regs);
 
-        tick(&mut (&mut cpu, &mut testmem));
+        run_single_instruction(&mut (&mut cpu, &mut testmem));
         assert_eq!(cpu.regs.acc, 0x6, "{:?}", cpu.regs);
         assert!(cpu.regs.flags.contains(Flags::CARRY), "{:?}", cpu.regs);
     }
@@ -423,7 +565,7 @@ mod tests {
                     expected
                 };
 
-                tick(&mut ctx);
+                run_single_instruction(&mut ctx);
                 assert_eq!(ctx, expected);
             }
         }
@@ -466,7 +608,7 @@ mod tests {
                     expected
                 };
 
-                tick(&mut ctx);
+                run_single_instruction(&mut ctx);
                 assert_eq!(ctx, expected);
             }
         }
@@ -519,7 +661,7 @@ mod tests {
                             expected
                         };
 
-                        tick(&mut ctx);
+                        run_single_instruction(&mut ctx);
                         assert_eq!(ctx, expected);
                     }
                 }
@@ -552,7 +694,7 @@ mod tests {
                         expected
                     };
 
-                    tick(&mut ctx);
+                    run_single_instruction(&mut ctx);
                     assert_eq!(ctx, expected);
                 }
             }
@@ -582,7 +724,7 @@ mod tests {
                     expected
                 };
 
-                tick(&mut ctx);
+                run_single_instruction(&mut ctx);
                 assert_eq!(ctx, expected);
             }
         }
@@ -637,7 +779,7 @@ mod tests {
                             expected
                         };
 
-                        tick(&mut ctx);
+                        run_single_instruction(&mut ctx);
                         assert_eq!(ctx, expected);
                     }
                 }
@@ -671,7 +813,7 @@ mod tests {
                         expected
                     };
 
-                    tick(&mut ctx);
+                    run_single_instruction(&mut ctx);
                     assert_eq!(ctx, expected);
                 }
             }
@@ -705,7 +847,7 @@ mod tests {
                     expected
                 };
 
-                tick(&mut ctx);
+                run_single_instruction(&mut ctx);
                 assert_eq!(ctx, expected);
             }
         }
@@ -758,7 +900,7 @@ mod tests {
                             expected
                         };
 
-                        tick(&mut ctx);
+                        run_single_instruction(&mut ctx);
                         assert_eq!(ctx, expected);
                     }
                 }
@@ -790,7 +932,7 @@ mod tests {
                         expected
                     };
 
-                    tick(&mut ctx);
+                    run_single_instruction(&mut ctx);
                     assert_eq!(ctx, expected);
                 }
             }
@@ -809,7 +951,7 @@ mod tests {
                     expected
                 };
 
-                tick(&mut ctx);
+                run_single_instruction(&mut ctx);
                 assert_eq!(ctx, expected);
             }
         }
@@ -863,7 +1005,7 @@ mod tests {
                             expected
                         };
 
-                        tick(&mut ctx);
+                        run_single_instruction(&mut ctx);
                         assert_eq!(ctx, expected);
                     }
                 }
@@ -895,7 +1037,7 @@ mod tests {
                         expected
                     };
 
-                    tick(&mut ctx);
+                    run_single_instruction(&mut ctx);
                     assert_eq!(ctx, expected);
                 }
             }
@@ -919,7 +1061,7 @@ mod tests {
                     expected
                 };
 
-                tick(&mut ctx);
+                run_single_instruction(&mut ctx);
                 assert_eq!(ctx, expected);
             }
         }
@@ -966,7 +1108,7 @@ mod tests {
                             expected
                         };
 
-                        tick(&mut ctx);
+                        run_single_instruction(&mut ctx);
                         assert_eq!(ctx, expected);
                     }
                 }
@@ -992,7 +1134,7 @@ mod tests {
                         expected
                     };
 
-                    tick(&mut ctx);
+                    run_single_instruction(&mut ctx);
                     assert_eq!(ctx, expected);
                 }
             }
@@ -1013,7 +1155,7 @@ mod tests {
                     expected
                 };
 
-                tick(&mut ctx);
+                run_single_instruction(&mut ctx);
                 assert_eq!(ctx, expected);
             }
         }
@@ -1060,7 +1202,7 @@ mod tests {
                             expected
                         };
 
-                        tick(&mut ctx);
+                        run_single_instruction(&mut ctx);
                         assert_eq!(ctx, expected);
                     }
                 }
@@ -1086,7 +1228,7 @@ mod tests {
                         expected
                     };
 
-                    tick(&mut ctx);
+                    run_single_instruction(&mut ctx);
                     assert_eq!(ctx, expected);
                 }
             }
@@ -1105,7 +1247,7 @@ mod tests {
                     expected
                 };
 
-                tick(&mut ctx);
+                run_single_instruction(&mut ctx);
                 assert_eq!(ctx, expected);
             }
         }
@@ -1152,7 +1294,7 @@ mod tests {
                             expected
                         };
 
-                        tick(&mut ctx);
+                        run_single_instruction(&mut ctx);
                         assert_eq!(ctx, expected);
                     }
                 }
@@ -1178,7 +1320,7 @@ mod tests {
                         expected
                     };
 
-                    tick(&mut ctx);
+                    run_single_instruction(&mut ctx);
                     assert_eq!(ctx, expected);
                 }
             }
@@ -1199,7 +1341,7 @@ mod tests {
                     expected
                 };
 
-                tick(&mut ctx);
+                run_single_instruction(&mut ctx);
                 assert_eq!(ctx, expected);
             }
         }
@@ -1251,7 +1393,7 @@ mod tests {
                             expected
                         };
 
-                        tick(&mut ctx);
+                        run_single_instruction(&mut ctx);
                         assert_eq!(ctx, expected);
                     }
                 }
@@ -1282,7 +1424,7 @@ mod tests {
                         expected
                     };
 
-                    tick(&mut ctx);
+                    run_single_instruction(&mut ctx);
                     assert_eq!(ctx, expected);
                 }
             }
@@ -1300,7 +1442,7 @@ mod tests {
                     expected
                 };
 
-                tick(&mut ctx);
+                run_single_instruction(&mut ctx);
                 assert_eq!(ctx, expected);
             }
         }
@@ -1340,7 +1482,7 @@ mod tests {
                         expected
                     };
 
-                    tick(&mut ctx);
+                    run_single_instruction(&mut ctx);
                     assert_eq!(ctx, expected);
                 }
             }
@@ -1382,7 +1524,7 @@ mod tests {
                         expected
                     };
 
-                    tick(&mut ctx);
+                    run_single_instruction(&mut ctx);
                     assert_eq!(ctx, expected);
                 }
             }
@@ -1405,7 +1547,7 @@ mod tests {
                     expected
                 };
 
-                tick(&mut ctx);
+                run_single_instruction(&mut ctx);
                 assert_eq!(ctx, expected);
             }
         }
@@ -1452,7 +1594,7 @@ mod tests {
                         expected
                     };
 
-                    tick(&mut ctx);
+                    run_single_instruction(&mut ctx);
                     assert_eq!(ctx, expected);
                 }
             }
@@ -1503,7 +1645,7 @@ mod tests {
                         expected
                     };
 
-                    tick(&mut ctx);
+                    run_single_instruction(&mut ctx);
                     assert_eq!(ctx, expected);
                 }
             }

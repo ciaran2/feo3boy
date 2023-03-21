@@ -1,11 +1,22 @@
 use std::fmt;
+#[cfg(feature = "microcode")]
+use std::mem::{self, MaybeUninit};
 
+#[cfg(not(feature = "microcode"))]
 use log::{debug, trace, warn};
+#[cfg(feature = "microcode")]
+use once_cell::sync::Lazy;
 
-use super::oputils::{add8_flags, offset_addr, rotate_left9, rotate_right9, sub8_flags};
-use super::{AluOp, AluUnaryOp, ConditionCode, CpuContext, Flags, Operand16, Operand8};
-use crate::interrupts::Interrupts;
-use crate::memdev::MemDevice;
+#[cfg(feature = "microcode")]
+use crate::gbz80core::microcode::Instr;
+use crate::gbz80core::microcode::{
+    BitOp, GbStack16, Immediate8, InstrDef, Microcode, MicrocodeBuilder, Reg16, UnaryOp,
+};
+#[cfg(not(feature = "microcode"))]
+use crate::gbz80core::oputils::{halt, rotate_left9, rotate_right9};
+#[cfg(not(feature = "microcode"))]
+use crate::gbz80core::CpuContext;
+use crate::gbz80core::{AluOp, AluUnaryOp, ConditionCode, Flags, Operand16, Operand8};
 
 // Opcode References:
 // - Decoding: www.z80.info/decoding.htm
@@ -231,7 +242,31 @@ impl Opcode {
         }
     }
 
+    /// Get the [`Instr`] for a particular Opcode.
+    #[cfg(feature = "microcode")]
+    pub fn get_instruction(opcode: u8) -> Instr {
+        /// Lookup table for Instrs for particular opcodes.
+        static OPCODE_TABLE: Lazy<[InstrDef; 256]> = Lazy::new(|| {
+            // Create an uninitialized array of `MaybeUninit`. The `assume_init` is
+            // safe because the type we are claiming to have initialized here is a
+            // bunch of `MaybeUninit`s, which do not require initialization.
+            let mut data: [MaybeUninit<InstrDef>; 256] =
+                unsafe { MaybeUninit::uninit().assume_init() };
+
+            for i in 0..256 {
+                data[i].write(Opcode::decode(i as u8).into());
+            }
+
+            // Everything is initialized. Transmute the array to the
+            // initialized type.
+            unsafe { mem::transmute::<_, [InstrDef; 256]>(data) }
+        });
+
+        Instr::new(&OPCODE_TABLE[opcode as usize])
+    }
+
     /// Load and execute a single opcode from the given context.
+    #[cfg(not(feature = "microcode"))]
     pub(super) fn load_and_execute(ctx: &mut impl CpuContext) {
         let pc = ctx.cpu().regs.pc;
         trace!("Loading opcode at {:#6X}", pc);
@@ -247,34 +282,35 @@ impl Opcode {
     }
 
     /// Execute this opcode on the given context.
+    #[cfg(not(feature = "microcode"))]
     fn execute(self, ctx: &mut impl CpuContext) {
         match self {
             Self::Nop => {}
             Self::Stop => panic!("STOP is bizarre and complicated and not implemented."),
-            Self::JumpRelative(cond) => jump_relative(ctx, cond),
-            Self::Inc8(operand) => inc8(ctx, operand),
-            Self::Dec8(operand) => dec8(ctx, operand),
-            Self::Load8 { dest, source } => load8(ctx, dest, source),
-            Self::Inc16(operand) => inc16(ctx, operand),
-            Self::Dec16(operand) => dec16(ctx, operand),
-            Self::Load16 { dest, source } => load16(ctx, dest, source),
-            Self::Add16(operand) => add16(ctx, operand),
+            Self::JumpRelative(cond) => ops::jump_relative(ctx, cond),
+            Self::Inc8(operand) => ops::inc8(ctx, operand),
+            Self::Dec8(operand) => ops::dec8(ctx, operand),
+            Self::Load8 { dest, source } => ops::load8(ctx, dest, source),
+            Self::Inc16(operand) => ops::inc16(ctx, operand),
+            Self::Dec16(operand) => ops::dec16(ctx, operand),
+            Self::Load16 { dest, source } => ops::load16(ctx, dest, source),
+            Self::Add16(operand) => ops::add16(ctx, operand),
             Self::Halt => halt(ctx),
-            Self::AluOp { operand, op } => alu_op(ctx, operand, op),
+            Self::AluOp { operand, op } => ops::alu_op(ctx, operand, op),
             Self::AluUnary(op) => op.exec(ctx),
-            Self::Call(cond) => call(ctx, cond),
-            Self::Jump(cond) => jump(ctx, cond),
-            Self::Ret(cond) => ret(ctx, cond),
-            Self::Push(operand) => push(ctx, operand),
-            Self::Pop(operand) => pop(ctx, operand),
+            Self::Call(cond) => ops::call(ctx, cond),
+            Self::Jump(cond) => ops::jump(ctx, cond),
+            Self::Ret(cond) => ops::ret(ctx, cond),
+            Self::Push(operand) => ops::push(ctx, operand),
+            Self::Pop(operand) => ops::pop(ctx, operand),
             Self::PrefixCB => CBOpcode::load_and_execute(ctx),
-            Self::DisableInterrupts => disable_interrupts(ctx),
-            Self::EnableInterrupts => enable_interrupts(ctx),
-            Self::RetInterrupt => interrupt_return(ctx),
-            Self::OffsetSp => offset_sp(ctx),
-            Self::AddressOfOffsetSp => address_of_offset_sp(ctx),
-            Self::JumpHL => jump_hl(ctx),
-            Self::Reset(dest) => reset(ctx, dest),
+            Self::DisableInterrupts => ops::disable_interrupts(ctx),
+            Self::EnableInterrupts => ops::enable_interrupts(ctx),
+            Self::RetInterrupt => ops::interrupt_return(ctx),
+            Self::OffsetSp => ops::offset_sp(ctx),
+            Self::AddressOfOffsetSp => ops::address_of_offset_sp(ctx),
+            Self::JumpHL => ops::jump_hl(ctx),
+            Self::Reset(dest) => ops::reset(ctx, dest),
             // A brief note on this doc page:
             // https://gbdev.io/pandocs/CPU_Comparison_with_Z80.html
             // says that the unused opcodes will lock up the CPU, rather than behave as a
@@ -286,6 +322,49 @@ impl Opcode {
                 );
             }
         }
+    }
+}
+
+impl From<Opcode> for InstrDef {
+    fn from(value: Opcode) -> Self {
+        let builder = match value {
+            Opcode::Nop => MicrocodeBuilder::new(),
+            Opcode::Stop => Microcode::Stop.into(),
+            Opcode::JumpRelative(cond) => ucode_ops::jump_relative(cond),
+            Opcode::Inc8(operand) => ucode_ops::inc8(operand),
+            Opcode::Dec8(operand) => ucode_ops::dec8(operand),
+            Opcode::Load8 { dest, source } => MicrocodeBuilder::read(source).then_write(dest),
+            Opcode::Inc16(operand) => ucode_ops::inc16(operand),
+            Opcode::Dec16(operand) => ucode_ops::dec16(operand),
+            Opcode::Load16 { dest, source } => ucode_ops::load16(dest, source),
+            Opcode::Add16(operand) => ucode_ops::add16(operand),
+            Opcode::Halt => Microcode::Halt.into(),
+            Opcode::AluOp { operand, op } => MicrocodeBuilder::read(operand).then(op),
+            Opcode::AluUnary(op) => op.into(),
+            Opcode::Call(cond) => ucode_ops::call(cond),
+            Opcode::Jump(cond) => ucode_ops::jump(cond),
+            Opcode::Ret(cond) => ucode_ops::ret(cond),
+            Opcode::Push(operand) => MicrocodeBuilder::read(operand)
+                // Push has an extra delay before writing.
+                .then_yield()
+                .then_write(GbStack16),
+            Opcode::Pop(operand) => MicrocodeBuilder::read(GbStack16).then_write(operand),
+            Opcode::PrefixCB => MicrocodeBuilder::read(Immediate8).then(Microcode::ParseCBOpcode),
+            Opcode::DisableInterrupts => Microcode::DisableInterrupts.into(),
+            Opcode::EnableInterrupts => Microcode::EnableInterrupts { immediate: false }.into(),
+            Opcode::RetInterrupt => ucode_ops::interrupt_return(),
+            Opcode::OffsetSp => ucode_ops::offset_sp(),
+            Opcode::AddressOfOffsetSp => ucode_ops::address_of_offset_sp(),
+            Opcode::JumpHL => MicrocodeBuilder::read(Reg16::HL).then_write(Reg16::Pc),
+            Opcode::Reset(dest) => ucode_ops::reset(dest),
+            // A brief note on this doc page:
+            // https://gbdev.io/pandocs/CPU_Comparison_with_Z80.html
+            // says that the unused opcodes will lock up the CPU, rather than behave as a
+            // no-op.
+            // However, we just build them as an empty instruction, which is a no-op.
+            Opcode::MissingInstruction(_) => MicrocodeBuilder::new(),
+        };
+        builder.build(value.to_string())
     }
 }
 
@@ -327,327 +406,587 @@ impl fmt::Display for Opcode {
     }
 }
 
-//////////////////////////
-// Opcode Implementations:
-//////////////////////////
+#[cfg(not(feature = "microcode"))]
+pub(super) use ops::service_interrupt;
 
-/// Implements the relative jump instruction.
-fn jump_relative(ctx: &mut impl CpuContext, cond: ConditionCode) {
-    // Loading the offset also moves the program counter over the next instruction, which is
-    // good because the jump is relative to the following instruction.
-    let offset = Operand8::Immediate.read(ctx) as i8;
-    let base = ctx.cpu().regs.pc;
-    // JR doesn't set any flags.
-    let (dest, _) = offset_addr(base, offset);
-    if cond.evaluate(ctx) {
-        trace!("Relative jump by {} from {} to {}", offset, base, dest);
-        ctx.cpu_mut().regs.pc = dest;
-    } else {
-        trace!("Skipping jump by {} from {} to {}", offset, base, dest);
-    }
-}
+/// Opcode Implementations:
+#[cfg(not(feature = "microcode"))]
+mod ops {
+    use log::trace;
 
-/// Implements 8 bit increment instruction.
-fn inc8(ctx: &mut impl CpuContext, operand: Operand8) {
-    // Inc doesn't set the carry flag.
-    const MASK: Flags = Flags::all().difference(Flags::CARRY);
+    use crate::gbz80core::oputils::{add8_flags, offset_addr, sub8_flags};
+    use crate::gbz80core::{AluOp, ConditionCode, CpuContext, Flags, Operand16, Operand8};
+    use crate::interrupts::Interrupts;
+    use crate::memdev::MemDevice;
 
-    let val = operand.read(ctx);
-    let (res, flags) = add8_flags(val, 1);
-    trace!("Evaluating INC {} ({} => {})", operand, val, res);
-    ctx.cpu_mut().regs.flags.merge(flags, MASK);
-    operand.write(ctx, res);
-}
-
-/// Implements 8 bit decrement instruction.
-fn dec8(ctx: &mut impl CpuContext, operand: Operand8) {
-    // Dec doesn't set the carry flag.
-    const MASK: Flags = Flags::all().difference(Flags::CARRY);
-
-    let val = operand.read(ctx);
-    let (res, flags) = sub8_flags(val, 1);
-    trace!("Evaluating DEC {} ({} => {})", operand, val, res);
-    ctx.cpu_mut().regs.flags.merge(flags, MASK);
-    operand.write(ctx, res);
-}
-
-/// Implements 8 bit load operations.
-fn load8(ctx: &mut impl CpuContext, dest: Operand8, source: Operand8) {
-    let val = source.read(ctx);
-    trace!("Evaluating LD {},{} (<- {})", dest, source, val);
-    dest.write(ctx, val);
-}
-
-/// Implements 16 bit increment instruction.
-fn inc16(ctx: &mut impl CpuContext, operand: Operand16) {
-    // 16 bit inc doesn't set any flags, and all actual operands are always registers, but it does
-    // delay by 1 additional M cycle, probably because it has to operate on two bytes.
-    let val = operand.read(ctx);
-    let res = val.wrapping_add(1);
-    trace!("Evaluating INC {} ({} => {})", operand, val, res);
-    ctx.yield1m();
-    operand.write(ctx, res);
-}
-
-/// Implements 16 bit decrement instruction.
-fn dec16(ctx: &mut impl CpuContext, operand: Operand16) {
-    // 16 bit dec doesn't set any flags, and all actual operands are always registers, but it does
-    // delay by 1 additional M cycle, probably because it has to operate on two bytes.
-    let val = operand.read(ctx);
-    let res = val.wrapping_sub(1);
-    trace!("Evaluating DEC {} ({} => {})", operand, val, res);
-    ctx.yield1m();
-    operand.write(ctx, res);
-}
-
-/// Implements 16 bit load operations.
-fn load16(ctx: &mut impl CpuContext, dest: Operand16, source: Operand16) {
-    let val = source.read(ctx);
-    if (dest, source) == (Operand16::Sp, Operand16::HL) {
-        // Most of the 16 bit loads are <Pair>,<Immediate> and take time based on number of memory
-        // accesses. There are two exceptions. LD (u16),SP, which is also just timed based on the
-        // number of memory accesses, and LD SP,HL, which is all registers but still takes an extra
-        // 1m cycle, which isn't automatically provided by Operand16 register interactions, so we
-        // insert it here.
-        ctx.yield1m();
-    }
-    trace!("Evaluating LD {},{} (<- {})", dest, source, val);
-    dest.write(ctx, val);
-}
-
-/// Implements 16 bit register add into HL. Never sets the zero flag and clears the subtract flag,
-/// but does set carry and half-carry based on the upper byte of the operation (as if it was
-/// performed by running the pseudo-instructions `add l,<arg-low>; adc h,<arg-high>`.
-fn add16(ctx: &mut impl CpuContext, arg: Operand16) {
-    // 16 bit add never modifies the zero flag.
-    const MASK: Flags = Flags::all().difference(Flags::ZERO);
-
-    let lhs = ctx.cpu().regs.hl();
-    let rhs = arg.read(ctx); // This will always be a register in practice.
-
-    let mut flags = Flags::empty();
-    if (lhs & 0x7ff) + (rhs & 0x7ff) > 0x7ff {
-        flags |= Flags::HALFCARRY;
-    }
-    let (res, carry) = lhs.overflowing_add(rhs);
-    flags |= Flags::check_carry(carry);
-
-    ctx.cpu_mut().regs.set_hl(res);
-    ctx.cpu_mut().regs.flags.merge(flags, MASK);
-}
-
-/// If `IME` is set, just halts the CPU until there is an interrupt available to be serviced. If
-/// there's already an interrupt to be serviced, `HALT` is effectively a `NOP` and excution moved
-/// directly to the interrupt handler then to the next instruction.
-///
-/// If `IME` is not set, there's a possibility of triggering a CPU bug:
-/// *   If no interrupt is pending, the CPU still halts and resumes the next time an interrupt
-///     becomes pending, but the interrupt just isn't handled because IME is off.
-/// *   If there are enabled interrupts pending (`[IE] & [IF] != 0`), the bug is triggered:
-///     *   In the normal case, the bug just prevents the program counter from incrementing
-///         properly, so the byte after `HALT` will be read twice. (This presumably means that any
-///         1-byte instruction will execute twice, and any two-byte instruction will read itself as
-///         the following value, but that's somewhat unclear. Its also not clear what happens if an
-///         `RST` is executed, since that's a 1 byte jump. Does overwritting the `PC` avert the bug?
-///         Note that with any normal `CALL`, `JP`, or `JR`, the repeat byte would be used as the
-///         jump target or offset instead.)
-///     *   If `EI` executed just before `HALT` such that `IME` would become true after the `HALT`,
-///         the bug is even weirder: the interrupt is serviced as normal, but then the interrupt
-///         returns to `halt` which is executed again.
-///
-/// Implementing the behavior of preventing PC increment would require a bunch of complex extra
-/// state which would have to be checked in a bunch of places, so for now this just panics if the
-/// bug would be encountered.
-fn halt(ctx: &mut impl CpuContext) {
-    if ctx.cpu().interrupt_master_enable.enabled() {
-        // No need to special-case interrupts here, since the next `tick` call will un-halt anyway.
-        ctx.cpu_mut().halted = true;
-    } else {
-        let enabled_interrupts = ctx.interrupts().enabled();
-        let pending_interrupts = ctx.interrupts().queued();
-        if enabled_interrupts.intersects(pending_interrupts) {
-            // Halt doesn't actually happen, and instead the program counter will fail to
-            // increment in the next step.
-            ctx.cpu_mut().halt_bug = true;
+    /// Implements the relative jump instruction.
+    pub(super) fn jump_relative(ctx: &mut impl CpuContext, cond: ConditionCode) {
+        // Loading the offset also moves the program counter over the next instruction, which is
+        // good because the jump is relative to the following instruction.
+        let offset = Operand8::Immediate.read(ctx) as i8;
+        let base = ctx.cpu().regs.pc;
+        // JR doesn't set any flags.
+        let (dest, _) = offset_addr(base, offset);
+        if cond.evaluate(ctx) {
+            trace!("Relative jump by {} from {} to {}", offset, base, dest);
+            // Modifying the PC takes an extra tick, which isn't used if the condition fails.
+            ctx.yield1m();
+            ctx.cpu_mut().regs.pc = dest;
         } else {
-            // `tick` will un-halt next time ([IE] & [IF] != 0), but will not service the interrupt.
-            ctx.cpu_mut().halted = true;
+            trace!("Skipping jump by {} from {} to {}", offset, base, dest);
         }
     }
-}
 
-/// Runs an ALU operation.
-fn alu_op(ctx: &mut impl CpuContext, operand: Operand8, op: AluOp) {
-    let arg = operand.read(ctx);
-    op.exec(ctx, arg);
-}
+    /// Implements 8 bit increment instruction.
+    pub(super) fn inc8(ctx: &mut impl CpuContext, operand: Operand8) {
+        // Inc doesn't set the carry flag.
+        const MASK: Flags = Flags::all().difference(Flags::CARRY);
 
-/// Performs a conditional call.
-fn call(ctx: &mut impl CpuContext, cond: ConditionCode) {
-    // Conveniently, unconditional call behaves exactly the same as a conditional call with a true
-    // value, down to the timing.
-    let dest = Operand16::Immediate.read(ctx);
-    if cond.evaluate(ctx) {
-        // Conditional jump has an extra internal delay if the condition is true.
-        ctx.yield1m();
-        push_helper(ctx, ctx.cpu().regs.pc);
-        ctx.cpu_mut().regs.pc = dest;
+        let val = operand.read(ctx);
+        let (res, flags) = add8_flags(val, 1);
+        trace!("Evaluating INC {} ({} => {})", operand, val, res);
+        ctx.cpu_mut().regs.flags.merge(flags, MASK);
+        operand.write(ctx, res);
     }
-}
 
-/// Performs a conditional absolute jump.
-fn jump(ctx: &mut impl CpuContext, cond: ConditionCode) {
-    // Conveniently, unconditional call behaves exactly the same as a conditional call with a true
-    // value, down to the timing.
-    let dest = Operand16::Immediate.read(ctx);
-    if cond.evaluate(ctx) {
-        // Branching adds an extra cycle despite not accessing memory.
-        ctx.yield1m();
-        ctx.cpu_mut().regs.pc = dest;
+    /// Implements 8 bit decrement instruction.
+    pub(super) fn dec8(ctx: &mut impl CpuContext, operand: Operand8) {
+        // Dec doesn't set the carry flag.
+        const MASK: Flags = Flags::all().difference(Flags::CARRY);
+
+        let val = operand.read(ctx);
+        let (res, flags) = sub8_flags(val, 1);
+        trace!("Evaluating DEC {} ({} => {})", operand, val, res);
+        ctx.cpu_mut().regs.flags.merge(flags, MASK);
+        operand.write(ctx, res);
     }
-}
 
-/// Performs a conditional return.
-fn ret(ctx: &mut impl CpuContext, cond: ConditionCode) {
-    // Unlike Jump and Call, Ret is different depending on whether it is conditional or unconditional.
-    if cond == ConditionCode::Unconditional {
-        let dest = pop_helper(ctx);
-        // There's an extra 1m delay after loading SP.
+    /// Implements 8 bit load operations.
+    pub(super) fn load8(ctx: &mut impl CpuContext, dest: Operand8, source: Operand8) {
+        let val = source.read(ctx);
+        trace!("Evaluating LD {},{} (<- {})", dest, source, val);
+        dest.write(ctx, val);
+    }
+
+    /// Implements 16 bit increment instruction.
+    pub(super) fn inc16(ctx: &mut impl CpuContext, operand: Operand16) {
+        // 16 bit inc doesn't set any flags, and all actual operands are always registers, but it does
+        // delay by 1 additional M cycle, probably because it has to operate on two bytes.
+        let val = operand.read(ctx);
+        let res = val.wrapping_add(1);
+        trace!("Evaluating INC {} ({} => {})", operand, val, res);
         ctx.yield1m();
-        ctx.cpu_mut().regs.pc = dest;
-    } else {
-        // Conditional branch always has this extra delay before evaluating.
+        operand.write(ctx, res);
+    }
+
+    /// Implements 16 bit decrement instruction.
+    pub(super) fn dec16(ctx: &mut impl CpuContext, operand: Operand16) {
+        // 16 bit dec doesn't set any flags, and all actual operands are always registers, but it does
+        // delay by 1 additional M cycle, probably because it has to operate on two bytes.
+        let val = operand.read(ctx);
+        let res = val.wrapping_sub(1);
+        trace!("Evaluating DEC {} ({} => {})", operand, val, res);
         ctx.yield1m();
+        operand.write(ctx, res);
+    }
+
+    /// Implements 16 bit load operations.
+    pub(super) fn load16(ctx: &mut impl CpuContext, dest: Operand16, source: Operand16) {
+        let val = source.read(ctx);
+        if (dest, source) == (Operand16::Sp, Operand16::HL) {
+            // Most of the 16 bit loads are <Pair>,<Immediate> and take time based on number of memory
+            // accesses. There are two exceptions. LD (u16),SP, which is also just timed based on the
+            // number of memory accesses, and LD SP,HL, which is all registers but still takes an extra
+            // 1m cycle, which isn't automatically provided by Operand16 register interactions, so we
+            // insert it here.
+            ctx.yield1m();
+        }
+        trace!("Evaluating LD {},{} (<- {})", dest, source, val);
+        dest.write(ctx, val);
+    }
+
+    /// Implements 16 bit register add into HL. Never sets the zero flag and clears the subtract flag,
+    /// but does set carry and half-carry based on the upper byte of the operation (as if it was
+    /// performed by running the pseudo-instructions `add l,<arg-low>; adc h,<arg-high>`.
+    pub(super) fn add16(ctx: &mut impl CpuContext, arg: Operand16) {
+        // 16 bit add never modifies the zero flag.
+        const MASK: Flags = Flags::all().difference(Flags::ZERO);
+
+        let lhs = ctx.cpu().regs.hl();
+        let rhs = arg.read(ctx); // This will always be a register in practice.
+
+        let mut flags = Flags::empty();
+        if (lhs & 0x7ff) + (rhs & 0x7ff) > 0x7ff {
+            flags |= Flags::HALFCARRY;
+        }
+        let (res, carry) = lhs.overflowing_add(rhs);
+        flags |= Flags::check_carry(carry);
+
+        // 16 bit adds have a time of 8t/2m, so 1 more cycle is needed in addition to their
+        // instruction load time.
+        ctx.yield1m();
+
+        ctx.cpu_mut().regs.set_hl(res);
+        ctx.cpu_mut().regs.flags.merge(flags, MASK);
+    }
+
+    /// Runs an ALU operation.
+    pub(super) fn alu_op(ctx: &mut impl CpuContext, operand: Operand8, op: AluOp) {
+        let arg = operand.read(ctx);
+        op.exec(ctx, arg);
+    }
+
+    /// Performs a conditional call.
+    pub(super) fn call(ctx: &mut impl CpuContext, cond: ConditionCode) {
+        // Conveniently, unconditional call behaves exactly the same as a conditional call with a true
+        // value, down to the timing.
+        let dest = Operand16::Immediate.read(ctx);
         if cond.evaluate(ctx) {
-            let dest = pop_helper(ctx);
-            // But there's also an extra delay after reading.
+            // Conditional jump has an extra internal delay if the condition is true.
+            ctx.yield1m();
+            push_helper(ctx, ctx.cpu().regs.pc);
+            ctx.cpu_mut().regs.pc = dest;
+        }
+    }
+
+    /// Performs a conditional absolute jump.
+    pub(super) fn jump(ctx: &mut impl CpuContext, cond: ConditionCode) {
+        // Conveniently, unconditional call behaves exactly the same as a conditional call with a true
+        // value, down to the timing.
+        let dest = Operand16::Immediate.read(ctx);
+        if cond.evaluate(ctx) {
+            // Branching adds an extra cycle despite not accessing memory.
             ctx.yield1m();
             ctx.cpu_mut().regs.pc = dest;
         }
     }
-}
 
-/// Implements push instruction.
-fn push(ctx: &mut impl CpuContext, operand: Operand16) {
-    // In practice, operand is always a register.
-    let val = operand.read(ctx);
-    // Push has an extra delay before writing.
-    ctx.yield1m();
-    push_helper(ctx, val);
-}
-
-/// Implements pop instruction.
-fn pop(ctx: &mut impl CpuContext, operand: Operand16) {
-    let val = pop_helper(ctx);
-    // In practice, operand is always a register.
-    operand.write(ctx, val)
-}
-
-/// Push helper, shared between push and call. Pushes a caller-supplied 16 bit value onto the stack,
-/// waiting 1m between each byte and decrementing the stack pointer by 2.
-fn push_helper(ctx: &mut impl CpuContext, val: u16) {
-    let [low, high] = val.to_le_bytes();
-    ctx.yield1m();
-    let addr = ctx.cpu_mut().regs.dec_sp();
-    ctx.mem_mut().write(addr.into(), high);
-
-    ctx.yield1m();
-    let addr = ctx.cpu_mut().regs.dec_sp();
-    ctx.mem_mut().write(addr.into(), low);
-}
-
-/// Pop helper, shared between pop and ret. Pops value from the stack, waiting 1m between each byte
-/// and incrementing the stack pointer by 2.
-fn pop_helper(ctx: &mut impl CpuContext) -> u16 {
-    ctx.yield1m();
-    let addr = ctx.cpu_mut().regs.inc_sp();
-    let low = ctx.mem().read(addr.into());
-
-    ctx.yield1m();
-    let addr = ctx.cpu_mut().regs.inc_sp();
-    let high = ctx.mem().read(addr.into());
-
-    u16::from_le_bytes([low, high])
-}
-
-/// Checks if an interrupt should be serviced, and if so performs the hidden isr
-/// instruction to jump to the interrupt handler. If an interrupt was handled, returns
-/// true.
-pub(super) fn service_interrupt(ctx: &mut impl CpuContext) -> bool {
-    if ctx.cpu().interrupt_master_enable.enabled() {
-        if let Some(interrupt) = ctx.interrupts().active().iter().next() {
+    /// Performs a conditional return.
+    pub(super) fn ret(ctx: &mut impl CpuContext, cond: ConditionCode) {
+        // Unlike Jump and Call, Ret is different depending on whether it is conditional or unconditional.
+        if cond == ConditionCode::Unconditional {
+            let dest = pop_helper(ctx);
+            // There's an extra 1m delay after loading SP.
             ctx.yield1m();
+            ctx.cpu_mut().regs.pc = dest;
+        } else {
+            // Conditional branch always has this extra delay before evaluating.
             ctx.yield1m();
-            ctx.interrupts_mut().clear(interrupt);
-            ctx.cpu_mut().interrupt_master_enable.clear();
-            let ret_loc = if ctx.cpu().halt_bug {
-                let state = ctx.cpu_mut();
-                state.halt_bug = false;
-                state.regs.pc.wrapping_sub(1)
-            } else {
-                ctx.cpu().regs.pc
-            };
-            push_helper(ctx, ret_loc);
-            ctx.yield1m();
-            ctx.cpu_mut().regs.pc = interrupt.handler_addr();
-            return true;
+            if cond.evaluate(ctx) {
+                let dest = pop_helper(ctx);
+                // But there's also an extra delay after reading.
+                ctx.yield1m();
+                ctx.cpu_mut().regs.pc = dest;
+            }
         }
     }
-    false
+
+    /// Implements push instruction.
+    pub(super) fn push(ctx: &mut impl CpuContext, operand: Operand16) {
+        // In practice, operand is always a register.
+        let val = operand.read(ctx);
+        // Push has an extra delay before writing.
+        ctx.yield1m();
+        push_helper(ctx, val);
+    }
+
+    /// Implements pop instruction.
+    pub(super) fn pop(ctx: &mut impl CpuContext, operand: Operand16) {
+        let val = pop_helper(ctx);
+        // In practice, operand is always a register.
+        operand.write(ctx, val)
+    }
+
+    /// Push helper, shared between push and call. Pushes a caller-supplied 16 bit value onto the stack,
+    /// waiting 1m between each byte and decrementing the stack pointer by 2.
+    pub(super) fn push_helper(ctx: &mut impl CpuContext, val: u16) {
+        let [low, high] = val.to_le_bytes();
+        ctx.yield1m();
+        let addr = ctx.cpu_mut().regs.dec_sp();
+        ctx.mem_mut().write(addr.into(), high);
+
+        ctx.yield1m();
+        let addr = ctx.cpu_mut().regs.dec_sp();
+        ctx.mem_mut().write(addr.into(), low);
+    }
+
+    /// Pop helper, shared between pop and ret. Pops value from the stack, waiting 1m between each byte
+    /// and incrementing the stack pointer by 2.
+    pub(super) fn pop_helper(ctx: &mut impl CpuContext) -> u16 {
+        ctx.yield1m();
+        let addr = ctx.cpu_mut().regs.inc_sp();
+        let low = ctx.mem().read(addr.into());
+
+        ctx.yield1m();
+        let addr = ctx.cpu_mut().regs.inc_sp();
+        let high = ctx.mem().read(addr.into());
+
+        u16::from_le_bytes([low, high])
+    }
+
+    /// Checks if an interrupt should be serviced, and if so performs the hidden isr
+    /// instruction to jump to the interrupt handler. If an interrupt was handled, returns
+    /// true.
+    pub(in crate::gbz80core) fn service_interrupt(ctx: &mut impl CpuContext) -> bool {
+        if ctx.cpu().interrupt_master_enable.enabled() {
+            if let Some(interrupt) = ctx.interrupts().active().iter().next() {
+                ctx.yield1m();
+                ctx.yield1m();
+                ctx.interrupts_mut().clear(interrupt);
+                ctx.cpu_mut().interrupt_master_enable.clear();
+                let ret_loc = if ctx.cpu().halt_bug {
+                    let state = ctx.cpu_mut();
+                    state.halt_bug = false;
+                    state.regs.pc.wrapping_sub(1)
+                } else {
+                    ctx.cpu().regs.pc
+                };
+                push_helper(ctx, ret_loc);
+                ctx.yield1m();
+                ctx.cpu_mut().regs.pc = interrupt.handler_addr();
+                return true;
+            }
+        }
+        false
+    }
+
+    /// DI instruction (applies immediately).
+    pub(super) fn disable_interrupts(ctx: &mut impl CpuContext) {
+        ctx.cpu_mut().interrupt_master_enable.clear();
+    }
+
+    /// EI instruction (applies after the following instruction).
+    pub(super) fn enable_interrupts(ctx: &mut impl CpuContext) {
+        ctx.cpu_mut().interrupt_master_enable.set_next_instruction();
+    }
+
+    /// Enabled interrupts and returns.
+    pub(super) fn interrupt_return(ctx: &mut impl CpuContext) {
+        let dest = pop_helper(ctx);
+        // Theres an extra 1m of delay in here.
+        ctx.yield1m();
+        ctx.cpu_mut().regs.pc = dest;
+        ctx.cpu_mut().interrupt_master_enable.set();
+    }
+
+    /// Offsets the stack pointer by an immediate value.
+    pub(super) fn offset_sp(ctx: &mut impl CpuContext) {
+        let offset = Operand8::Immediate.read(ctx) as i8;
+        let (res, flags) = offset_addr(ctx.cpu().regs.sp, offset);
+        // This instruction takes two more cycles after loading the offset.
+        ctx.yield1m();
+        ctx.yield1m();
+        ctx.cpu_mut().regs.sp = res;
+        ctx.cpu_mut().regs.flags = flags;
+    }
+
+    /// Loads the result of offsetting the stack pointer by an immediate value into HL.
+    pub(super) fn address_of_offset_sp(ctx: &mut impl CpuContext) {
+        let offset = Operand8::Immediate.read(ctx) as i8;
+        let (res, flags) = offset_addr(ctx.cpu().regs.sp, offset);
+        // Interestingly, this instruction is actually faster than `ADD SP,i8`.
+        ctx.yield1m();
+        ctx.cpu_mut().regs.set_hl(res);
+        ctx.cpu_mut().regs.flags = flags;
+    }
+
+    // Similar to unconditional jump, but using HL as the target address.
+    pub(super) fn jump_hl(ctx: &mut impl CpuContext) {
+        let regs = &mut ctx.cpu_mut().regs;
+        regs.pc = regs.hl();
+    }
+
+    /// Executes the reset instruction. Similar to call with a fixed destination.
+    pub(super) fn reset(ctx: &mut impl CpuContext, dest: u8) {
+        // There's an extra delay at the start of an RST instruction.
+        ctx.yield1m();
+        push_helper(ctx, ctx.cpu().regs.pc);
+        ctx.cpu_mut().regs.pc = dest as u16;
+    }
 }
 
-/// DI instruction (applies immediately).
-fn disable_interrupts(ctx: &mut impl CpuContext) {
-    ctx.cpu_mut().interrupt_master_enable.clear();
-}
+/// Implementations of Opcodes in microcode.
+mod ucode_ops {
+    use crate::gbz80core::microcode::{
+        BinaryOp, GbStack16, Immediate16, Immediate8, Microcode, MicrocodeBuilder, Reg16,
+    };
+    use crate::gbz80core::{ConditionCode, Flags, Operand16, Operand8};
 
-/// EI instruction (applies after the following instruction).
-fn enable_interrupts(ctx: &mut impl CpuContext) {
-    ctx.cpu_mut().interrupt_master_enable.set_next_instruction();
-}
+    /// Build microcode for the relative jump instruction.
+    pub(super) fn jump_relative(cond: ConditionCode) -> MicrocodeBuilder {
+        // stack: ...|
+        // Read the jump offset from the next immediate.
+        // Loading the offset also moves the program counter over the next instruction, which
+        // is good because the jump is relative to the following instruction.
+        // stack: ...|i8  |
+        MicrocodeBuilder::read(Immediate8)
+            // Read the PC address of the instruction after this one onto the stack.
+            // stack: ...|i8  |pcl |pch |
+            .then_read(Reg16::Pc)
+            // Apply the PC offset.
+            // Read the PC address of the instruction after this one onto the stack.
+            // stack: ...|dstl|dsth|flag|
+            .then(Microcode::OffsetAddr)
+            // Discard the flags since JR doesn't use them.
+            // stack: ...|dstl|dsth|
+            .then(Microcode::Discard(1))
+            // Apply the jump only if the condition matches.
+            // First yield, because there's an extra dely in JR instructions when branching,
+            // then pop the destination off the stack and into the PC register.
+            .then(cond.if_true(MicrocodeBuilder::first(Microcode::Yield).then_write(Reg16::Pc)))
+    }
 
-/// Enabled interrupts and returns.
-fn interrupt_return(ctx: &mut impl CpuContext) {
-    let dest = pop_helper(ctx);
-    // Theres an extra 1m of delay in here.
-    ctx.yield1m();
-    ctx.cpu_mut().regs.pc = dest;
-    ctx.cpu_mut().interrupt_master_enable.set();
-}
+    /// Provides microcode for an 8 bit increment instruction.
+    pub(super) fn inc8(operand: Operand8) -> MicrocodeBuilder {
+        // Inc doesn't set the carry flag.
+        const MASK: Flags = Flags::all().difference(Flags::CARRY);
 
-/// Offsets the stack pointer by an immediate value.
-fn offset_sp(ctx: &mut impl CpuContext) {
-    let offset = Operand8::Immediate.read(ctx) as i8;
-    let (res, flags) = offset_addr(ctx.cpu().regs.sp, offset);
-    // This instruction takes two more cycles after loading the offset.
-    ctx.yield1m();
-    ctx.yield1m();
-    ctx.cpu_mut().regs.sp = res;
-    ctx.cpu_mut().regs.flags = flags;
-}
+        // Start by putting a 1 (the right-hand-side for our ALU sub) onto the stack, since
+        // binary ops operate with the top of the stack being the LHS.
+        // stack: ...|1|
+        MicrocodeBuilder::first(Microcode::Append(1))
+            // Then fetch the operand.
+            // stack: ...|1|v|
+            .then_read(operand)
+            // Apply the operation
+            // stack: ...|r|f|
+            .then(BinaryOp::Add)
+            // Write out the flags which are modified
+            // stack: ...|r|
+            .then_write(MASK)
+            // Write the result back to the same operand.
+            // stack: ...|
+            .then_write(operand)
+    }
 
-/// Loads the result of offsetting the stack pointer by an immediate value into HL.
-fn address_of_offset_sp(ctx: &mut impl CpuContext) {
-    let offset = Operand8::Immediate.read(ctx) as i8;
-    let (res, flags) = offset_addr(ctx.cpu().regs.sp, offset);
-    // Interestingly, this instruction is actually faster than `ADD SP,i8`.
-    ctx.yield1m();
-    ctx.cpu_mut().regs.set_hl(res);
-    ctx.cpu_mut().regs.flags = flags;
-}
+    /// Provides microcode for an 8 bit decrement instruction.
+    pub(super) fn dec8(operand: Operand8) -> MicrocodeBuilder {
+        // Dec doesn't set the carry flag.
+        const MASK: Flags = Flags::all().difference(Flags::CARRY);
 
-// Similar to unconditional jump, but using HL as the target address.
-fn jump_hl(ctx: &mut impl CpuContext) {
-    let regs = &mut ctx.cpu_mut().regs;
-    regs.pc = regs.hl();
-}
+        // Start by putting a 1 (the right-hand-side for our ALU sub) onto the stack, since
+        // binary ops operate with the top of the stack being the LHS.
+        // stack: ...|1|
+        MicrocodeBuilder::first(Microcode::Append(1))
+            // Then fetch the operand.
+            // stack: ...|1|v|
+            .then_read(operand)
+            // Apply the operation
+            // stack: ...|r|f|
+            .then(BinaryOp::Sub)
+            // Write out the flags which are modified
+            // stack: ...|r|
+            .then_write(MASK)
+            // Write the result back to the same operand.
+            // stack: ...|
+            .then_write(operand)
+    }
 
-/// Executes the reset instruction. Similar to call with a fixed destination.
-fn reset(ctx: &mut impl CpuContext, dest: u8) {
-    // There's an extra delay at the start of an RST instruction.
-    ctx.yield1m();
-    push_helper(ctx, ctx.cpu().regs.pc);
-    ctx.cpu_mut().regs.pc = dest as u16;
+    /// Provides microcode for a 16 bit increment instruction.
+    pub(super) fn inc16(operand: Operand16) -> MicrocodeBuilder {
+        MicrocodeBuilder::read(operand)
+            .then(Microcode::Inc16)
+            // 16 bit inc doesn't set any flags, and all actual operands are always registers,
+            // but it does delay by 1 additional M cycle, probably because it has to operate
+            // on two bytes.
+            .then(Microcode::Yield)
+            .then_write(operand)
+    }
+
+    /// Provides microcode for a 16 bit decrement instruction.
+    pub(super) fn dec16(operand: Operand16) -> MicrocodeBuilder {
+        MicrocodeBuilder::read(operand)
+            .then(Microcode::Dec16)
+            // 16 bit dec doesn't set any flags, and all actual operands are always registers,
+            // but it does delay by 1 additional M cycle, probably because it has to operate
+            // on two bytes.
+            .then(Microcode::Yield)
+            .then_write(operand)
+    }
+
+    /// Provides microcode for 16 bit load operations.
+    pub(super) fn load16(dest: Operand16, source: Operand16) -> MicrocodeBuilder {
+        MicrocodeBuilder::read(source)
+            .then(if (dest, source) == (Operand16::Sp, Operand16::HL) {
+                // Most of the 16 bit loads are <Pair>,<Immediate> and take time based on
+                // number of memory accesses. There are two exceptions. LD (u16),SP, which is
+                // also just timed based on the number of memory accesses, and LD SP,HL, which
+                // is all registers but still takes an extra 1m cycle, which isn't
+                // automatically provided by Operand16 register interactions, so we insert it
+                // here.
+                Some(Microcode::Yield)
+            } else {
+                None
+            })
+            .then_write(dest)
+    }
+
+    /// Generates microcode for a 16 bit register add into HL. Never sets the zero flag and
+    /// clears the subtract flag, but does set carry and half-carry based on the upper byte of
+    /// the operation (as if it was performed by running the pseudo-instructions `add
+    /// l,<arg-low>; adc h,<arg-high>`.
+    pub(super) fn add16(arg: Operand16) -> MicrocodeBuilder {
+        // 16 bit add never modifies the zero flag.
+        const MASK: Flags = Flags::all().difference(Flags::ZERO);
+
+        // RHS goes on the stack first.
+        MicrocodeBuilder::read(arg)
+            // Then LHS goes on the stack.
+            .then_read(Reg16::HL)
+            // This produces the unmasked flags on top of the stack with the result
+            // underneath.
+            .then(Microcode::Add16)
+            // Add an extra delay cycle, since this op is an 8t not 4t, probably because it is
+            // operating on two bytes, and that extra delay doesn't come from memory accesses.
+            .then_yield()
+            .then_write(MASK)
+            .then_write(Reg16::HL)
+    }
+
+    /// Build the microcode for a conditional or unconditional call.
+    pub(super) fn call(cond: ConditionCode) -> MicrocodeBuilder {
+        // Conveniently, unconditional call behaves exactly the same as a conditional call
+        // with a true value, down to the timing.
+        // First, load the destination address onto the microcode stack.
+        // stack: ...|dstl|dsth|
+        MicrocodeBuilder::read(Immediate16)
+            // Evaluate conditionally:
+            // stack: ...|dstl|dsth|
+            .then(
+                cond.cond(
+                    // If true:
+                    // Read the PC onto the microcode stack so we can push it to the gameboy
+                    // stack.
+                    // stack: ...|dstl|dsth|pcl |pch |
+                    MicrocodeBuilder::read(Reg16::Pc)
+                        // Conditional jump has an extra internal delay if the condition is
+                        // true before pushing the return address to the GB stack.
+                        .then_yield()
+                        // Write the return address to the Gameboy Stack.
+                        // stack: ...|dstl|dsth|
+                        .then_write(GbStack16)
+                        // Write the destination of the jump to the PC.
+                        // stack: ...|
+                        .then_write(Reg16::Pc),
+                    // If false:
+                    // Discard the destination address from the microcode stack.
+                    Microcode::Discard(2),
+                ),
+            )
+    }
+
+    /// Builds microcode for a conditional absolute jump.
+    pub(super) fn jump(cond: ConditionCode) -> MicrocodeBuilder {
+        // Conveniently, unconditional jump behaves exactly the same as a conditional jump
+        // with a true value, down to the timing.
+
+        // Fetch the destination of the jump from the immediate.
+        // stack: ...|dstl|dsth|
+        MicrocodeBuilder::read(Immediate16)
+            // Evaluate conditionally:
+            .then(
+                cond.cond(
+                    // If true:
+                    // Delay by one extra cycle because branching adds an extra cycle despite not
+                    // accessing memory.
+                    MicrocodeBuilder::r#yield()
+                        // Write the desintation address to the PC.
+                        // stack: ...|
+                        .then_write(Reg16::Pc),
+                    // If false:
+                    // Discard the destination address.
+                    Microcode::Discard(2),
+                ),
+            )
+    }
+
+    /// Performs a conditional return.
+    pub(super) fn ret(cond: ConditionCode) -> MicrocodeBuilder {
+        // First do a yield if this is a conditional return. The conditional returns have an
+        // extra delay at the beginning which isn't part of the unconditional return.
+        MicrocodeBuilder::first(match cond {
+            ConditionCode::Unconditional => None,
+            _ => Some(Microcode::Yield),
+        })
+        // Apply the actual return only if the condition is true.
+        .then(
+            cond.if_true(
+                // Pop the return address off the Gameboy stack and onto the microcode stack.
+                // This takes two m cycles.
+                // stack: ...|retl|reth|
+                MicrocodeBuilder::read(GbStack16)
+                    // Apply the additional yield that happens after the GB stack pop and
+                    // before the return is applied to the program counter.
+                    .then_yield()
+                    // Pop the return address off the microcode stack and into the pc.
+                    .then_write(Reg16::Pc),
+            ),
+        )
+    }
+
+    /// Build microcode to enable interrupts and return.
+    pub(super) fn interrupt_return() -> MicrocodeBuilder {
+        // Pop the return address off the GB stack and onto the microcode stack.
+        MicrocodeBuilder::read(GbStack16)
+            // Delay by one additional cycle since there's one extra delay in RETI.
+            .then_yield()
+            // Write the return address to the PC.
+            .then_write(Reg16::Pc)
+            // Enable interrupts immediately.
+            .then(Microcode::EnableInterrupts { immediate: true })
+    }
+
+    /// Get microcode to offset the stack pointer by an immediate value.
+    pub(super) fn offset_sp() -> MicrocodeBuilder {
+        // stack: ...|off|
+        MicrocodeBuilder::read(Immediate8)
+            // stack: ...|off|spl|sph|
+            .then_read(Reg16::Sp)
+            // stack: ...|SPL|SPH|flg|
+            .then(Microcode::OffsetAddr)
+            // This instruction takes two more cycles after loading the offset.
+            .then_yield()
+            .then_yield()
+            // stack: ...|SPL|SPH|
+            .then_write(Flags::all())
+            .then_write(Reg16::Sp)
+    }
+
+    /// Create microcode to load the result of offsetting the stack pointer by an immediate
+    /// value into HL.
+    pub(super) fn address_of_offset_sp() -> MicrocodeBuilder {
+        // stack: ...|off|
+        MicrocodeBuilder::read(Immediate8)
+            // stack: ...|off|spl|sph|
+            .then_read(Reg16::Sp)
+            // stack: ...|SPL|SPH|flg|
+            .then(Microcode::OffsetAddr)
+            // This instruction takes one more cycle after loading the offset.
+            // Interestingly, this instruction is actually faster than `ADD SP,i8`.
+            .then_yield()
+            // stack: ...|SPL|SPH|
+            .then_write(Flags::all())
+            .then_write(Reg16::HL)
+    }
+
+    /// Builds microcode for the reset instruction. Similar to call with a fixed destination.
+    pub(super) fn reset(dest: u8) -> MicrocodeBuilder {
+        // There's an extra delay at the start of an RST instruction.
+        MicrocodeBuilder::r#yield()
+            // Push the PC onto the gameboy stack.
+            .then_read(Reg16::Pc)
+            .then_write(GbStack16)
+            // Set the dest address into the PC.
+            // initial stack: ...|
+            // Push the low order bytes of the dest address.
+            // stack: ...|destl|
+            .then(Microcode::Append(dest))
+            // Push the high order bytes of the dest address.
+            // stack: ...|destl|desth|
+            .then(Microcode::Append(dest))
+            // Set the PC to the specified address.
+            .then_write(Reg16::Pc)
+    }
 }
 
 //////////////////////
@@ -690,7 +1029,31 @@ impl CBOpcode {
         Self { operand, op }
     }
 
+    /// Get the [`Instr`] for a particular CB Opcode.
+    #[cfg(feature = "microcode")]
+    pub fn get_instruction(opcode: u8) -> Instr {
+        /// Lookup table for Instrs for particular opcodes.
+        static CB_OPCODE_TABLE: Lazy<[InstrDef; 256]> = Lazy::new(|| {
+            // Create an uninitialized array of `MaybeUninit`. The `assume_init` is
+            // safe because the type we are claiming to have initialized here is a
+            // bunch of `MaybeUninit`s, which do not require initialization.
+            let mut data: [MaybeUninit<InstrDef>; 256] =
+                unsafe { MaybeUninit::uninit().assume_init() };
+
+            for i in 0..256 {
+                data[i].write(CBOpcode::decode(i as u8).into());
+            }
+
+            // Everything is initialized. Transmute the array to the
+            // initialized type.
+            unsafe { mem::transmute::<_, [InstrDef; 256]>(data) }
+        });
+
+        Instr::new(&CB_OPCODE_TABLE[opcode as usize])
+    }
+
     /// Load and execute a single CB-prefixed opcode from the given context.
+    #[cfg(not(feature = "microcode"))]
     fn load_and_execute(ctx: &mut impl CpuContext) {
         let pc = ctx.cpu().regs.pc;
         trace!("Loading CB-opcode at {:#6X}", pc);
@@ -701,6 +1064,7 @@ impl CBOpcode {
     }
 
     /// Execute this opcode on the given context.
+    #[cfg(not(feature = "microcode"))]
     fn execute(self, ctx: &mut impl CpuContext) {
         let arg = self.operand.read(ctx);
         match self.op {
@@ -758,6 +1122,49 @@ impl CBOpcode {
             CBOperation::ResetBit(bit) => self.operand.write(ctx, arg & !(1 << bit)),
             CBOperation::SetBit(bit) => self.operand.write(ctx, arg | (1 << bit)),
         }
+    }
+}
+
+impl From<CBOpcode> for InstrDef {
+    fn from(value: CBOpcode) -> Self {
+        // Builds microcode for the CB Opcodes that takes a value and affects flags.
+        fn cb_unary_op(operand: Operand8, operator: UnaryOp) -> MicrocodeBuilder {
+            // First, read the operand onto the microcode stack.
+            // stack: ...|val|
+            MicrocodeBuilder::read(operand)
+                // Apply the operator, generating the result and flags.
+                // stack: ...|res|flags|
+                .then(operator)
+                // Apply the flags, overwriting all flags in the register.
+                .then_write(Flags::all())
+                .then_write(operand)
+        }
+        let builder = match value.op {
+            CBOperation::RotateLeft8 => cb_unary_op(value.operand, UnaryOp::RotateLeft8),
+            CBOperation::RotateLeft9 => cb_unary_op(value.operand, UnaryOp::RotateLeft9),
+            CBOperation::RotateRight8 => cb_unary_op(value.operand, UnaryOp::RotateRight8),
+            CBOperation::RotateRight9 => cb_unary_op(value.operand, UnaryOp::RotateRight9),
+            CBOperation::ShiftLeft => cb_unary_op(value.operand, UnaryOp::ShiftLeft),
+            CBOperation::ShiftRight => cb_unary_op(value.operand, UnaryOp::ShiftRight),
+            CBOperation::ShiftRightSignExt => {
+                cb_unary_op(value.operand, UnaryOp::ShiftRightSignExt)
+            }
+            CBOperation::Swap => cb_unary_op(value.operand, UnaryOp::Swap),
+            CBOperation::TestBit(bit) => {
+                // Doesn't affect the carry flag.
+                const MASK: Flags = Flags::all().difference(Flags::CARRY);
+                MicrocodeBuilder::read(value.operand)
+                    .then(BitOp::TestBit(bit))
+                    .then_write(MASK)
+            }
+            CBOperation::SetBit(bit) => MicrocodeBuilder::read(value.operand)
+                .then(BitOp::SetBit(bit))
+                .then_write(value.operand),
+            CBOperation::ResetBit(bit) => MicrocodeBuilder::read(value.operand)
+                .then(BitOp::ResetBit(bit))
+                .then_write(value.operand),
+        };
+        builder.build(value.to_string())
     }
 }
 

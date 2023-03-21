@@ -1,10 +1,10 @@
 use crate::gbz80core::{self, CpuContext, Gbz80State};
+use crate::input::{self, ButtonStates, InputContext};
 use crate::interrupts::InterruptContext;
 use crate::memdev::{BiosRom, Cartridge, GbMmu, MaskableMem, IoRegsContext, MemContext, Vram, Oam};
 use crate::input::{self, InputContext, ButtonStates};
 use crate::serial::{self, SerialContext, SerialState};
-use crate::ppu::{self, PpuState, PpuContext};
-use crate::timer::{self, TimerState, TimerContext};
+use crate::timer::{self, TimerContext, TimerState};
 
 /// Represents a "real" gameboy, by explicitly using the GbMmu for memory.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -42,13 +42,12 @@ impl Gb {
     /// Tick forward by one instruction, executing background and graphics processing
     /// operations as needed.
     pub fn tick(&mut self) -> Option<&[(u8, u8, u8)]> {
-        gbz80core::tick(self);
+        gbz80core::run_single_instruction(self);
 
         if self.display_ready {
             self.display_ready = false;
             Some(self.ppu.screen_buffer())
-        }
-        else {
+        } else {
             None
         }
     }
@@ -167,14 +166,14 @@ impl PpuContext for Gb {
     fn vram_mut(&mut self) -> &mut Vram {
         &mut self.mmu.vram
     }
-    
+
     fn oam(&self) -> &Oam {
         &self.mmu.oam
     }
     fn oam_mut(&mut self) -> &mut Oam {
         &mut self.mmu.oam
     }
-    
+
     fn display_ready(&mut self) {
         self.display_ready = true;
     }

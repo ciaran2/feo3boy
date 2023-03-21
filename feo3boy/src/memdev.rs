@@ -5,10 +5,10 @@ use std::ops::{Deref, DerefMut};
 use log::trace;
 use thiserror::Error;
 
+use crate::input::ButtonRegister;
 use crate::interrupts::{InterruptContext, InterruptEnable, InterruptFlags, Interrupts};
 use crate::ppu::{LcdFlags, LcdStat};
-use crate::timer::{TimerControl};
-use crate::input::{ButtonRegister};
+use crate::timer::TimerControl;
 
 pub use cartridge::{Cartridge, Mbc1Rom, ParseCartridgeError, RamBank, RomBank, RomOnly};
 
@@ -424,19 +424,19 @@ impl MemDevice for MemMappedIo {
             0x00 => self.buttons = self.buttons.set_writable(value),
             0x01 => self.serial_data = value,
             0x02 => self.serial_control = value,
-            0x03 => {},
+            0x03 => {}
             0x04 => self.divider = 0x0000,
             0x05 => self.timer = value,
             0x06 => self.timer_mod = value,
             0x07 => self.timer_control = TimerControl::from_bits_truncate(value),
-            0x08..=0x0e => {},
+            0x08..=0x0e => {}
             0x0f => self.interrupt_flags = InterruptFlags::from_bits_truncate(value),
-            0x10..=0x3f => {},
+            0x10..=0x3f => {}
             0x40 => self.lcd_control = LcdFlags::from_bits_truncate(value),
             0x41 => self.lcd_status = self.lcd_status.set_writeable(value),
             0x42 => self.scroll_y = value,
             0x43 => self.scroll_x = value,
-            0x44 => {},
+            0x44 => {}
             0x45 => self.lcdc_y_compare = value,
             0x46 => self.dma_addr = value,
             0x47 => self.bg_palette = value,
@@ -444,7 +444,7 @@ impl MemDevice for MemMappedIo {
             0x49 => self.obj_palette[1] = value,
             0x4a => self.window_y = value,
             0x4b => self.window_x = value,
-            0x4c..=0x4f => {},
+            0x4c..=0x4f => {}
             0x50 => {
                 if value & 1 != 0 {
                     self.bios_enabled = false;
@@ -595,7 +595,7 @@ pub trait IoRegs {
 
     /// Set the current button control and status
     fn set_buttons(&mut self, val: ButtonRegister);
-    
+
     /// Get the current value of the serial data register.
     fn serial_data(&self) -> u8;
 
