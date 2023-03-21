@@ -538,6 +538,7 @@ name = "feo3boy"
 version = "0.1.0"
 dependencies = [
  "bitflags",
+ "env_logger",
  "log",
  "once_cell",
  "thiserror",

@@ -733,7 +733,12 @@ mod ucode_ops {
             // Apply the jump only if the condition matches.
             // First yield, because there's an extra dely in JR instructions when branching,
             // then pop the destination off the stack and into the PC register.
-            .then(cond.if_true(MicrocodeBuilder::first(Microcode::Yield).then_write(Reg16::Pc)))
+            .then(cond.cond(
+                // If the condition matches, apply it to the PC.
+                MicrocodeBuilder::r#yield().then_write(Reg16::Pc),
+                // If it doesn't match, discard the computed new PC value.
+                Microcode::Discard(2),
+            ))
     }
 
     /// Provides microcode for an 8 bit increment instruction.

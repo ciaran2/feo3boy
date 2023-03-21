@@ -1,5 +1,8 @@
 use bitflags::bitflags;
 
+#[cfg(feature = "microcode")]
+use log::{debug, trace};
+
 use crate::gbz80core::microcode::{
     Microcode, MicrocodeBuilder, MicrocodeReadable, MicrocodeWritable,
 };
@@ -294,6 +297,9 @@ pub trait CpuContext: MemContext + InterruptContext {
 fn step(ctx: &mut impl CpuContext) -> MicrocodeFlow {
     let ucode = {
         let cpu = ctx.cpu_mut();
+        if cpu.microcode_pc == 0 {
+            debug!("Starting Instr {}", cpu.instruction.label());
+        }
         if cpu.microcode_pc < cpu.instruction.len() {
             let ucode = cpu.instruction[cpu.microcode_pc];
             cpu.microcode_pc += 1;
@@ -302,6 +308,7 @@ fn step(ctx: &mut impl CpuContext) -> MicrocodeFlow {
             Microcode::FetchNextInstruction
         }
     };
+    trace!("Running microcode {:?}", ucode);
     ctx.cpu_mut().last_microcode = ucode;
     ucode.eval(ctx)
 }
@@ -482,8 +489,14 @@ impl<M: MemDevice> InterruptContext for (&mut Gbz80State, &mut M) {
 mod tests {
     use super::*;
 
+    fn init() {
+        let _ = env_logger::builder().is_test(true).try_init();
+    }
+
     #[test]
     fn test_loads_and_alu() {
+        init();
+
         let mut cpu = Gbz80State::new();
         let mut testmem = [0u8; 0x10000];
 
@@ -515,6 +528,8 @@ mod tests {
 
     #[test]
     fn load8bit() {
+        init();
+
         fn set_dest(inst: u8, ctx: &mut impl CpuContext, val: u8) {
             match inst {
                 0x40..=0x47 => ctx.cpu_mut().regs.b = val,
@@ -573,6 +588,8 @@ mod tests {
 
     #[test]
     fn load8bit_immediate() {
+        init();
+
         fn set_dest(inst: u8, ctx: &mut impl CpuContext, val: u8) {
             match inst {
                 0x06 => ctx.cpu_mut().regs.b = val,
@@ -616,6 +633,8 @@ mod tests {
 
     #[test]
     fn add8bit() {
+        init();
+
         fn set_source(inst: u8, ctx: &mut impl CpuContext, val: u8) {
             match (inst & 0xf) % 0x8 {
                 0x0 => ctx.cpu_mut().regs.b = val,
@@ -732,6 +751,8 @@ mod tests {
 
     #[test]
     fn adc8bit() {
+        init();
+
         fn set_source(inst: u8, ctx: &mut impl CpuContext, val: u8) {
             match (inst & 0xf) % 0x8 {
                 0x0 => ctx.cpu_mut().regs.b = val,
@@ -855,6 +876,8 @@ mod tests {
 
     #[test]
     fn sub8bit() {
+        init();
+
         fn set_source(inst: u8, ctx: &mut impl CpuContext, val: u8) {
             match (inst & 0xf) % 0x8 {
                 0x0 => ctx.cpu_mut().regs.b = val,
@@ -959,6 +982,8 @@ mod tests {
 
     #[test]
     fn sbc8bit() {
+        init();
+
         fn set_source(inst: u8, ctx: &mut impl CpuContext, val: u8) {
             match (inst & 0xf) % 0x8 {
                 0x0 => ctx.cpu_mut().regs.b = val,
@@ -1069,6 +1094,8 @@ mod tests {
 
     #[test]
     fn and8bit() {
+        init();
+
         fn set_source(inst: u8, ctx: &mut impl CpuContext, val: u8) {
             match (inst & 0xf) % 0x8 {
                 0x0 => ctx.cpu_mut().regs.b = val,
@@ -1163,6 +1190,8 @@ mod tests {
 
     #[test]
     fn xor8bit() {
+        init();
+
         fn set_source(inst: u8, ctx: &mut impl CpuContext, val: u8) {
             match (inst & 0xf) % 0x8 {
                 0x0 => ctx.cpu_mut().regs.b = val,
@@ -1255,6 +1284,8 @@ mod tests {
 
     #[test]
     fn or8bit() {
+        init();
+
         fn set_source(inst: u8, ctx: &mut impl CpuContext, val: u8) {
             match (inst & 0xf) % 0x8 {
                 0x0 => ctx.cpu_mut().regs.b = val,
@@ -1349,6 +1380,8 @@ mod tests {
 
     #[test]
     fn cp8bit() {
+        init();
+
         fn set_source(inst: u8, ctx: &mut impl CpuContext, val: u8) {
             match (inst & 0xf) % 0x8 {
                 0x0 => ctx.cpu_mut().regs.b = val,
@@ -1450,6 +1483,8 @@ mod tests {
 
     #[test]
     fn relative_jumps() {
+        init();
+
         for flags in (0x00..=0xf0).step_by(0x10) {
             for offset in -128i8..=127 {
                 let jnz = (flags & 0x80) == 0;
@@ -1491,6 +1526,8 @@ mod tests {
 
     #[test]
     fn absolute_immediate_jumps() {
+        init();
+
         for flags in (0x00..=0xf0).step_by(0x10) {
             for dest in 0x0000u16..=0xffff {
                 let jnz = (flags & 0x80) == 0;
@@ -1533,6 +1570,8 @@ mod tests {
 
     #[test]
     fn jump_hl() {
+        init();
+
         for flags in (0x00..=0xf0).step_by(0x10) {
             for dest in 0x0000u16..=0xffff {
                 println!("jp(e9) -> {:04x}", dest);
@@ -1555,6 +1594,8 @@ mod tests {
 
     #[test]
     fn returns() {
+        init();
+
         for flags in (0x00..=0xf0).step_by(0x10) {
             for dest in 0x0000u16..=0xffff {
                 let jnz = (flags & 0x80) == 0;
@@ -1603,6 +1644,8 @@ mod tests {
 
     #[test]
     fn calls() {
+        init();
+
         for flags in (0x00..=0xf0).step_by(0x10) {
             for dest in 0x0000u16..=0xffff {
                 let jnz = (flags & 0x80) == 0;
