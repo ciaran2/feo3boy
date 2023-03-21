@@ -1,4 +1,5 @@
 use std::ops::RangeInclusive;
+use std::ops::Deref;
 
 use feo3boy::gb::Gb;
 use feo3boy::interrupts::InterruptFlags;
@@ -51,7 +52,7 @@ impl Component for Memview {
             <div class="mem-section vram">
                 <h4>{"Video RAM"}</h4>
                 <ViewByteSlice start_addr={0x8000}
-                    slice={mem.clone().map(|mem| mem.vram.bytes().as_ref())} />
+                    slice={mem.clone().map(|mem| mem.vram.deref().deref().as_ref())} />
             </div>
             <CartridgeRamSection cart={mem.clone().map(|mem| &mem.cart)} />
             <div class="mem-section wram">
@@ -62,7 +63,7 @@ impl Component for Memview {
             <div class="mem-section oam">
                 <h4>{"Sprite Info"}</h4>
                 <ViewByteSlice start_addr={0xfe00}
-                    slice={mem.clone().map(|mem| mem.oam.bytes().as_ref())} />
+                    slice={mem.clone().map(|mem| mem.oam.deref().deref().as_ref())} />
             </div>
             <div class="mem-section unused">
                 <h4>{"Unmapped Region"}</h4>
@@ -300,12 +301,12 @@ pub fn view_io(props: &ViewIoProps) -> Html {
         <div class="line">
             {addr(0xff48)}
             {named("OBP0")}
-            <span class="byte">{hexbyte(props.io.obj0_palette)}</span>
+            <span class="byte">{hexbyte(props.io.obj_palette[0])}</span>
         </div>
         <div class="line">
             {addr(0xff49)}
             {named("OBP1")}
-            <span class="byte">{hexbyte(props.io.obj1_palette)}</span>
+            <span class="byte">{hexbyte(props.io.obj_palette[1])}</span>
         </div>
         <div class="line">
             {addr(0xff4a)}

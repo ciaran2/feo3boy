@@ -340,8 +340,7 @@ pub struct MemMappedIo {
     pub lcdc_y_compare: u8,
     pub dma_addr: u8,
     pub bg_palette: u8,
-    pub obj0_palette: u8,
-    pub obj1_palette: u8,
+    pub obj_palette: [u8;2],
     pub window_y: u8,
     pub window_x: u8,
     pub interrupt_flags: InterruptFlags,
@@ -368,8 +367,7 @@ impl MemMappedIo {
             lcdc_y_compare: 0x00,
             dma_addr: 0x00,
             bg_palette: 0x00,
-            obj0_palette: 0x00,
-            obj1_palette: 0x00,
+            obj_palette: [0x00;2],
             window_y: 0x00,
             window_x: 0x00,
             interrupt_flags: InterruptFlags::empty(),
@@ -410,8 +408,8 @@ impl MemDevice for MemMappedIo {
             0x45 => self.lcdc_y_compare,
             0x46 => self.dma_addr,
             0x47 => self.bg_palette,
-            0x48 => self.obj0_palette,
-            0x49 => self.obj1_palette,
+            0x48 => self.obj_palette[0],
+            0x49 => self.obj_palette[1],
             0x4a => self.window_y,
             0x4b => self.window_x,
             0x4c..=0x4f => 0xff,
@@ -442,8 +440,8 @@ impl MemDevice for MemMappedIo {
             0x45 => self.lcdc_y_compare = value,
             0x46 => self.dma_addr = value,
             0x47 => self.bg_palette = value,
-            0x48 => self.obj0_palette = value,
-            0x49 => self.obj1_palette = value,
+            0x48 => self.obj_palette[0] = value,
+            0x49 => self.obj_palette[1] = value,
             0x4a => self.window_y = value,
             0x4b => self.window_x = value,
             0x4c..=0x4f => {},
@@ -560,18 +558,8 @@ impl IoRegs for MemMappedIo {
         self.bg_palette = val;
     }
 
-    fn obj0_palette(&self) -> u8 {
-        self.obj0_palette
-    }
-    fn set_obj0_palette(&mut self, val: u8) {
-        self.obj0_palette = val;
-    }
-
-    fn obj1_palette(&self) -> u8 {
-        self.obj1_palette
-    }
-    fn set_obj1_palette(&mut self, val: u8) {
-        self.obj1_palette = val;
+    fn obj_palette(&self, i: usize) -> u8 {
+        self.obj_palette[i]
     }
 
     fn window_y(&self) -> u8 {
@@ -652,11 +640,7 @@ pub trait IoRegs {
     fn bg_palette(&self) -> u8;
     fn set_bg_palette(&mut self, val: u8);
 
-    fn obj0_palette(&self) -> u8;
-    fn set_obj0_palette(&mut self, val: u8);
-
-    fn obj1_palette(&self) -> u8;
-    fn set_obj1_palette(&mut self, val: u8);
+    fn obj_palette(&self, i: usize) -> u8;
 
     fn window_y(&self) -> u8;
     fn set_window_y(&mut self, val: u8);
@@ -690,6 +674,10 @@ pub struct GbMmu {
     pub zram: [u8; 127],
     /// Interrupt enable register. Mapped to 0xffff
     pub interrupt_enable: InterruptEnable,
+
+    dma_active: bool,
+    dma_base: u16,
+    dma_offset: u16,
 }
 
 impl GbMmu {
