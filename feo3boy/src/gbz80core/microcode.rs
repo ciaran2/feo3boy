@@ -750,6 +750,8 @@ pub enum Microcode {
     CheckHalt,
     /// Sets "halted" to false.
     ClearHalt,
+    /// Gets whether IME is currently enabled.
+    CheckIme,
     /// Get the set of interrupt flags which are enabled and in the interrupt vector.
     GetActiveInterrupts,
     /// Pushes the value of the Halt Bug flag onto the microcode stack, clearing the value
@@ -858,6 +860,7 @@ impl Microcode {
             Self::DisableInterrupts => ctx.cpu_mut().interrupt_master_enable.clear(),
             Self::CheckHalt => ops::check_halt(ctx),
             Self::ClearHalt => ctx.cpu_mut().halted = false,
+            Self::CheckIme => ops::check_ime(ctx),
             Self::GetActiveInterrupts => ops::get_active_interrupts(ctx),
             Self::PopHaltBug => ops::pop_halt_bug(ctx),
             Self::PopInterrupt => ops::pop_interrupt(ctx),
@@ -966,6 +969,13 @@ mod ops {
     pub(super) fn check_halt(ctx: &mut impl CpuContext) {
         let halted = ctx.cpu().halted as u8;
         ctx.cpu_mut().microcode_stack.pushu8(halted);
+    }
+
+    /// Pushes the value of whether the CPU IME is enabled onto the microcode stack as a
+    /// u8.
+    pub(super) fn check_ime(ctx: &mut impl CpuContext) {
+        let ime = ctx.cpu().interrupt_master_enable.enabled() as u8;
+        ctx.cpu_mut().microcode_stack.pushu8(ime);
     }
 
     /// Pushes the set of interrupts which are both active and enabled onto the microcode
@@ -1317,19 +1327,8 @@ impl From<InternalFetch> for MicrocodeBuilder {
         MicrocodeBuilder::first(HandleHalt)
             // Service interrupts (which may jump to an interrupt and return).
             .then(ServiceInterrupt)
-            // Tell the CPU we are about to process a real instruction now, so we should
-            // tick the IME after this.
-            .then(Microcode::TickImeOnEnd)
-            // If we didn't service an interrupt and aren't halted, load and execute an
-            // opcode.
-            // stack: ...|
-            // Load the instruction onto the stack.
-            // stack: ...|opcode|
-            .then_read(Immediate8)
-            // Pop the opcode off the stack and parse it, replacing this instruction with
-            // that opcode.
-            // stack: ...|
-            .then(Microcode::ParseOpcode)
+            // Load and execute the next instruction.
+            .then(LoadAndExecute)
     }
 }
 
@@ -1374,48 +1373,88 @@ pub struct ServiceInterrupt;
 impl From<ServiceInterrupt> for MicrocodeBuilder {
     fn from(_: ServiceInterrupt) -> Self {
         // stack: ...|
-        // Read the set of active interrupts:
-        // stack: ...|ai  |
-        MicrocodeBuilder::first(Microcode::GetActiveInterrupts)
-            // Check if there are any active interrupts.
+        // Read the IME:
+        // stack: ...|ime |
+        // And branch on it
+        // stack: ...|
+        MicrocodeBuilder::first(Microcode::CheckIme).then(MicrocodeBuilder::if_true(
+            // Read the set of active interrupts:
+            // stack: ...|ai  |
+            MicrocodeBuilder::first(Microcode::GetActiveInterrupts)
+                // Check if there are any active interrupts.
+                // stack: ...|
+                .then(MicrocodeBuilder::if_true(
+                    // If there are:
+                    // Pop the first interrupt from the interrupt vector and push the
+                    // interrupt's target address onto the microcode stack.
+                    // stack: ...|intl|inth|
+                    MicrocodeBuilder::first(Microcode::PopInterrupt)
+                        // Turn off IME to pervent further interrupts.
+                        // stack: ...|intl|inth|
+                        .then(Microcode::DisableInterrupts)
+                        // Wait two cycles.
+                        .then_yield()
+                        .then_yield()
+                        // Get the current program counter.
+                        // stack: ...|intl|inth|pcl |pch |
+                        .then_read(Reg16::Pc)
+                        // Get whether the halt-bug is active.
+                        // stack: ...|intl|inth|pcl |pch |hb  |
+                        .then(Microcode::PopHaltBug)
+                        // Branch based on whether the halt-bug is active.
+                        // stack: ...|intl|inth|pcl |pch |
+                        // If true, decrement the PC, otherwise leave PC as-is.
+                        // stack: ...|intl|inth|pcl |pch |
+                        .then(MicrocodeBuilder::if_true(Microcode::Dec16))
+                        // Push the (possibly decremented) PC value onto the gameboy stack.
+                        // stack: ...|intl|inth|
+                        .then_write(GbStack16)
+                        // With the stack write and two yields, we are now at 4 cycles, we
+                        // need to take 5 total cycles, so delay again here.
+                        .then_yield()
+                        // Now write the interrut destination to the program counter.
+                        // stack: ...|
+                        .then_write(Reg16::Pc)
+                        // Now restart from the beginning at the interrupt address.
+                        // This acts like a return/break and prevents anything else in the
+                        // current Instruction from running (if ServiceInterrupt is used as
+                        // part of a larger instruction).
+                        .then(Microcode::FetchNextInstruction),
+                )),
+        ))
+    }
+}
+
+/// Helper to provide microcode for LoadAndExecute of an instruction, including halt-bug
+/// handling and enabling IME state ticking.
+pub struct LoadAndExecute;
+
+impl From<LoadAndExecute> for MicrocodeBuilder {
+    fn from(_: LoadAndExecute) -> Self {
+        // Tell the CPU we are about to process a real instruction now, so we should tick
+        // the IME after this.
+        MicrocodeBuilder::first(Microcode::TickImeOnEnd)
+            // If we didn't service an interrupt and aren't halted, load and execute an
+            // opcode.
             // stack: ...|
+            // Load the instruction onto the stack.
+            // stack: ...|opcode|
+            .then_read(Immediate8)
+            // Before executing, check if the haltbug is triggered, and if so, decrement
+            // the PC.
+            // stack: ...|opcode|hb|
+            .then(Microcode::PopHaltBug)
+            // Pop the haltbug flag and process.
+            // stack: ...|opcode|
             .then(MicrocodeBuilder::if_true(
-                // If there are:
-                // Pop the first interrupt from the interrupt vector and push the
-                // interrupt's target address onto the microcode stack.
-                // stack: ...|intl|inth|
-                MicrocodeBuilder::first(Microcode::PopInterrupt)
-                    // Turn off IME to pervent further interrupts.
-                    // stack: ...|intl|inth|
-                    .then(Microcode::DisableInterrupts)
-                    // Wait two cycles.
-                    .then_yield()
-                    .then_yield()
-                    // Get the current program counter.
-                    // stack: ...|intl|inth|pcl |pch |
-                    .then_read(Reg16::Pc)
-                    // Get whether the halt-bug is active.
-                    // stack: ...|intl|inth|pcl |pch |hb  |
-                    .then(Microcode::PopHaltBug)
-                    // Branch based on whether the halt-bug is active.
-                    // stack: ...|intl|inth|pcl |pch |
-                    // If true, decrement the PC, otherwise leave PC as-is.
-                    // stack: ...|intl|inth|pcl |pch |
-                    .then(MicrocodeBuilder::if_true(Microcode::Dec16))
-                    // Push the (possibly decremented) PC value onto the gameboy stack.
-                    // stack: ...|intl|inth|
-                    .then_write(GbStack16)
-                    // With the stack write and two yields, we are now at 4 cycles, we
-                    // need to take 5 total cycles, so delay again here.
-                    .then_yield()
-                    // Now write the interrut destination to the program counter.
-                    // stack: ...|
-                    .then_write(Reg16::Pc)
-                    // Now restart from the beginning at the interrupt address.
-                    // This acts like a return/break and prevents anything else in the
-                    // current Instruction from running (if ServiceInterrupt is used as
-                    // part of a larger instruction).
-                    .then(Microcode::FetchNextInstruction),
+                // If true, push the PC, decrement it, and pop it back into the PC.
+                MicrocodeBuilder::read(Reg16::Pc)
+                    .then(Microcode::Dec16)
+                    .then_write(Reg16::Pc),
             ))
+            // Pop the opcode off the stack and parse it, replacing this instruction with
+            // that opcode.
+            // stack: ...|
+            .then(Microcode::ParseOpcode)
     }
 }
