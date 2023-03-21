@@ -1,9 +1,9 @@
+pub mod apu;
 pub mod gb;
 pub mod gbz80core;
+pub mod input;
 pub mod interrupts;
 pub mod memdev;
-pub mod serial;
 pub mod ppu;
-pub mod apu;
+pub mod serial;
 pub mod timer;
-pub mod input;

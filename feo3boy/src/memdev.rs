@@ -5,11 +5,14 @@ use std::ops::{Deref, DerefMut};
 use log::trace;
 use thiserror::Error;
 
+use crate::apu::{
+    Channel, NoiseChannel, PulseChannel, SoundEnable, SoundPan, SoundVolume, WavetableChannel,
+};
+use crate::input::ButtonRegister;
+use crate::input::ButtonRegister;
 use crate::interrupts::{InterruptContext, InterruptEnable, InterruptFlags, Interrupts};
 use crate::ppu::{LcdFlags, LcdStat};
-use crate::apu::{SoundEnable, SoundPan, SoundVolume, Channel, PulseChannel, WavetableChannel, NoiseChannel};
-use crate::timer::{TimerControl};
-use crate::input::{ButtonRegister};
+use crate::timer::TimerControl;
 
 pub use cartridge::{Cartridge, Mbc1Rom, ParseCartridgeError, RamBank, RomBank, RomOnly};
 
@@ -287,8 +290,7 @@ impl<M: MemDevice> MemDevice for MaskableMem<M> {
     fn read(&self, addr: Addr) -> u8 {
         if !self.masked {
             self.device.read(addr)
-        }
-        else {
+        } else {
             0xff
         }
     }
@@ -302,11 +304,15 @@ impl<M: MemDevice> MemDevice for MaskableMem<M> {
 
 impl<M> Deref for MaskableMem<M> {
     type Target = M;
-    fn deref(&self) -> &Self::Target { &self.device }
+    fn deref(&self) -> &Self::Target {
+        &self.device
+    }
 }
 
 impl<M> DerefMut for MaskableMem<M> {
-    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.device }
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.device
+    }
 }
 
 // This makes sure that Box<dyn MemDevice> implements MemDevice (as well as Box<Anything that
@@ -340,7 +346,7 @@ pub struct MemMappedIo {
     pub sound_volume: SoundVolume,
     pub sound_pan: SoundPan,
     pub sound_enable: SoundEnable,
-    pub wavetable: [u8;16],
+    pub wavetable: [u8; 16],
     // ppu status and settings
     pub lcd_control: LcdFlags,
     pub lcd_status: LcdStat,
@@ -350,7 +356,7 @@ pub struct MemMappedIo {
     pub lcdc_y_compare: u8,
     pub dma_addr: u8,
     pub bg_palette: u8,
-    pub obj_palette: [u8;2],
+    pub obj_palette: [u8; 2],
     pub window_y: u8,
     pub window_x: u8,
     pub interrupt_flags: InterruptFlags,
@@ -376,7 +382,7 @@ impl MemMappedIo {
             sound_volume: SoundVolume::empty(),
             sound_pan: SoundPan::empty(),
             sound_enable: SoundEnable::empty(),
-            wavetable: [0;16],
+            wavetable: [0; 16],
             // ppu status and settings
             lcd_control: LcdFlags::empty(),
             lcd_status: LcdStat::empty(),
@@ -386,7 +392,7 @@ impl MemMappedIo {
             lcdc_y_compare: 0x00,
             dma_addr: 0x00,
             bg_palette: 0x00,
-            obj_palette: [0x00;2],
+            obj_palette: [0x00; 2],
             window_y: 0x00,
             window_x: 0x00,
             interrupt_flags: InterruptFlags::empty(),
@@ -453,19 +459,19 @@ impl MemDevice for MemMappedIo {
             0x00 => self.buttons = self.buttons.set_writable(value),
             0x01 => self.serial_data = value,
             0x02 => self.serial_control = value,
-            0x03 => {},
+            0x03 => {}
             0x04 => self.divider = 0x0000,
             0x05 => self.timer = value,
             0x06 => self.timer_mod = value,
             0x07 => self.timer_control = TimerControl::from_bits_truncate(value),
-            0x08..=0x0e => {},
+            0x08..=0x0e => {}
             0x0f => self.interrupt_flags = InterruptFlags::from_bits_truncate(value),
-            0x10 => {},
+            0x10 => {}
             0x11 => self.ch1.set_length(value),
             0x12 => self.ch1.set_envelope(value),
             0x13 => self.ch1.set_wavelength_low(value),
             0x14 => self.ch1.set_control(value),
-            0x15 => {},
+            0x15 => {}
             0x16 => self.ch2.set_length(value),
             0x17 => self.ch2.set_envelope(value),
             0x18 => self.ch2.set_wavelength_low(value),
@@ -479,14 +485,14 @@ impl MemDevice for MemMappedIo {
             0x21 => self.ch4.set_envelope(value),
             0x22 => self.ch4.set_noise_control(value),
             0x23 => self.ch4.set_control(value),
-            0x1f => {},
-            0x24..=0x2f => {},
+            0x1f => {}
+            0x24..=0x2f => {}
             0x30..=0x3f => self.ch3.set_samples(addr.offset_by(0x30).relative(), value),
             0x40 => self.lcd_control = LcdFlags::from_bits_truncate(value),
             0x41 => self.lcd_status = self.lcd_status.set_writeable(value),
             0x42 => self.scroll_y = value,
             0x43 => self.scroll_x = value,
-            0x44 => {},
+            0x44 => {}
             0x45 => self.lcdc_y_compare = value,
             0x46 => self.dma_addr = value,
             0x47 => self.bg_palette = value,
@@ -494,7 +500,7 @@ impl MemDevice for MemMappedIo {
             0x49 => self.obj_palette[1] = value,
             0x4a => self.window_y = value,
             0x4b => self.window_x = value,
-            0x4c..=0x4f => {},
+            0x4c..=0x4f => {}
             0x50 => {
                 if value & 1 != 0 {
                     self.bios_enabled = false;
@@ -593,7 +599,7 @@ impl IoRegs for MemMappedIo {
     fn sound_enable(&self) -> SoundEnable {
         self.sound_enable
     }
-    fn wavetable(&self) -> [u8;16] {
+    fn wavetable(&self) -> [u8; 16] {
         self.wavetable
     }
 
@@ -687,7 +693,7 @@ pub trait IoRegs {
 
     /// Set the current button control and status
     fn set_buttons(&mut self, val: ButtonRegister);
-    
+
     /// Get the current value of the serial data register.
     fn serial_data(&self) -> u8;
 
@@ -721,7 +727,7 @@ pub trait IoRegs {
     fn sound_volume(&self) -> SoundVolume;
     fn sound_pan(&self) -> SoundPan;
     fn sound_enable(&self) -> SoundEnable;
-    fn wavetable(&self) -> [u8;16];
+    fn wavetable(&self) -> [u8; 16];
 
     fn lcd_control(&self) -> LcdFlags;
 
@@ -756,8 +762,8 @@ pub trait IoRegs {
     // TODO: other IO registers.
 }
 
-pub type Vram = MaskableMem::<MaskableMem<[u8; 0x2000]>>;
-pub type Oam = MaskableMem::<MaskableMem<[u8; 160]>>;
+pub type Vram = MaskableMem<MaskableMem<[u8; 0x2000]>>;
+pub type Oam = MaskableMem<MaskableMem<[u8; 160]>>;
 
 /// MemoryDevice which configures the standard memory mapping of the real GameBoy.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -809,7 +815,10 @@ impl GbMmu {
         // very dirty implementation rn
         if self.dma_active {
             let byte = self.read(Addr::from(self.dma_base + self.dma_offset));
-            self.oam.deref_mut().deref_mut().write(Addr::from(self.dma_offset), byte);
+            self.oam
+                .deref_mut()
+                .deref_mut()
+                .write(Addr::from(self.dma_offset), byte);
             self.dma_offset += 1;
             if self.dma_offset > 0x9f {
                 self.dma_active = false;
@@ -879,7 +888,7 @@ impl MemDevice for GbMmu {
                 self.dma_active = true;
                 self.dma_base = (value as u16) << 8;
                 self.dma_offset = 0;
-            },
+            }
             0xff47..=0xff7f => self.io.write(addr.offset_by(0xff00), value),
             0xff80..=0xfffe => self.zram.write(addr.offset_by(0xff80), value),
             0xffff => self.interrupt_enable.write(addr.offset_by(0xffff), value),
