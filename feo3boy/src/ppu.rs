@@ -378,7 +378,7 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
                         let object = ctx.oam().get_object(i);
                         let sprite_height = ctx.ioregs().lcd_control().sprite_height();
 
-                        if lcdc_y + 16 > object.y && lcdc_y + 16 < object.y + sprite_height {
+                        if lcdc_y + 16 >= object.y && lcdc_y + 16 < object.y + sprite_height {
                             let mut ppu = ctx.ppu_mut();
                             let mut insert_index = ppu.obj_queue.len();
                             for (i, queued_object) in ppu.obj_queue.iter().enumerate() {
@@ -446,7 +446,7 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
                     ctx.ppu_mut().screen_buffer[buffer_index] = {
                         let gb_color = match (obj_pixel) {
                             Some(obj_pixel) => {
-                                if obj_pixel.1.contains(ObjAttrs::UNDER_BG) && bg_pixel != 0 {
+                                if obj_pixel.0 == 0 || obj_pixel.1.contains(ObjAttrs::UNDER_BG) && bg_pixel != 0 {
                                     palette_lookup(ctx.ioregs().bg_palette(), bg_pixel)
                                 }
                                 else {
