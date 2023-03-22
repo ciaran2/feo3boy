@@ -693,6 +693,21 @@ impl GbMmu {
             io: MemMappedIo::new(),
             zram: [0; 127],
             interrupt_enable: InterruptEnable(InterruptFlags::empty()),
+            dma_active: false,
+            dma_base: 0x0000,
+            dma_offset: 0x0000,
+        }
+    }
+
+    pub fn tick(&mut self, tcycles: u64) {
+        // very dirty implementation rn
+        if self.dma_active {
+            let byte = self.read(Addr::from(self.dma_base + self.dma_offset));
+            self.oam.deref_mut().deref_mut().write(Addr::from(self.dma_offset), byte);
+            self.dma_offset += 1;
+            if self.dma_offset > 0x9f {
+                self.dma_active = false;
+            }
         }
     }
 }
@@ -725,7 +740,9 @@ impl MemDevice for GbMmu {
             0xfe00..=0xfe9f => self.oam.read(addr.offset_by(0xfe00)),
             // Unmapped portion above sprite information, always returns 0.
             0xfea0..=0xfeff => 0,
-            0xff00..=0xff7f => self.io.read(addr.offset_by(0xff00)),
+            0xff00..=0xff45 => self.io.read(addr.offset_by(0xff00)),
+            0xff46 => (self.dma_base >> 8) as u8,
+            0xff47..=0xff7f => self.io.read(addr.offset_by(0xff00)),
             0xff80..=0xfffe => self.zram.read(addr.offset_by(0xff80)),
             0xffff => self.interrupt_enable.read(addr.offset_by(0xffff)),
         }
@@ -751,7 +768,13 @@ impl MemDevice for GbMmu {
             0xfe00..=0xfe9f => self.oam.write(addr.offset_by(0xfe00), value),
             // Unmapped portion above sprite information.
             0xfea0..=0xfeff => {}
-            0xff00..=0xff7f => self.io.write(addr.offset_by(0xff00), value),
+            0xff00..=0xff45 => self.io.write(addr.offset_by(0xff00), value),
+            0xff46 => {
+                self.dma_active = true;
+                self.dma_base = (value as u16) << 8;
+                self.dma_offset = 0;
+            },
+            0xff47..=0xff7f => self.io.write(addr.offset_by(0xff00), value),
             0xff80..=0xfffe => self.zram.write(addr.offset_by(0xff80), value),
             0xffff => self.interrupt_enable.write(addr.offset_by(0xffff), value),
         }
