@@ -1,8 +1,10 @@
+use core::cmp::Ordering;
 use std::error::Error;
-use std::collections::VecDeque;
+use std::collections::{VecDeque, BinaryHeap};
+use std::ops::Deref;
 use bitflags::bitflags;
 use crate::interrupts::{InterruptContext, InterruptFlags, Interrupts};
-use crate::memdev::{IoRegs, IoRegsContext, MaskableMem};
+use crate::memdev::{Addr, MemDevice, IoRegs, IoRegsContext, Vram, Oam};
 use log::{debug, trace, info};
 
 
@@ -86,6 +88,94 @@ bitflags! {
     }
 }
 
+impl LcdFlags {
+
+    fn sprite_height(&self) -> u8 {
+        if self.contains(Self::OBJ_SIZE) { 16 } else { 8 }
+    }
+}
+
+bitflags! {
+
+    #[derive(Default)]
+    pub struct ObjAttrs: u8 {
+        const CGB_PALETTE   = 0b00000111;
+        const CGB_VRAM_BANK = 0b00001000;
+        const PALETTE       = 0b00010000;
+        const X_FLIP        = 0b00100000;
+        const Y_FLIP        = 0b01000000;
+        const UNDER_BG      = 0b10000000;
+    }
+}
+
+impl ObjAttrs {
+    fn palette(&self) -> usize {
+        if self.contains(Self::PALETTE) {
+            1
+        }
+        else {
+            0
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
+struct Object {
+    y: u8,
+    x: u8,
+    tile_id: u8,
+    attrs: ObjAttrs
+}
+
+impl Object {
+    fn fetch_line(&self, ctx: &mut impl PpuContext) {
+        let object_line = ctx.ioregs().lcdc_y() + 16 - self.y;
+        let object_line = if (self.attrs.contains(ObjAttrs::Y_FLIP)) {
+            ctx.ioregs().lcd_control().sprite_height() - object_line
+        } else { object_line };
+
+        let tile_offset = object_line / 8;
+        let tile_id = self.tile_id + tile_offset;
+        let tile_line = object_line % 8;
+
+        let flip_x = self.attrs.contains(ObjAttrs::X_FLIP);
+        let tile_line = get_tile_line(ctx, tile_id, tile_line, true, flip_x);
+
+        let skip_pixels = ctx.ppu().obj_fifo.len();
+        for pixel in &tile_line[skip_pixels..] {
+            ctx.ppu_mut().obj_fifo.push_back((*pixel, self.attrs));
+        }
+    }
+}
+
+//impl PartialEq for Object {
+//    fn eq(&self, other: &Self) -> bool { self.x == other.x }
+//}
+//
+//impl Ord for Object {
+//    fn cmp(&self, other: &Self) -> Ordering {
+//        other.x.cmp(&self.x)
+//    }
+//}
+//impl PartialOrd for Object {
+//    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+//        Some(self.cmp(other))
+//    }
+//}
+
+impl Oam {
+    fn get_object(&self, i: u16) -> Object {
+        trace!("getting attributes for object: {}", i);
+        let base_index = i * 4;
+        Object {
+            y: self.deref().read(Addr::from(base_index)),
+            x: self.deref().read(Addr::from(base_index + 1)),
+            tile_id: self.deref().read(Addr::from(base_index + 2)),
+            attrs: ObjAttrs::from_bits_truncate(self.deref().read(Addr::from(base_index + 3))),
+        }
+    }
+}
+
 /// Context trait providing access to fields needed to service graphics.
 pub trait PpuContext: IoRegsContext + InterruptContext {
     /// Get the ppu state.
@@ -94,11 +184,11 @@ pub trait PpuContext: IoRegsContext + InterruptContext {
     /// Get mutable access to the ppu state.
     fn ppu_mut(&mut self) -> &mut PpuState;
 
-    fn vram(&self) -> &MaskableMem<0x2000>;
-    fn vram_mut(&mut self) -> &mut MaskableMem<0x2000>;
+    fn vram(&self) -> &Vram;
+    fn vram_mut(&mut self) -> &mut Vram;
 
-    fn oam(&self) -> &MaskableMem<160>;
-    fn oam_mut(&mut self) -> &mut MaskableMem<160>;
+    fn oam(&self) -> &Oam;
+    fn oam_mut(&mut self) -> &mut Oam;
 
     fn display_ready(&mut self);
 }
@@ -114,34 +204,22 @@ pub fn palette_lookup(palette: u8, color: u8) -> usize {
     ((palette & (3 << color * 2)) >> color * 2) as usize
 }
 
-fn get_tile_line(ctx: &impl PpuContext, tile_id: u8, line: u8, low_data: bool) -> VecDeque<u8> {
+fn get_tile_line(ctx: &impl PpuContext, tile_id: u8, line: u8, low_data: bool, flip_x: bool) -> [u8;8] {
     let base_address = if low_data { 0x0 } else { 0x1000 };
-    let tile_offset = (if low_data { tile_id as i16 } else { tile_id as i8 as i16 }) as isize;
+    let tile_offset = if low_data { tile_id as i16 } else { tile_id as i8 as i16 };
 
-    let line_address = (base_address + 16 * tile_offset + 2 * line as isize) as usize;
+    let line_address = (base_address + 16 * tile_offset + 2 * line as i16) as u16;
 
-    let low_bits = ctx.vram().bytes()[line_address];
-    let high_bits = ctx.vram().bytes()[line_address + 1];
+    let low_bits = ctx.vram().deref().read(Addr::from(line_address));
+    let high_bits = ctx.vram().deref().read(Addr::from(line_address + 1));
 
-    let mut output = VecDeque::new();
+    let mut output = [0;8];
     for i in 0..=7 {
-        let bit = 7 - i;
-        output.push_back(((low_bits & (1<<bit)) >> bit) + (2 * ((high_bits & (1<<bit)) >> bit)));
+        let bit = if flip_x {i} else {7 - i};
+        output[i] = ((low_bits & (1<<bit)) >> bit) + (2 * ((high_bits & (1<<bit)) >> bit));
     }
     
     output
-}
-
-fn get_object(ctx: &impl PpuContext, i: u8) -> &[u8] {
-    let base_index = i as usize * 4;
-    &ctx.oam().bytes()[base_index..base_index+3]
-}
-
-trait Object {
-    fn y(&self) -> u8;
-    fn x(&self) -> u8;
-    fn tile_id(&self) -> u8;
-    fn bg_priority(&self) -> bool;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -149,12 +227,14 @@ pub struct PpuState {
   truecolor_palette: [(u8, u8, u8); 4],
   screen_buffer: [(u8, u8, u8); 23040],
   scanline_ticks: u64,
+  object_cursor: u16,
   scanline_x: u8,
-  fetcher_x: usize,
+  fetcher_x: u16,
+  obj_queue: VecDeque<Object>,
   bg_fifo: VecDeque<u8>,
+  obj_fifo: VecDeque<(u8, ObjAttrs)>,
   bg_discard: u8,
   in_window: bool,
-  //obj_fifo: VecDeque<TBD>, //object pixels require extra metadata
 }
 
 impl PpuState {
@@ -168,7 +248,10 @@ impl PpuState {
 
     pub fn scanline_reset(&mut self) {
         self.bg_fifo.clear();
+        self.obj_fifo.clear();
+        self.obj_queue.clear();
         self.scanline_ticks -= 456;
+        self.object_cursor = 0;
         self.scanline_x = 0;
         self.fetcher_x = 0;
         self.bg_discard = 0;
@@ -177,44 +260,48 @@ impl PpuState {
 }
 
 impl Default for PpuState {
-  fn default() -> PpuState {
-    PpuState {
-        truecolor_palette: [(0xff, 0xff, 0xff), (0xd3, 0xd3, 0xd3), (0x5a, 0x5a, 0x5a), (0x00, 0x00, 0x00)],
-        screen_buffer: [(0xff, 0xff, 0xff); 23040],
-        scanline_ticks: 0,
-        scanline_x: 0,
-        fetcher_x: 0,
-        bg_fifo: VecDeque::new(),
-        bg_discard: 0,
-        in_window: false,
+    fn default() -> PpuState {
+        PpuState {
+            truecolor_palette: [(0xff, 0xff, 0xff), (0xd3, 0xd3, 0xd3), (0x5a, 0x5a, 0x5a), (0x00, 0x00, 0x00)],
+            screen_buffer: [(0xff, 0xff, 0xff); 23040],
+            scanline_ticks: 0,
+            object_cursor: 0,
+            scanline_x: 0,
+            fetcher_x: 0,
+            obj_queue: VecDeque::new(),
+            bg_fifo: VecDeque::new(),
+            obj_fifo: VecDeque::new(),
+            bg_discard: 0,
+            in_window: false,
+        }
     }
-  }
 }
 
 pub fn bg_tile_fetch(ctx: &mut impl PpuContext) {
     let tile_map_flag = if ctx.ppu().in_window { LcdFlags::WINDOW_TILE_MAP }
                         else { LcdFlags::BG_TILE_MAP };
 
-    let scroll_offset = if ctx.ppu().in_window { 0 } else { ctx.ioregs().scroll_x() as usize / 8 };
+    let scroll_offset_x = if ctx.ppu().in_window { 0 } else { ctx.ioregs().scroll_x() as u16 / 8 };
+
+    let tile_map_y = if ctx.ppu().in_window { (ctx.ioregs().lcdc_y() - ctx.ioregs().window_y()) as u16 } else { ctx.ioregs().lcdc_y().wrapping_add(ctx.ioregs().scroll_y()) as u16 };
 
     let tile_id_base = if ctx.ioregs().lcd_control().contains(tile_map_flag) {0x1c00} else {0x1800};
 
-    let tile_id_offset = ((ctx.ioregs().lcdc_y() as usize / 8) & 0x1f) * 32 + ((ctx.ppu().fetcher_x + scroll_offset) & 0x1f);
+    let tile_id_offset = ((tile_map_y as u16 / 8) & 0x1f) * 32 + ((ctx.ppu().fetcher_x + scroll_offset_x) & 0x1f);
 
-    let tile_id = ctx.vram().bytes()[tile_id_base + tile_id_offset];
+    let tile_id = ctx.vram().deref().read(Addr::from(tile_id_base + tile_id_offset));
 
     if ctx.ioregs().lcdc_y() / 8 == 0 {
-        debug!("tile_id_offset: {}, fetcher_x: {}, scroll_offset: {}, tile_id: {:x}", tile_id_offset, ctx.ppu().fetcher_x, scroll_offset, tile_id);
+        debug!("tile_id_offset: {}, fetcher_x: {}, scroll_offset: {}, tile_id: {:x}", tile_id_offset, ctx.ppu().fetcher_x, scroll_offset_x, tile_id);
     }
 
-    let line = if ctx.ppu().in_window { ctx.ioregs().lcdc_y() - ctx.ioregs().window_y() }
-               else { ctx.ioregs().lcdc_y().wrapping_add(ctx.ioregs().scroll_y()) } & 0x7;
+    let line = (tile_map_y & 0x7) as u8;
 
     trace!("Fetching line {} of tile {}", line, tile_id);
 
-    let mut tile_line = get_tile_line(ctx, tile_id, line, ctx.ioregs().lcd_control().contains(LcdFlags::BG_TILE_DATA));
+    let tile_line = get_tile_line(ctx, tile_id, line, ctx.ioregs().lcd_control().contains(LcdFlags::BG_TILE_DATA), false);
 
-    ctx.ppu_mut().bg_fifo.append(&mut tile_line);
+    ctx.ppu_mut().bg_fifo.extend(&tile_line);
 
     ctx.ppu_mut().fetcher_x += 1;
 }
@@ -284,6 +371,34 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
             }
             LcdMode::OamScan      => {
                 debug!("OAMScan");
+                
+                let end_object = (ctx.ppu().scanline_ticks as u16 / 2);
+
+                for i in ctx.ppu().object_cursor..end_object {
+                    if ctx.ppu().obj_queue.len() < 10  && i < 40 {
+                        let object = ctx.oam().get_object(i);
+                        let sprite_height = ctx.ioregs().lcd_control().sprite_height();
+
+                        if lcdc_y + 16 >= object.y && lcdc_y + 16 < object.y + sprite_height {
+                            let mut ppu = ctx.ppu_mut();
+                            let mut insert_index = ppu.obj_queue.len();
+                            for (i, queued_object) in ppu.obj_queue.iter().enumerate() {
+                                if object.x < queued_object.x {
+                                    insert_index = i;
+                                    break;
+                                }
+                            }
+
+                            ppu.obj_queue.insert(insert_index, object);
+                        }
+                    }
+                    else {
+                        break;
+                    }
+                }
+
+                ctx.ppu_mut().object_cursor = end_object;
+
                 if ctx.ppu().scanline_ticks > 80 {
                     debug!("Video mode transition from 2 (OAMScan) to 3 (WriteScreen)");
                     ctx.vram_mut().mask();
@@ -307,6 +422,11 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
                         bg_tile_fetch(ctx);
                     }
 
+                    if !ctx.ppu().obj_queue.is_empty()
+                       && ctx.ppu().obj_queue[0].x == ctx.ppu().scanline_x + 8 {
+                        ctx.ppu_mut().obj_queue.pop_front().unwrap().fetch_line(ctx);
+                    }
+
                     if !ctx.ppu().in_window && ctx.ppu().scanline_x == 0 {
                         for _i in 0..ctx.ppu().bg_discard {
                             ctx.ppu_mut().bg_fifo.pop_front();
@@ -321,14 +441,25 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
                     //}
 
                     let buffer_index = (lcdc_y as usize * 160 + ctx.ppu().scanline_x as usize);
-                    let bg_color = ctx.ppu_mut().bg_fifo.pop_front().unwrap();
+                    let bg_pixel = ctx.ppu_mut().bg_fifo.pop_front().unwrap();
+                    let obj_pixel = ctx.ppu_mut().obj_fifo.pop_front();
 
-                    //standin for later checks against object pixel properties
-                    if true {
-                        let gb_color = palette_lookup(ctx.ioregs().bg_palette(), bg_color);
-                        let truecolor = ctx.ppu().truecolor_palette[gb_color];
-                        ctx.ppu_mut().screen_buffer[buffer_index] =  truecolor;
-                    }
+                    ctx.ppu_mut().screen_buffer[buffer_index] = {
+                        let gb_color = match (obj_pixel) {
+                            Some(obj_pixel) => {
+                                if obj_pixel.0 == 0 || obj_pixel.1.contains(ObjAttrs::UNDER_BG) && bg_pixel != 0 {
+                                    palette_lookup(ctx.ioregs().bg_palette(), bg_pixel)
+                                }
+                                else {
+                                    let obj_palette = obj_pixel.1.palette();
+                                    palette_lookup(ctx.ioregs().obj_palette(obj_palette), obj_pixel.0)
+                                }
+                            }
+                            None => palette_lookup(ctx.ioregs().bg_palette(), bg_pixel)
+                        };
+                        ctx.ppu().truecolor_palette[gb_color]
+                    };
+
 
                     ctx.ppu_mut().scanline_x += 1;
                     if ctx.ppu().scanline_x > 159 {

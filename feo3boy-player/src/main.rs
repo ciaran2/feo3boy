@@ -4,7 +4,7 @@ use std::io::{self, Read, Write};
 use clap::{App, Arg};
 use log::{info, error};
 
-use pixels::{Pixels, SurfaceTexture, Error};
+use pixels::{Pixels, PixelsBuilder, SurfaceTexture, Error};
 use winit::event::{Event, DeviceEvent, WindowEvent, VirtualKeyCode, ElementState};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::WindowBuilder;
@@ -112,7 +112,7 @@ fn main() {
     let mut pixels = {
         let window_size = window.inner_size();
         let surface_texture = SurfaceTexture::new(window_size.width, window_size.height, &window);
-        Pixels::new(160, 144, surface_texture).unwrap()
+        PixelsBuilder::new(160, 144, surface_texture).enable_vsync(true).build().unwrap()
     };
 
     let mut bindings = vec![ (VirtualKeyCode::W, ButtonStates::UP),

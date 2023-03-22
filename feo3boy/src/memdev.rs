@@ -1,6 +1,6 @@
 use std::convert::TryFrom;
 use std::fmt;
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 
 use log::trace;
 use thiserror::Error;
@@ -241,18 +241,27 @@ impl<const N: usize> MemDevice for [u8; N] {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MaskableMem<const N: usize> {
-    data: [u8; N],
+/// Workaround for the implementation of Default for arrays being so janky
+/// Separated from main MemDevice interface in case arrays get const defaults later
+pub trait CustomDefault {
+    fn custom_default() -> Self;
+}
+
+impl<const N: usize> CustomDefault for [u8; N] {
+    fn custom_default() -> Self {
+        [0; N]
+    }
+}
+
+#[derive(Clone, Default, Debug, PartialEq, Eq)]
+pub struct MaskableMem<M> {
+    device: M,
     masked: bool,
 }
 
-impl<const N: usize> MaskableMem<N> {
+impl<M: CustomDefault> MaskableMem<M> {
     pub fn new() -> Self {
-        MaskableMem {
-            data: [0; N],
-            masked: false,
-        }
+        MaskableMem::custom_default()
     }
 
     pub fn mask(&mut self) {
@@ -262,20 +271,21 @@ impl<const N: usize> MaskableMem<N> {
     pub fn unmask(&mut self) {
         self.masked = false;
     }
+}
 
-    pub fn bytes(&self) -> &[u8] {
-        &self.data
-    }
-
-    pub fn bytes_mut(&mut self) -> &mut [u8] {
-        &mut self.data
+impl<M: CustomDefault> CustomDefault for MaskableMem<M> {
+    fn custom_default() -> Self {
+        MaskableMem {
+            device: M::custom_default(),
+            masked: false,
+        }
     }
 }
 
-impl<const N: usize> MemDevice for MaskableMem<N> {
+impl<M: MemDevice> MemDevice for MaskableMem<M> {
     fn read(&self, addr: Addr) -> u8 {
         if !self.masked {
-            self.data.read(addr)
+            self.device.read(addr)
         }
         else {
             0xff
@@ -284,9 +294,18 @@ impl<const N: usize> MemDevice for MaskableMem<N> {
 
     fn write(&mut self, addr: Addr, value: u8) {
         if !self.masked {
-            self.data.write(addr, value)
+            self.device.write(addr, value)
         }
     }
+}
+
+impl<M> Deref for MaskableMem<M> {
+    type Target = M;
+    fn deref(&self) -> &Self::Target { &self.device }
+}
+
+impl<M> DerefMut for MaskableMem<M> {
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.device }
 }
 
 // This makes sure that Box<dyn MemDevice> implements MemDevice (as well as Box<Anything that
@@ -321,8 +340,7 @@ pub struct MemMappedIo {
     pub lcdc_y_compare: u8,
     pub dma_addr: u8,
     pub bg_palette: u8,
-    pub obj0_palette: u8,
-    pub obj1_palette: u8,
+    pub obj_palette: [u8;2],
     pub window_y: u8,
     pub window_x: u8,
     pub interrupt_flags: InterruptFlags,
@@ -349,8 +367,7 @@ impl MemMappedIo {
             lcdc_y_compare: 0x00,
             dma_addr: 0x00,
             bg_palette: 0x00,
-            obj0_palette: 0x00,
-            obj1_palette: 0x00,
+            obj_palette: [0x00;2],
             window_y: 0x00,
             window_x: 0x00,
             interrupt_flags: InterruptFlags::empty(),
@@ -391,8 +408,8 @@ impl MemDevice for MemMappedIo {
             0x45 => self.lcdc_y_compare,
             0x46 => self.dma_addr,
             0x47 => self.bg_palette,
-            0x48 => self.obj0_palette,
-            0x49 => self.obj1_palette,
+            0x48 => self.obj_palette[0],
+            0x49 => self.obj_palette[1],
             0x4a => self.window_y,
             0x4b => self.window_x,
             0x4c..=0x4f => 0xff,
@@ -423,8 +440,8 @@ impl MemDevice for MemMappedIo {
             0x45 => self.lcdc_y_compare = value,
             0x46 => self.dma_addr = value,
             0x47 => self.bg_palette = value,
-            0x48 => self.obj0_palette = value,
-            0x49 => self.obj1_palette = value,
+            0x48 => self.obj_palette[0] = value,
+            0x49 => self.obj_palette[1] = value,
             0x4a => self.window_y = value,
             0x4b => self.window_x = value,
             0x4c..=0x4f => {},
@@ -541,18 +558,8 @@ impl IoRegs for MemMappedIo {
         self.bg_palette = val;
     }
 
-    fn obj0_palette(&self) -> u8 {
-        self.obj0_palette
-    }
-    fn set_obj0_palette(&mut self, val: u8) {
-        self.obj0_palette = val;
-    }
-
-    fn obj1_palette(&self) -> u8 {
-        self.obj1_palette
-    }
-    fn set_obj1_palette(&mut self, val: u8) {
-        self.obj1_palette = val;
+    fn obj_palette(&self, i: usize) -> u8 {
+        self.obj_palette[i]
     }
 
     fn window_y(&self) -> u8 {
@@ -633,11 +640,7 @@ pub trait IoRegs {
     fn bg_palette(&self) -> u8;
     fn set_bg_palette(&mut self, val: u8);
 
-    fn obj0_palette(&self) -> u8;
-    fn set_obj0_palette(&mut self, val: u8);
-
-    fn obj1_palette(&self) -> u8;
-    fn set_obj1_palette(&mut self, val: u8);
+    fn obj_palette(&self, i: usize) -> u8;
 
     fn window_y(&self) -> u8;
     fn set_window_y(&mut self, val: u8);
@@ -647,6 +650,9 @@ pub trait IoRegs {
     // TODO: other IO registers.
 }
 
+pub type Vram = MaskableMem::<MaskableMem<[u8; 0x2000]>>;
+pub type Oam = MaskableMem::<MaskableMem<[u8; 160]>>;
+
 /// MemoryDevice which configures the standard memory mapping of the real GameBoy.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GbMmu {
@@ -655,11 +661,11 @@ pub struct GbMmu {
     /// The inserted cartridge. Mapped to 0..0x8000 (rom) and 0xA000..0xC000 (ram).
     pub cart: Cartridge,
     /// Video Ram. Mapped to 0x8000..0xA000
-    pub vram: MaskableMem::<0x2000>,
+    pub vram: Vram,
     /// Working Ram. Mapped to 0xC000..0xE000 and duplicately mapped at 0xE000..0xFE00.
     pub wram: [u8; 0x2000],
     /// Spirte info. Mapped to 0xFE00..0xFEA0.
-    pub oam: MaskableMem::<160>,
+    pub oam: Oam,
     /// Memory mapped IO. Mapped to 0xff00..FF80.
     // TODO: don't require this to be exposed directly (use traits like for interrupts).
     pub io: MemMappedIo,
@@ -668,6 +674,10 @@ pub struct GbMmu {
     pub zram: [u8; 127],
     /// Interrupt enable register. Mapped to 0xffff
     pub interrupt_enable: InterruptEnable,
+
+    dma_active: bool,
+    dma_base: u16,
+    dma_offset: u16,
 }
 
 impl GbMmu {
@@ -677,12 +687,27 @@ impl GbMmu {
         GbMmu {
             bios,
             cart,
-            vram: MaskableMem::<0x2000>::new(),
+            vram: Vram::new(),
             wram: [0; 0x2000],
-            oam: MaskableMem::<160>::new(),
+            oam: Oam::new(),
             io: MemMappedIo::new(),
             zram: [0; 127],
             interrupt_enable: InterruptEnable(InterruptFlags::empty()),
+            dma_active: false,
+            dma_base: 0x0000,
+            dma_offset: 0x0000,
+        }
+    }
+
+    pub fn tick(&mut self, tcycles: u64) {
+        // very dirty implementation rn
+        if self.dma_active {
+            let byte = self.read(Addr::from(self.dma_base + self.dma_offset));
+            self.oam.deref_mut().deref_mut().write(Addr::from(self.dma_offset), byte);
+            self.dma_offset += 1;
+            if self.dma_offset > 0x9f {
+                self.dma_active = false;
+            }
         }
     }
 }
@@ -715,7 +740,9 @@ impl MemDevice for GbMmu {
             0xfe00..=0xfe9f => self.oam.read(addr.offset_by(0xfe00)),
             // Unmapped portion above sprite information, always returns 0.
             0xfea0..=0xfeff => 0,
-            0xff00..=0xff7f => self.io.read(addr.offset_by(0xff00)),
+            0xff00..=0xff45 => self.io.read(addr.offset_by(0xff00)),
+            0xff46 => (self.dma_base >> 8) as u8,
+            0xff47..=0xff7f => self.io.read(addr.offset_by(0xff00)),
             0xff80..=0xfffe => self.zram.read(addr.offset_by(0xff80)),
             0xffff => self.interrupt_enable.read(addr.offset_by(0xffff)),
         }
@@ -741,7 +768,13 @@ impl MemDevice for GbMmu {
             0xfe00..=0xfe9f => self.oam.write(addr.offset_by(0xfe00), value),
             // Unmapped portion above sprite information.
             0xfea0..=0xfeff => {}
-            0xff00..=0xff7f => self.io.write(addr.offset_by(0xff00), value),
+            0xff00..=0xff45 => self.io.write(addr.offset_by(0xff00), value),
+            0xff46 => {
+                self.dma_active = true;
+                self.dma_base = (value as u16) << 8;
+                self.dma_offset = 0;
+            },
+            0xff47..=0xff7f => self.io.write(addr.offset_by(0xff00), value),
             0xff80..=0xfffe => self.zram.write(addr.offset_by(0xff80), value),
             0xffff => self.interrupt_enable.write(addr.offset_by(0xffff), value),
         }
