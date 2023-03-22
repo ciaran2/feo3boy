@@ -1,5 +1,6 @@
 //! Contains the microcode implementations of opcode args.
 
+use crate::gbz80core::microcode::combocodes::ComboCode;
 use crate::gbz80core::microcode::{
     BinaryOp, Immediate16, Immediate8, Mem16, Mem8, Microcode, MicrocodeBuilder, MicrocodeReadable,
     MicrocodeWritable, Reg16, Reg8, UnaryOp,
@@ -144,39 +145,21 @@ impl MicrocodeReadable for Operand8 {
             Self::AddrDE => MicrocodeBuilder::read(Reg16::DE).then_read(Mem8),
             Self::AddrHLInc => {
                 // stack: ...|
-                // Grab the current value of HL.
-                // stack: ...|l|h|
-                MicrocodeBuilder::read(Reg16::HL)
-                    // Copy the value so we can increment it.
-                    // stack: ...|l|h|l|h|
-                    .then(Microcode::Dup(2))
-                    // Increment the value
-                    // stack: ...|l|h|L|H|
-                    .then(Microcode::Inc16)
-                    // Write the new value to HL
-                    // stack: ...|l|h|
-                    .then_write(Reg16::HL)
-                    // Use the original hl value to read the value from memory.
+                // Retrieve HL and increment it.
+                // stack: ...|h|l|
+                MicrocodeBuilder::first(ComboCode::HlInc)
+                    // Use hl to read the value from memory.
                     // stack: ...|v|
-                    .then_write(Mem8)
+                    .then_read(Mem8)
             }
             Self::AddrHLDec => {
                 // stack: ...|
-                // Grab the current value of HL.
-                // stack: ...|L|H|
-                MicrocodeBuilder::read(Reg16::HL)
-                    // Copy the value so we can increment it.
-                    // stack: ...|L|H|L|H|
-                    .then(Microcode::Dup(2))
-                    // Decrement the value
-                    // stack: ...|L|H|l|h|
-                    .then(Microcode::Dec16)
-                    // Write the new value to HL
-                    // stack: ...|L|H|
-                    .then_write(Reg16::HL)
+                // Retrieve HL and decrement it.
+                // stack: ...|h|l|
+                MicrocodeBuilder::first(ComboCode::HlDec)
                     // Use the original hl value to read the value from memory.
                     // stack: ...|v|
-                    .then_write(Mem8)
+                    .then_read(Mem8)
             }
             Self::Immediate => MicrocodeBuilder::read(Immediate8),
             Self::AddrImmediate => MicrocodeBuilder::read(Immediate16).then_read(Mem8),
@@ -213,37 +196,19 @@ impl MicrocodeWritable for Operand8 {
             Self::AddrDE => MicrocodeBuilder::read(Reg16::DE).then_write(Mem8),
             Self::AddrHLInc => {
                 // stack: ...|v|
-                // Grab the current value of HL.
-                // stack: ...|v|l|h|
-                MicrocodeBuilder::read(Reg16::HL)
-                    // Copy the value so we can increment it.
-                    // stack: ...|v|l|h|l|h|
-                    .then(Microcode::Dup(2))
-                    // Increment the value
-                    // stack: ...|v|l|h|L|H|
-                    .then(Microcode::Inc16)
-                    // Write the new value to HL
-                    // stack: ...|v|l|h|
-                    .then_write(Reg16::HL)
-                    // Use the original hl value to write the value to memory.
+                // Retrieve HL and increment it.
+                // stack: ...|v|h|l|
+                MicrocodeBuilder::first(ComboCode::HlInc)
+                    // Use hl to write the value to memory.
                     // stack: ...|
                     .then_write(Mem8)
             }
             Self::AddrHLDec => {
                 // stack: ...|v|
-                // Grab the current value of HL.
-                // stack: ...|v|L|H|
-                MicrocodeBuilder::read(Reg16::HL)
-                    // Copy the value so we can increment it.
-                    // stack: ...|v|L|H|L|H|
-                    .then(Microcode::Dup(2))
-                    // Decrement the value
-                    // stack: ...|v|L|H|l|h|
-                    .then(Microcode::Dec16)
-                    // Write the new value to HL
-                    // stack: ...|v|L|H|
-                    .then_write(Reg16::HL)
-                    // Use the original hl value to write the value to memory.
+                // Retrieve HL and decrement it.
+                // stack: ...|v|h|l|
+                MicrocodeBuilder::first(ComboCode::HlDec)
+                    // Use hl to write the value to memory.
                     // stack: ...|
                     .then_write(Mem8)
             }

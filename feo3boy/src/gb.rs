@@ -1,10 +1,10 @@
 use crate::gbz80core::{self, CpuContext, Gbz80State};
-use crate::input::{self, ButtonStates, InputContext};
 use crate::interrupts::InterruptContext;
 use crate::memdev::{BiosRom, Cartridge, GbMmu, MaskableMem, IoRegsContext, MemContext, Vram, Oam};
 use crate::input::{self, InputContext, ButtonStates};
 use crate::serial::{self, SerialContext, SerialState};
-use crate::timer::{self, TimerContext, TimerState};
+use crate::ppu::{self, PpuState, PpuContext};
+use crate::timer::{self, TimerState, TimerContext};
 
 /// Represents a "real" gameboy, by explicitly using the GbMmu for memory.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -47,7 +47,8 @@ impl Gb {
         if self.display_ready {
             self.display_ready = false;
             Some(self.ppu.screen_buffer())
-        } else {
+        }
+        else {
             None
         }
     }

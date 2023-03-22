@@ -1,6 +1,5 @@
 use std::fmt;
 
-#[cfg(not(feature = "microcode"))]
 mod r#impl;
 mod microcode;
 

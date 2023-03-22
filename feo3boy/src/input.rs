@@ -77,11 +77,10 @@ pub fn update(ctx: &mut impl InputContext) {
     let no_actions = button_reg.contains(ButtonRegister::NO_ACTIONS);
 
     let old_button_status = button_reg & ButtonRegister::BUTTONS;
-    let new_button_status = ButtonRegister::from_bits(
+    let new_button_status = ButtonRegister::from_bits_truncate(
         ctx.button_states()
             .select_buttons(no_directions, no_actions),
-    )
-    .unwrap();
+    );
 
     // trigger interrupt on falling edge
     if !(!new_button_status & old_button_status).is_empty() {

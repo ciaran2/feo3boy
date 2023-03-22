@@ -5,3 +5,6 @@ members = [
   "web-debugger",
 ]
 resolver = "2"
+
+[profile.dev]
+opt-level = 1
