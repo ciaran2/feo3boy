@@ -281,20 +281,21 @@ pub fn bg_tile_fetch(ctx: &mut impl PpuContext) {
     let tile_map_flag = if ctx.ppu().in_window { LcdFlags::WINDOW_TILE_MAP }
                         else { LcdFlags::BG_TILE_MAP };
 
-    let scroll_offset = if ctx.ppu().in_window { 0 } else { ctx.ioregs().scroll_x() as u16 / 8 };
+    let scroll_offset_x = if ctx.ppu().in_window { 0 } else { ctx.ioregs().scroll_x() as u16 / 8 };
+
+    let tile_map_y = if ctx.ppu().in_window { (ctx.ioregs().lcdc_y() - ctx.ioregs().window_y()) as u16 } else { ctx.ioregs().lcdc_y().wrapping_add(ctx.ioregs().scroll_y()) as u16 };
 
     let tile_id_base = if ctx.ioregs().lcd_control().contains(tile_map_flag) {0x1c00} else {0x1800};
 
-    let tile_id_offset = ((ctx.ioregs().lcdc_y() as u16 / 8) & 0x1f) * 32 + ((ctx.ppu().fetcher_x + scroll_offset) & 0x1f);
+    let tile_id_offset = ((tile_map_y as u16 / 8) & 0x1f) * 32 + ((ctx.ppu().fetcher_x + scroll_offset_x) & 0x1f);
 
     let tile_id = ctx.vram().deref().read(Addr::from(tile_id_base + tile_id_offset));
 
     if ctx.ioregs().lcdc_y() / 8 == 0 {
-        debug!("tile_id_offset: {}, fetcher_x: {}, scroll_offset: {}, tile_id: {:x}", tile_id_offset, ctx.ppu().fetcher_x, scroll_offset, tile_id);
+        debug!("tile_id_offset: {}, fetcher_x: {}, scroll_offset: {}, tile_id: {:x}", tile_id_offset, ctx.ppu().fetcher_x, scroll_offset_x, tile_id);
     }
 
-    let line = if ctx.ppu().in_window { ctx.ioregs().lcdc_y() - ctx.ioregs().window_y() }
-               else { ctx.ioregs().lcdc_y().wrapping_add(ctx.ioregs().scroll_y()) } & 0x7;
+    let line = (tile_map_y & 0x7) as u8;
 
     trace!("Fetching line {} of tile {}", line, tile_id);
 
