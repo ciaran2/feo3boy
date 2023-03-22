@@ -252,7 +252,7 @@ pub use microcode_executor::*;
 
 /// Provides microcode-based CPU execution.
 #[cfg(feature = "microcode")]
-mod microcode_executor {
+pub mod microcode_executor {
     use log::{debug, trace};
 
     use crate::gbz80core::microcode::{Instr, Microcode, MicrocodeFlow, MicrocodeStack};
@@ -367,8 +367,7 @@ mod microcode_executor {
 pub use direct_executor::*;
 
 /// Provides functions to run the CPU using the direct-execution method.
-#[cfg(not(feature = "microcode"))]
-mod direct_executor {
+pub mod direct_executor {
     use crate::gbz80core::opcode::{service_interrupt, Opcode};
     use crate::gbz80core::CpuContext;
     use crate::interrupts::Interrupts;
@@ -381,6 +380,15 @@ mod direct_executor {
     /// handler ("ISR" basically counts as an instruction) but before running the first
     /// instruction of the interrupt handler itself.
     pub fn run_single_instruction(ctx: &mut impl CpuContext) {
+        #[cfg(feature = "microcode")]
+        {
+            use crate::gbz80core::MicrocodeState;
+            debug_assert!(
+                ctx.cpu().microcode == MicrocodeState::default(),
+                "Cannot switch between direct and microcode while in the middle of a \
+                microcode instruction."
+            );
+        }
         if ctx.cpu().halted {
             if ctx.interrupts().active().is_empty() {
                 ctx.yield1m();
@@ -1601,6 +1609,43 @@ mod tests {
     }
 
     #[test]
+    fn rst() {
+        init();
+
+        let rsts = [
+            (0xc7, 0x00),
+            (0xcf, 0x08),
+            (0xd7, 0x10),
+            (0xdf, 0x18),
+            (0xe7, 0x20),
+            (0xef, 0x28),
+            (0xf7, 0x30),
+            (0xff, 0x38),
+        ];
+
+        for (opcode, dest) in rsts {
+            let mut ctx = (Gbz80State::default(), [0u8; 0x200]);
+            ctx.1[0x101] = opcode;
+            ctx.0.regs.pc = 0x101;
+            ctx.0.regs.sp = 0x200;
+
+            let expected = {
+                let mut expected = ctx.clone();
+                expected.0.regs.pc = dest;
+                expected.0.regs.sp = 0x1fe;
+                // Pushed address should be 0x0102 (in little endian order), since that's
+                // the address of the instruction after RST.
+                expected.1[0x1fe] = 0x02;
+                expected.1[0x1ff] = 0x01;
+                expected
+            };
+
+            run_single_instruction(&mut ctx);
+            assert_eq!(ctx, expected);
+        }
+    }
+
+    #[test]
     fn returns() {
         init();
 
@@ -1647,6 +1692,33 @@ mod tests {
                     assert_eq!(ctx, expected);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn interrupt_return() {
+        init();
+
+        for dest in 0x0000u16..=0xffff {
+            println!("reti(0xd9) -> {:04x}", dest);
+            let mut ctx = (Gbz80State::default(), [0u8; 0x200]);
+            ctx.1[0x100] = 0xd9;
+            ctx.0.regs.pc = 0x100;
+            let [low, high] = dest.to_le_bytes();
+            ctx.1[0x1fe] = low;
+            ctx.1[0x1ff] = high;
+            ctx.0.regs.sp = 0x1fe;
+
+            let expected = {
+                let mut expected = ctx.clone();
+                expected.0.regs.sp = 0x200;
+                expected.0.regs.pc = dest;
+                expected.0.interrupt_master_enable.set();
+                expected
+            };
+
+            run_single_instruction(&mut ctx);
+            assert_eq!(ctx, expected);
         }
     }
 

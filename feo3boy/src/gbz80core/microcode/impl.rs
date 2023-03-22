@@ -159,6 +159,7 @@ impl Microcode {
             Self::TickImeOnEnd => tick_ime_on_end(ctx),
             Self::Skip { steps } => skip(ctx, steps),
             Self::SkipIf { steps } => skip_if(ctx, steps),
+            Self::SkipIfNot { steps } => skip_if_not(ctx, steps),
             Self::FetchNextInstruction => fetch_next_instruction(ctx),
             Self::ParseOpcode => parse_opcode(ctx),
             Self::ParseCBOpcode => parse_cb_opcode(ctx),
@@ -342,7 +343,7 @@ fn pop_interrupt(ctx: &mut impl CpuContext) {
 }
 
 /// Enables IME ticking on the next `FetchNextInstruction`.
-fn tick_ime_on_end(ctx: &mut impl CpuContext) {
+pub(super) fn tick_ime_on_end(ctx: &mut impl CpuContext) {
     let cpu = ctx.cpu_mut();
     debug_assert!(
         cpu.microcode.prev_ime.is_none(),
@@ -371,6 +372,17 @@ fn skip_if(ctx: &mut impl CpuContext, steps: usize) {
     }
 }
 
+/// Skip the CPU forward by this number of microcode instruction steps if the u8 value on
+/// top of the microcode stack is zero.
+fn skip_if_not(ctx: &mut impl CpuContext, steps: usize) {
+    let cond = ctx.cpu_mut().microcode.stack.popu8();
+    if cond == 0 {
+        // Only checked for overflow in debug.
+        ctx.cpu_mut().microcode.pc += steps;
+        debug_assert!(ctx.cpu().microcode.pc <= ctx.cpu().microcode.instruction.len());
+    }
+}
+
 /// Resets to the CPU Internal instruction.
 // Shared with combo-codes.
 pub(super) fn fetch_next_instruction(ctx: &mut impl CpuContext) {
@@ -390,7 +402,7 @@ pub(super) fn fetch_next_instruction(ctx: &mut impl CpuContext) {
 
 /// Parses a regular opcode from the microcode stack and replaces the current
 /// instruction with it.
-fn parse_opcode(ctx: &mut impl CpuContext) {
+pub(super) fn parse_opcode(ctx: &mut impl CpuContext) {
     let cpu = ctx.cpu_mut();
     let opcode = cpu.microcode.stack.popu8();
     debug_assert!(

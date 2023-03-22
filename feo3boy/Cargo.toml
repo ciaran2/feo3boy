@@ -5,9 +5,9 @@ authors = ["ciaran"]
 edition = "2018"
 
 [features]
-default = ["combo-code"]
 microcode = []
 combo-code = ["microcode"]
+test-roms = []
 
 [dependencies]
 bitflags = "1"
@@ -17,3 +17,8 @@ thiserror = "1"
 
 [dev-dependencies]
 env_logger = "0.9"
+criterion = "0.4"
+
+[[bench]]
+name = "opcodes"
+harness = false

@@ -53,22 +53,36 @@ impl MicrocodeBuilder {
         // We only add the extra unconditional skip if the true_branch is non-empty.
 
         let code_if_true = code_if_true.into();
-        let mut code_if_false = code_if_false.into();
+        let code_if_false = code_if_false.into();
 
-        // If the true branch is non-empty, add code to the end of the false branch that
-        // will skip the true branch. If the true branch is empty, this is
-        // unnecessary.
-        if !code_if_true.microcode.is_empty() {
-            code_if_false.microcode.push(Microcode::Skip {
-                steps: code_if_true.microcode.len(),
+        // Both branches are empty, so the condition is irrelevant, just discard it. We
+        // still need to pop the condition off the stack though for consistency.
+        if code_if_true.microcode.is_empty() && code_if_false.microcode.is_empty() {
+            Microcode::Discard(1).into()
+        } else if code_if_true.microcode.is_empty() {
+            // The true-case is empty, so just skip the false case if the value is true.
+            MicrocodeBuilder::first(Microcode::SkipIf {
+                steps: code_if_false.len(),
+            })
+            .then(code_if_false)
+        } else if code_if_false.microcode.is_empty() {
+            // The false-case is empty, so just skip the true case if the value is false.
+            MicrocodeBuilder::first(Microcode::SkipIfNot {
+                steps: code_if_true.len(),
+            })
+            .then(code_if_true)
+        } else {
+            // Both true and false cases are non-empty. Modify code_if_false by adding a
+            // step to skip the length of code_if_true.
+            let code_if_false = code_if_false.then(Microcode::Skip {
+                steps: code_if_true.len(),
             });
+            MicrocodeBuilder::first(Microcode::SkipIf {
+                steps: code_if_false.len(),
+            })
+            .then(code_if_false)
+            .then(code_if_true)
         }
-
-        MicrocodeBuilder::first(Microcode::SkipIf {
-            steps: code_if_false.microcode.len(),
-        })
-        .then(code_if_false)
-        .then(code_if_true)
     }
 
     /// Pop a single byte boolean off the microcode stack and run this if it is true.
@@ -113,6 +127,11 @@ impl MicrocodeBuilder {
     /// Add a write to the end of the builder.
     pub fn then_write<W: MicrocodeWritable>(self, to: W) -> Self {
         self.then(to.to_write())
+    }
+
+    /// Gest the number of steps currently in this microcode builder.
+    pub fn len(&self) -> usize {
+        self.microcode.len()
     }
 
     /// Build an instruction from this microcode, adding the label for the instruction.
@@ -277,21 +296,9 @@ pub struct Immediate8;
 
 impl MicrocodeReadable for Immediate8 {
     fn to_read(self) -> MicrocodeBuilder {
-        // Fetch the PC.
+        // Fetch the PC and increment it.
         // stack: ...|pcl|pch|
-        MicrocodeBuilder::read(Reg16::Pc)
-            // Copy the PC so we can increment it.
-            // stack: ...|pcl|pch|pcl|pch|
-            .then(Microcode::Dup(2))
-            // Increment the program counter.
-            // stack: ...|pcl|pch|PCL|PCH|
-            .then(Microcode::Inc16)
-            // Write back the new PC value.
-            // stack: ...|pcl|pch|
-            .then_write(Reg16::Pc)
-            // Use the old PC value as the address to read from.
-            // stack: ...|val|
-            .then_read(Mem8)
+        MicrocodeBuilder::first(ComboCode::NextImmediateAddr).then(Microcode::ReadMem8)
     }
 }
 
@@ -395,22 +402,11 @@ impl MicrocodeWritable for Mem16 {
 ///
 /// When used as a [`MicrocodeReadable`], `IncSp` will load the value of the stack pointer
 /// to the microcode stack and then increment the stack pointer in-place.
-pub struct IncSp;
+pub struct SpInc;
 
-impl MicrocodeReadable for IncSp {
+impl MicrocodeReadable for SpInc {
     fn to_read(self) -> MicrocodeBuilder {
-        // Get the current stack pointer.
-        // stack: ...|spl|sph|
-        MicrocodeBuilder::read(Reg16::Sp)
-            // Copy the SP so we keep the old value as the result.
-            // stack: ...|spl|sph|spl|sph|
-            .then(Microcode::Dup(2))
-            // Increment the stack pointer.
-            // stack: ...|spl|sph|SPL|SPH|
-            .then(Microcode::Inc16)
-            // Write the incremented value back to the register.
-            // stack: ...|spl|sph|
-            .then_write(Reg16::Sp)
+        ComboCode::SpInc.into()
     }
 }
 
@@ -422,19 +418,7 @@ pub struct DecSp;
 
 impl MicrocodeReadable for DecSp {
     fn to_read(self) -> MicrocodeBuilder {
-        // Get the current stack pointer.
-        // stack: ...|SPL|SPH|
-        MicrocodeBuilder::read(Reg16::Sp)
-            // Decrement the stack pointer.
-            // stack: ...|spl|sph|
-            .then(Microcode::Dec16)
-            // Copy the SP so we still have a copy on the microcode stack after putting it
-            // back in the register.
-            // stack: ...|spl|sph|spl|sph|
-            .then(Microcode::Dup(2))
-            // Write the decremented value back to the register.
-            // stack: ...|spl|sph|
-            .then_write(Reg16::Sp)
+        ComboCode::DecSp.into()
     }
 }
 
@@ -448,14 +432,14 @@ impl MicrocodeReadable for GbStack16 {
     fn to_read(self) -> MicrocodeBuilder {
         // Get the SP incremented address.
         // stack: ...|spl|sph|
-        MicrocodeBuilder::read(IncSp)
+        MicrocodeBuilder::read(SpInc)
             // Yield a cycle and then read from the sp address on the stack to get the
             // low-order byte of the value being popped.
             // stack: ...|vl |
             .then_read(Mem8)
             // Fetch and increment the stack pointer again.
             // stack: ...|vl |spl|sph|
-            .then_read(IncSp)
+            .then_read(SpInc)
             // Yield a cycle and then read from the sp address on the stack to get the
             // high-order byte of the value being popped.
             // stack: ...|vl |vh |
@@ -622,6 +606,18 @@ pub enum Microcode {
     SkipIf {
         steps: usize,
     },
+    /// Conditionally skip the given number of microcode steps.
+    ///
+    /// Pops an 8 bit value off the microcode stack, and if it is zero, skips the
+    /// microcode pc forward by this number of steps. Note that the microcode pc is
+    /// already incremented for the skip instruction, so that is not counted when figuring
+    /// out how many steps to skip.
+    ///
+    /// Note: must not skip farther than 1 instruction past the end of the Instruction or
+    /// the CPU will panic.
+    SkipIfNot {
+        steps: usize,
+    },
 
     // Helpers for moving between instructions.
     /// Replace the currently executing instruction with the microcode for the CPU's
@@ -784,56 +780,34 @@ pub struct ServiceInterrupt;
 
 impl From<ServiceInterrupt> for MicrocodeBuilder {
     fn from(_: ServiceInterrupt) -> Self {
-        // stack: ...|
-        // Read the IME:
-        // stack: ...|ime |
-        // And branch on it
-        // stack: ...|
-        MicrocodeBuilder::first(Microcode::CheckIme).then(MicrocodeBuilder::if_true(
-            // Read the set of active interrupts:
-            // stack: ...|ai  |
-            MicrocodeBuilder::first(Microcode::GetActiveInterrupts)
-                // Check if there are any active interrupts.
-                // stack: ...|
-                .then(MicrocodeBuilder::if_true(
-                    // If there are:
-                    // Pop the first interrupt from the interrupt vector and push the
-                    // interrupt's target address onto the microcode stack.
-                    // stack: ...|intl|inth|
-                    MicrocodeBuilder::first(Microcode::PopInterrupt)
-                        // Turn off IME to pervent further interrupts.
-                        // stack: ...|intl|inth|
-                        .then(Microcode::DisableInterrupts)
-                        // Wait two cycles.
-                        .then_yield()
-                        .then_yield()
-                        // Get the current program counter.
-                        // stack: ...|intl|inth|pcl |pch |
-                        .then_read(Reg16::Pc)
-                        // Get whether the halt-bug is active.
-                        // stack: ...|intl|inth|pcl |pch |hb  |
-                        .then(Microcode::PopHaltBug)
-                        // Branch based on whether the halt-bug is active.
-                        // stack: ...|intl|inth|pcl |pch |
-                        // If true, decrement the PC, otherwise leave PC as-is.
-                        // stack: ...|intl|inth|pcl |pch |
-                        .then(MicrocodeBuilder::if_true(Microcode::Dec16))
-                        // Push the (possibly decremented) PC value onto the gameboy stack.
-                        // stack: ...|intl|inth|
-                        .then_write(GbStack16)
-                        // With the stack write and two yields, we are now at 4 cycles, we
-                        // need to take 5 total cycles, so delay again here.
-                        .then_yield()
-                        // Now write the interrut destination to the program counter.
-                        // stack: ...|
-                        .then_write(Reg16::Pc)
-                        // Now restart from the beginning at the interrupt address.
-                        // This acts like a return/break and prevents anything else in the
-                        // current Instruction from running (if ServiceInterrupt is used as
-                        // part of a larger instruction).
-                        .then(Microcode::FetchNextInstruction),
-                )),
-        ))
+        // This handles checking if we need to do interrupt handling and skips the rest of
+        // the code if we do not. It also prepares the stack by computing the interrupt
+        // jump target and the return address (accounting for the halt bug).
+        // stack: ...|intl|inth|retl|reth|
+        ComboCode::begin_interrupt_handling_and(
+            // ISR has two cycles of yields before writing to the gameboy stack, and the
+            // ISR setup combo code only provides one of them.
+            MicrocodeBuilder::r#yield()
+                // Write the return address to the Gameboy stack.
+                // stack: ...|intl|inth|
+                .then_write(GbStack16)
+                // There is another yield before actually continuing with the interrupt
+                // handler, for a total of 5 cycles.
+                .then_yield()
+                // Write the intterrupt address to the PC.
+                .then_write(Reg16::Pc)
+                // Now restart from the beginning at the interrupt address.
+                // This acts like a return/break and prevents anything else in the
+                // current Instruction from running (if ServiceInterrupt is used as
+                // part of a larger instruction).
+                //
+                // In practice, this is because we want to have the same behavior as the
+                // direct-execution version of the CPU, which ends
+                // `run_single_instruction` after an ISR. If we didn't want that, we
+                // *could* just not do this and fall through to normal instruction
+                // processing.
+                .then(Microcode::FetchNextInstruction),
+        )
     }
 }
 
@@ -843,30 +817,10 @@ pub struct LoadAndExecute;
 
 impl From<LoadAndExecute> for MicrocodeBuilder {
     fn from(_: LoadAndExecute) -> Self {
-        // Tell the CPU we are about to process a real instruction now, so we should tick
-        // the IME after this.
-        MicrocodeBuilder::first(Microcode::TickImeOnEnd)
-            // If we didn't service an interrupt and aren't halted, load and execute an
-            // opcode.
-            // stack: ...|
-            // Load the instruction onto the stack.
-            // stack: ...|opcode|
-            .then_read(Immediate8)
-            // Before executing, check if the haltbug is triggered, and if so, decrement
-            // the PC.
-            // stack: ...|opcode|hb|
-            .then(Microcode::PopHaltBug)
-            // Pop the haltbug flag and process.
-            // stack: ...|opcode|
-            .then(MicrocodeBuilder::if_true(
-                // If true, push the PC, decrement it, and pop it back into the PC.
-                MicrocodeBuilder::read(Reg16::Pc)
-                    .then(Microcode::Dec16)
-                    .then_write(Reg16::Pc),
-            ))
-            // Pop the opcode off the stack and parse it, replacing this instruction with
-            // that opcode.
-            // stack: ...|
-            .then(Microcode::ParseOpcode)
+        // Load the instruction onto the stack.
+        // stack: ...|opcode|
+        MicrocodeBuilder::read(Immediate8)
+            // Pop the opcode off the stack and begin execution.
+            .then(ComboCode::ExecuteOpcode)
     }
 }

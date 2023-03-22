@@ -1,7 +1,6 @@
 use crate::apu::{self, ApuContext, ApuState};
 use crate::gbz80core::{self, CpuContext, Gbz80State};
 use crate::input::{self, ButtonStates, InputContext};
-use crate::input::{self, ButtonStates, InputContext};
 use crate::interrupts::InterruptContext;
 use crate::memdev::{BiosRom, Cartridge, GbMmu, IoRegsContext, MemContext, Oam, Vram};
 use crate::ppu::{self, PpuContext, PpuState};

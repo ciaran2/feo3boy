@@ -3,11 +3,9 @@ use std::fmt;
 use self::args::{AluOp, AluUnaryOp, ConditionCode, Operand16, Operand8};
 
 pub mod args;
-#[cfg(not(feature = "microcode"))]
 mod r#impl;
 mod microcode;
 
-#[cfg(not(feature = "microcode"))]
 pub(super) use r#impl::service_interrupt;
 
 // Opcode References:

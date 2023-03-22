@@ -5,6 +5,7 @@ use std::mem::{self, MaybeUninit};
 
 use once_cell::sync::Lazy;
 
+use crate::gbz80core::microcode::combocodes::ComboCode;
 use crate::gbz80core::microcode::{
     BinaryOp, BitOp, GbStack16, Immediate16, Immediate8, Instr, InstrDef, Microcode,
     MicrocodeBuilder, Reg16, UnaryOp,
@@ -349,16 +350,7 @@ pub(super) fn reset(dest: u8) -> MicrocodeBuilder {
         // Push the PC onto the gameboy stack.
         .then_read(Reg16::Pc)
         .then_write(GbStack16)
-        // Set the dest address into the PC.
-        // initial stack: ...|
-        // Push the low order bytes of the dest address.
-        // stack: ...|destl|
-        .then(Microcode::Append(dest))
-        // Push the high order bytes of the dest address.
-        // stack: ...|destl|desth|
-        .then(Microcode::Append(dest))
-        // Set the PC to the specified address.
-        .then_write(Reg16::Pc)
+        .then(ComboCode::JumpRst(dest))
 }
 
 impl CBOpcode {
