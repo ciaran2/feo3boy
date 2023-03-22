@@ -128,6 +128,8 @@ impl Microcode {
     pub(in crate::gbz80core) fn eval(self, ctx: &mut impl CpuContext) -> MicrocodeFlow {
         match self {
             Self::Yield => return MicrocodeFlow::Yield1m,
+            #[cfg(feature = "combo-code")]
+            Self::ComboCode(code) => return code.eval(ctx),
             Self::ReadReg8(reg) => reg.read(ctx),
             Self::WriteReg8(reg) => reg.write(ctx),
             Self::ReadMem8 => read_mem8(ctx),
@@ -370,7 +372,8 @@ fn skip_if(ctx: &mut impl CpuContext, steps: usize) {
 }
 
 /// Resets to the CPU Internal instruction.
-fn fetch_next_instruction(ctx: &mut impl CpuContext) {
+// Shared with combo-codes.
+pub(super) fn fetch_next_instruction(ctx: &mut impl CpuContext) {
     let cpu = ctx.cpu_mut();
     debug_assert!(
         cpu.microcode.stack.is_empty(),

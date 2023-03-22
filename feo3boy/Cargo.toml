@@ -5,7 +5,9 @@ authors = ["ciaran"]
 edition = "2018"
 
 [features]
+default = ["combo-code"]
 microcode = []
+combo-code = ["microcode"]
 
 [dependencies]
 bitflags = "1"
