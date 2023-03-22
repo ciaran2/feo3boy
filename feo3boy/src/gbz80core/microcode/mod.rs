@@ -3,6 +3,7 @@ use std::slice::SliceIndex;
 
 use once_cell::sync::Lazy;
 
+use crate::gbz80core::microcode::combocodes::ComboCode;
 use crate::gbz80core::Flags;
 
 #[cfg(feature = "microcode")]
@@ -10,6 +11,8 @@ mod r#impl;
 
 #[cfg(feature = "microcode")]
 pub use r#impl::{MicrocodeFlow, MicrocodeStack};
+
+pub mod combocodes;
 
 /// Builder for microcode.
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
@@ -489,6 +492,12 @@ pub enum Microcode {
     /// Instructs the CPU to yield.
     Yield,
 
+    /// Executes a single combo-code as one step. Only available when full combo-code
+    /// implementations are enabled with the `combo-code` feature, otherwise combo codes
+    /// must be expanded to several normal `Microcode` instructions.
+    #[cfg(feature = "combo-code")]
+    ComboCode(ComboCode),
+
     /*
      * 8 bit manipulations
      */
@@ -758,42 +767,11 @@ pub struct InternalFetch;
 impl From<InternalFetch> for MicrocodeBuilder {
     fn from(_: InternalFetch) -> Self {
         // Check if halted (which may just yield and return).
-        MicrocodeBuilder::first(HandleHalt)
+        MicrocodeBuilder::first(ComboCode::HandleHalt)
             // Service interrupts (which may jump to an interrupt and return).
             .then(ServiceInterrupt)
             // Load and execute the next instruction.
             .then(LoadAndExecute)
-    }
-}
-
-/// Helper to build microcode to handle if the CPU is halted.
-pub struct HandleHalt;
-
-impl From<HandleHalt> for MicrocodeBuilder {
-    fn from(_: HandleHalt) -> Self {
-        // stack: ...|
-        // Load the halt flag onto the microcode stack.
-        // stack: ...|halt|
-        MicrocodeBuilder::first(Microcode::CheckHalt)
-            // Branch based on if the value is true:
-            // stack: ...|
-            .then(MicrocodeBuilder::if_true(
-                // Read the set of active+enabled interrupts.
-                // stack: ...|int |
-                MicrocodeBuilder::first(Microcode::GetActiveInterrupts)
-                    // Branch based on if there are any active interrupts.
-                    // stack: ...|
-                    .then(MicrocodeBuilder::cond(
-                        // If there are active interrupts, clear the halt.
-                        Microcode::ClearHalt,
-                        // Otherwise, yield and restart the instruction fetch routine.
-                        // Yield is needed here because we haven't fetched an instruction
-                        // yet, so we need to wait for another 1m tick without fetching.
-                        MicrocodeBuilder::r#yield()
-                            // This acts like a return, ending the current Instruction.
-                            .then(Microcode::FetchNextInstruction),
-                    )),
-            ))
     }
 }
 
