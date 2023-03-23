@@ -7,6 +7,8 @@ use thiserror::Error;
 
 use crate::interrupts::{InterruptContext, InterruptEnable, InterruptFlags, Interrupts};
 use crate::ppu::{LcdFlags, LcdStat};
+use crate::apu::{SoundEnable, SoundPan, SoundVolume, PulseSweep, PulseTimer, Envelope,
+                 WavetableLevel, NoiseControl, ChannelControl};
 use crate::timer::{TimerControl};
 use crate::input::{ButtonRegister};
 
@@ -331,6 +333,28 @@ pub struct MemMappedIo {
     pub timer_mod: u8,
     pub timer_control: TimerControl,
     pub bios_enabled: bool,
+    // apu status and settings
+    pub ch1_sweep: PulseSweep,
+    pub ch1_timer: PulseTimer,
+    pub ch1_envelope: Envelope,
+    pub ch1_wavelen_low: u8,
+    pub ch1_control: ChannelControl,
+    pub ch2_timer: PulseTimer,
+    pub ch2_envelope: Envelope,
+    pub ch2_wavelen_low: u8,
+    pub ch2_control: ChannelControl,
+    pub ch3_timer: u8,
+    pub ch3level: WavetableLevel,
+    pub ch3_wavelen_low: u8,
+    pub ch3_control: ChannelControl,
+    pub ch4_timer: u8,
+    pub ch4_envelope: Envelope,
+    pub ch4_noise: NoiseControl,
+    pub ch4_control: ChannelControl,
+    pub sound_volume: SoundVolume,
+    pub sound_pan: SoundPan,
+    pub sound_enable: SoundEnable,
+    pub wavetable: [u8;16],
     // ppu status and settings
     pub lcd_control: LcdFlags,
     pub lcd_status: LcdStat,
@@ -358,6 +382,28 @@ impl MemMappedIo {
             timer_mod: 0x00,
             timer_control: TimerControl::empty(),
             bios_enabled: true,
+            // apu status and settings
+            ch1_sweep: PulseSweep::empty(),
+            ch1_timer: PulseTimer::empty(),
+            ch1_envelope: Envelope::empty(),
+            ch1_wavelen_low: 0,
+            ch1_control: ChannelControl::empty(),
+            ch2_timer: PulseTimer::empty(),
+            ch2_envelope: Envelope::empty(),
+            ch2_wavelen_low: 0,
+            ch2_control: ChannelControl::empty(),
+            ch3_timer: 0,
+            ch3level: WavetableLevel::empty(),
+            ch3_wavelen_low: 0,
+            ch3_control: ChannelControl::empty(),
+            ch4_timer: 0,
+            ch4_envelope: Envelope::empty(),
+            ch4_noise: NoiseControl::empty(),
+            ch4_control: ChannelControl::empty(),
+            sound_volume: SoundVolume::empty(),
+            sound_pan: SoundPan::empty(),
+            sound_enable: SoundEnable::empty(),
+            wavetable: [0;16],
             // ppu status and settings
             lcd_control: LcdFlags::empty(),
             lcd_status: LcdStat::empty(),
@@ -505,6 +551,71 @@ impl IoRegs for MemMappedIo {
         self.timer_control = val;
     }
 
+    // apu status and settings
+    fn ch1_sweep(&self) -> PulseSweep {
+        self.ch1_sweep
+    }
+    fn ch1_timer(&self) -> PulseTimer {
+        self.ch1_timer
+    }
+    fn ch1_envelope(&self) -> Envelope {
+        self.ch1_envelope
+    }
+    fn ch1_wavelen_low(&self) -> u8 {
+        self.ch1_wavelen_low
+    }
+    fn ch1_control(&self) -> ChannelControl {
+        self.ch1_control
+    }
+    fn ch2_timer(&self) -> PulseTimer {
+        self.ch2_timer
+    }
+    fn ch2_envelope(&self) -> Envelope {
+        self.ch2_envelope
+    }
+    fn ch2_wavelen_low(&self) -> u8 {
+        self.ch2_wavelen_low
+    }
+    fn ch2_control(&self) -> ChannelControl {
+        self.ch2_control
+    }
+    fn ch3_timer(&self) -> u8 {
+        self.ch3_timer
+    }
+    fn ch3level(&self) -> WavetableLevel {
+        self.ch3level
+    }
+    fn ch3_wavelen_low(&self) -> u8 {
+        self.ch3_wavelen_low
+    }
+    fn ch3_control(&self) -> ChannelControl {
+        self.ch3_control
+    }
+    fn ch4_timer(&self) -> u8 {
+        self.ch4_timer
+    }
+    fn ch4_envelope(&self) -> Envelope {
+        self.ch4_envelope
+    }
+    fn ch4_noise(&self) -> NoiseControl {
+        self.ch4_noise
+    }
+    fn ch4_control(&self) -> ChannelControl {
+        self.ch4_control
+    }
+    fn sound_volume(&self) -> SoundVolume {
+        self.sound_volume
+    }
+    fn sound_pan(&self) -> SoundPan {
+        self.sound_pan
+    }
+    fn sound_enable(&self) -> SoundEnable {
+        self.sound_enable
+    }
+    fn wavetable(&self) -> [u8;16] {
+        self.wavetable
+    }
+
     fn lcd_control(&self) -> LcdFlags {
         self.lcd_control
     }
@@ -616,6 +727,28 @@ pub trait IoRegs {
     fn set_timer_mod(&mut self, val: u8);
     fn timer_control(&self) -> TimerControl;
     fn set_timer_control(&mut self, val: TimerControl);
+
+    fn ch1_sweep(&self) -> PulseSweep;
+    fn ch1_timer(&self) -> PulseTimer;
+    fn ch1_envelope(&self) -> Envelope;
+    fn ch1_wavelen_low(&self) -> u8;
+    fn ch1_control(&self) -> ChannelControl;
+    fn ch2_timer(&self) -> PulseTimer;
+    fn ch2_envelope(&self) -> Envelope;
+    fn ch2_wavelen_low(&self) -> u8;
+    fn ch2_control(&self) -> ChannelControl;
+    fn ch3_timer(&self) -> u8;
+    fn ch3level(&self) -> WavetableLevel;
+    fn ch3_wavelen_low(&self) -> u8;
+    fn ch3_control(&self) -> ChannelControl;
+    fn ch4_timer(&self) -> u8;
+    fn ch4_envelope(&self) -> Envelope;
+    fn ch4_noise(&self) -> NoiseControl;
+    fn ch4_control(&self) -> ChannelControl;
+    fn sound_volume(&self) -> SoundVolume;
+    fn sound_pan(&self) -> SoundPan;
+    fn sound_enable(&self) -> SoundEnable;
+    fn wavetable(&self) -> [u8;16];
 
     fn lcd_control(&self) -> LcdFlags;
 
