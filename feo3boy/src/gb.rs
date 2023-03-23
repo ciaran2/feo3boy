@@ -3,6 +3,7 @@ use crate::interrupts::InterruptContext;
 use crate::memdev::{BiosRom, Cartridge, GbMmu, MaskableMem, IoRegsContext, MemContext, Vram, Oam};
 use crate::input::{self, InputContext, ButtonStates};
 use crate::serial::{self, SerialContext, SerialState};
+use crate::apu::{self, ApuContext, ApuState};
 use crate::ppu::{self, PpuState, PpuContext};
 use crate::timer::{self, TimerState, TimerContext};
 
@@ -19,6 +20,8 @@ pub struct Gb {
     pub serial: SerialState,
     /// State of timer updates
     pub timer: TimerState,
+    /// State of audio rendering
+    pub apu: ApuState,
     /// State of video rendering
     pub ppu: PpuState,
     /// Whether display is ready to be sent to the outside world
@@ -34,6 +37,7 @@ impl Gb {
             button_states: ButtonStates::empty(),
             serial: SerialState::new(),
             timer: TimerState::new(),
+            apu: ApuState::new(),
             ppu: PpuState::new(),
             display_ready: false,
         }
@@ -71,6 +75,8 @@ impl CpuContext for Gb {
         input::update(self);
         self.mmu.tick(4);
         serial::tick(self, 4);
+        // apu must update before timer to catch falling edges from CPU writes
+        apu::tick(self, 4);
         timer::tick(self, 4);
         ppu::tick(self, 4);
     }
@@ -148,6 +154,17 @@ impl TimerContext for Gb {
 
     fn timer_mut(&mut self) -> &mut TimerState {
         &mut self.timer
+    }
+}
+
+impl ApuContext for Gb {
+    #[inline]
+    fn apu(&self) -> &ApuState {
+        &self.apu
+    }
+
+    fn apu_mut(&mut self) -> &mut ApuState {
+        &mut self.apu
     }
 }
 

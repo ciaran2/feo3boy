@@ -1,7 +1,6 @@
 use std::error::Error;
 use std::collections::{VecDeque};
 use bitflags::bitflags;
-use crate::interrupts::{InterruptContext, InterruptFlags, Interrupts};
 use crate::memdev::{Addr, MemDevice, IoRegs, IoRegsContext};
 use log::{debug, trace, info};
 
@@ -92,4 +91,25 @@ bitflags! {
         const WAVELENGTH_HIGH = 0b00000111;
         const READABLE        = 0b01000000;
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ApuState {
+    sample_rate: u32,
+}
+
+impl ApuState {
+    pub fn new() -> Self {
+        ApuState {
+            sample_rate: 0,
+        }
+    }
+}
+
+pub trait ApuContext: IoRegsContext {
+    fn apu(&self) -> &ApuState;
+    fn apu_mut(&mut self) -> &mut ApuState;
+}
+
+pub fn tick(ctx: &mut impl ApuContext, tcycles: u64) {
 }
