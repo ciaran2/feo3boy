@@ -1,0 +1,8 @@
+[package]
+name = "feo3boy-microcode"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bitflags = "1"
+feo3boy-microcode-generator = { path = "../feo3boy-microcode-generator" }
