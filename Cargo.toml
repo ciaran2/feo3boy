@@ -2,6 +2,8 @@
 members = [
   "feo3boy",
   "feo3boy-player",
+  "feo3boy-microcode",
+  "feo3boy-microcode-generator",
   "web-debugger",
 ]
 resolver = "2"
