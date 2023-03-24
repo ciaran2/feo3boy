@@ -8,7 +8,7 @@ use thiserror::Error;
 use crate::interrupts::{InterruptContext, InterruptEnable, InterruptFlags, Interrupts};
 use crate::ppu::{LcdFlags, LcdStat};
 use crate::apu::{SoundEnable, SoundPan, SoundVolume, PulseSweep, PulseTimer, Envelope,
-                 WavetableLevel, NoiseControl, ChannelControl};
+                 WavetableLevel, NoiseControl, ChannelControl, PulseChannel};
 use crate::timer::{TimerControl};
 use crate::input::{ButtonRegister};
 
@@ -339,10 +339,12 @@ pub struct MemMappedIo {
     pub ch1_envelope: Envelope,
     pub ch1_wavelen_low: u8,
     pub ch1_control: ChannelControl,
+    pub ch1: PulseChannel,
     pub ch2_timer: PulseTimer,
     pub ch2_envelope: Envelope,
     pub ch2_wavelen_low: u8,
     pub ch2_control: ChannelControl,
+    pub ch2: PulseChannel,
     pub ch3_timer: u8,
     pub ch3level: WavetableLevel,
     pub ch3_wavelen_low: u8,
@@ -388,10 +390,12 @@ impl MemMappedIo {
             ch1_envelope: Envelope::empty(),
             ch1_wavelen_low: 0,
             ch1_control: ChannelControl::empty(),
+            ch1: PulseChannel::default(),
             ch2_timer: PulseTimer::empty(),
             ch2_envelope: Envelope::empty(),
             ch2_wavelen_low: 0,
             ch2_control: ChannelControl::empty(),
+            ch2: PulseChannel::default(),
             ch3_timer: 0,
             ch3level: WavetableLevel::empty(),
             ch3_wavelen_low: 0,
@@ -552,6 +556,20 @@ impl IoRegs for MemMappedIo {
     }
 
     // apu status and settings
+    fn ch1(&self) -> &PulseChannel {
+        &self.ch1
+    }
+    fn ch1_mut(&mut self) -> &mut PulseChannel {
+        &mut self.ch1
+    }
+
+    fn ch2(&self) -> &PulseChannel {
+        &self.ch2
+    }
+    fn ch2_mut(&mut self) -> &mut PulseChannel {
+        &mut self.ch2
+    }
+
     fn ch1_sweep(&self) -> PulseSweep {
         self.ch1_sweep
     }
@@ -727,6 +745,11 @@ pub trait IoRegs {
     fn set_timer_mod(&mut self, val: u8);
     fn timer_control(&self) -> TimerControl;
     fn set_timer_control(&mut self, val: TimerControl);
+
+    fn ch1(&self) -> &PulseChannel;
+    fn ch1_mut(&mut self) -> &mut PulseChannel;
+    fn ch2(&self) -> &PulseChannel;
+    fn ch2_mut(&mut self) -> &mut PulseChannel;
 
     fn ch1_sweep(&self) -> PulseSweep;
     fn ch1_timer(&self) -> PulseTimer;
