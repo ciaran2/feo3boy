@@ -107,7 +107,8 @@ const MAX_PERIOD: u32 = 131072;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ApuState {
-    pub output_buffer: VecDeque<(i16, i16)>,
+    //pub output_buffer: VecDeque<(i16, i16)>,
+    output_sample: Option<(i16, i16)>,
     output_period: u32,
     sample_cursor: u32,
 }
@@ -115,7 +116,8 @@ pub struct ApuState {
 impl ApuState {
     pub fn new() -> Self {
         ApuState {
-            output_buffer: VecDeque::new(),
+            //output_buffer: VecDeque::new(),
+            output_sample: None,
             output_period: 0,
             sample_cursor: 0,
         }
@@ -123,6 +125,10 @@ impl ApuState {
 
     pub fn set_output_sample_rate(&mut self, sample_rate: u32) {
         self.output_period = CLOCK_SPEED / sample_rate;
+    }
+
+    pub fn output_sample(&self) -> Option<(i16, i16)> {
+        self.output_sample
     }
 }
 
@@ -215,11 +221,12 @@ pub struct NoiseChannel {
 pub trait ApuContext: IoRegsContext {
     fn apu(&self) -> &ApuState;
     fn apu_mut(&mut self) -> &mut ApuState;
-    fn consume_sample(&mut self) -> Option<(i16, i16)>;
+    //fn consume_sample(&mut self) -> Option<(i16, i16)>;
 }
 
 pub fn tick(ctx: &mut impl ApuContext, tcycles: u64) {
 
+    ctx.apu_mut().output_sample = None;
     let mut sample_cursor = ctx.apu().sample_cursor;
 
     if ctx.apu().output_period > 0 {
@@ -231,7 +238,9 @@ pub fn tick(ctx: &mut impl ApuContext, tcycles: u64) {
             let mono_sample = ctx.ioregs().ch1().get_sample(sample_cursor) +
                                ctx.ioregs().ch2().get_sample(sample_cursor);
             let mono_sample_signed = -(mono_sample as i16 - 32);
-            ctx.apu_mut().output_buffer.push_back((mono_sample_signed, mono_sample_signed));
+            //ctx.apu_mut().output_buffer.push_back((mono_sample_signed, mono_sample_signed));
+            ctx.apu_mut().output_sample = Some((mono_sample_signed, mono_sample_signed));
+
             ctx.ioregs_mut().ch1_mut().tick(tcycles - next_sample as u64);
             ctx.ioregs_mut().ch2_mut().tick(tcycles - next_sample as u64);
         }

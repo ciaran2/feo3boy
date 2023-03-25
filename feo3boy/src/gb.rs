@@ -45,15 +45,15 @@ impl Gb {
 
     /// Tick forward by one instruction, executing background and graphics processing
     /// operations as needed.
-    pub fn tick(&mut self) -> Option<&[(u8, u8, u8)]> {
+    pub fn tick(&mut self) -> (Option<&[(u8, u8, u8)]>, Option<(i16, i16)>) {
         gbz80core::tick(self);
 
         if self.display_ready {
             self.display_ready = false;
-            Some(self.ppu.screen_buffer())
+            (Some(self.ppu.screen_buffer()), self.apu.output_sample())
         }
         else {
-            None
+            (None, self.apu.output_sample())
         }
     }
 }
@@ -165,10 +165,6 @@ impl ApuContext for Gb {
 
     fn apu_mut(&mut self) -> &mut ApuState {
         &mut self.apu
-    }
-
-    fn consume_sample(&mut self) -> Option<(i16, i16)> {
-        self.apu.output_buffer.pop_front()
     }
 }
 
