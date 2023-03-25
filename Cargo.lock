@@ -541,22 +541,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "feo3boy-microcode"
-version = "0.1.0"
-dependencies = [
- "bitflags",
- "feo3boy-microcode-generator",
- "proc-macro2",
- "quote",
-]
-
-[[package]]
 name = "feo3boy-microcode-generator"
 version = "0.1.0"
 dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.6",
+]
+
+[[package]]
+name = "feo3boy-opcodes"
+version = "0.1.0"
+dependencies = [
+ "bitflags",
+ "feo3boy-microcode-generator",
+ "proc-macro2",
+ "quote",
 ]
 
 [[package]]

@@ -1,152 +1,31 @@
-//! Defines microcode for the `feo3boy` gameboy.
-//!
-//! [`Microcode`] is a set of simple instructions designed specifically for implementing
-//! the opcodes on the gbz80 processor used on the gameboy. These instructions operate on
-//! a stack of bytes called the microcode stack, which is separate from the gameboy's
-//! stack. Each microcode operation pops some values off of the stack, computes a result,
-//! and pushes its results onto the stack.
-//!
-//! Most microcode operations are pure functions, meaning they only operate on the
-//! microcode stack. The functionality of those operations is defined directly in this
-//! crate. For operations which are not-pure, such as skips which execute part of the
-//! microcode only conditionally or operations which act directly on the gbz80 CPU in some
-//! way, the behavior of those operations is defined externally.
-use bitflags::bitflags;
-use proc_macro2::{Ident, Span, TokenStream};
+//! This module provides the [`Microcode`] type, which specifies the sub-steps that
+//! [`Opcodes`][crate::opcode::Opcode] can be broken down into.
 use quote::quote;
 
 use feo3boy_microcode_generator::define_microcode;
 
-use crate::args::{Arg, AsLiteral, Literal};
+use crate::compiler::args::{Arg, AsLiteral};
+use crate::compiler::OperationType;
+use crate::gbz80types::Flags;
+use crate::microcode::args::{Reg16, Reg8};
 
 pub mod args;
+pub mod combocodes;
 
-const CRATE_NAME: &'static str = env!("CARGO_CRATE_NAME");
-
-fn crate_name() -> Ident {
-    Ident::new(CRATE_NAME, Span::call_site())
-}
-
-/// Which type of microcode operation this is.
-#[derive(Debug, Clone)]
-pub enum OperationType<N> {
-    /// Microcode operation is a pure function.
-    Function {
-        /// Path to the function that defines the microcode operation.
-        path: TokenStream,
-    },
-    /// Microcode operation is externally defined.
-    Extern {
-        /// Identifies which extern this is.
-        name: N,
-    },
-}
-
-bitflags! {
-    /// Flags set after various operations.
-    #[derive(Default)]
-    pub struct Flags: u8 {
-        /// result was zero.
-        const ZERO = 0x80;
-        /// operation was a subtraction.
-        const SUB = 0x40;
-        /// there was a carry in the middle of the number (bit 4 -> 5 for u8, uncertain which bits
-        /// this is for in u16).
-        const HALFCARRY = 0x20;
-        /// there was a carry out of the top of the number (bit 7 -> carry for u8, presumably bit 15
-        /// -> carry for u16, though not sure).
-        const CARRY = 0x10;
-    }
-}
-
-impl Flags {
-    /// If the value is zero, returns `Flags::ZERO`, otherwise returns `Flags::empty()`.
-    pub fn check_zero(val: u8) -> Flags {
-        if val == 0 {
-            Flags::ZERO
-        } else {
-            Flags::empty()
-        }
-    }
-
-    /// If carry is true, returns `Flags::CARRY` otherwise returns `Flags::empty()`.
-    pub fn check_carry(carry: bool) -> Flags {
-        if carry {
-            Flags::CARRY
-        } else {
-            Flags::empty()
-        }
-    }
-}
-
-impl AsLiteral for Flags {
-    fn as_literal(&self) -> Literal {
-        let val = self.bits;
-        let crate_name = crate_name();
-        quote! { ::#crate_name::Flags::from_bits_retain(#val) }.into()
-    }
-}
-
-/// Identifies an 8 bit register in the microcode.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub enum Reg8 {
-    Acc,
-    B,
-    C,
-    D,
-    E,
-    H,
-    L,
-}
-
-impl AsLiteral for Reg8 {
-    fn as_literal(&self) -> Literal {
-        let val = match self {
-            Self::Acc => "Acc",
-            Self::B => "B",
-            Self::C => "C",
-            Self::D => "D",
-            Self::E => "E",
-            Self::H => "H",
-            Self::L => "L",
-        };
-        let val = Ident::new(val, Span::call_site());
-        let crate_name = crate_name();
-        quote! { ::#crate_name::Reg8::#val }.into()
-    }
-}
-
-/// Identifies a 16 bit register in the microcode.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub enum Reg16 {
-    AF,
-    BC,
-    DE,
-    HL,
-    Sp,
-    Pc,
-}
-
-impl AsLiteral for Reg16 {
-    fn as_literal(&self) -> Literal {
-        let val = match self {
-            Self::AF => "AF",
-            Self::BC => "BC",
-            Self::DE => "DE",
-            Self::HL => "HL",
-            Self::Sp => "Sp",
-            Self::Pc => "Pc",
-        };
-        let val = Ident::new(val, Span::call_site());
-        let crate_name = crate_name();
-        quote! { ::#crate_name::Reg16::#val }.into()
-    }
-}
-
-/// `Microcode` defines every operation which can be performed in the microcode system.
+/// [`Microcode`] is a set of simple instructions designed specifically for implementing
+/// the opcodes on the gbz80 processor used on the gameboy. These instructions operate on
+/// a stack of bytes called the microcode stack, which is separate from the gameboy's
+/// stack. Each microcode operation pops some values off of the stack, computes a result,
+/// and pushes its results onto the stack.
+///
+/// Most microcode operations are pure functions, meaning they only operate on the
+/// microcode stack. The functionality of those operations is defined directly in this
+/// crate. For operations which are not-pure, such as skips which execute part of the
+/// microcode only conditionally or operations which act directly on the gbz80 CPU in some
+/// way, the behavior of those operations is defined externally.
 #[define_microcode(Microcode)]
 pub mod defs {
-    use crate::Flags;
+    use crate::gbz80types::Flags;
 
     allowed_types! {
         name = ValTypes,
@@ -219,6 +98,11 @@ pub mod defs {
     /// Fetches the flags register onto the microcode stack,
     #[microcode_extern(GetFlagsMasked)]
     pub fn get_flags_masked(#[field] mask: Flags) -> Flags {}
+
+    /// Pops flags off the microcode stack, masks them, and applies them to the flags
+    /// register.
+    #[microcode_extern(SetFlagsMasked)]
+    pub fn set_flags_masked(#[field] mask: Flags, flags: Flags) {}
 
     /// Append an 8-bit value to the microcode stack. (Essentially provides a constant
     /// value).
@@ -431,6 +315,35 @@ pub mod defs {
     pub fn swap(val: u8) -> (u8, Flags) {
         let res = ((val & 0x0f) << 4) | ((val & 0xf0) >> 4);
         let flags = Flags::check_zero(res);
+        (res, flags)
+    }
+
+    /// Helper for doing binary-coded-decimal. Adjusts the hex didgits to keep both
+    /// nybbles in range 0..=9 by adding 0x06 and/or 0x60 to push the digit to the next
+    /// nybble. Depends on the carry/halfcarry flags.
+    #[microcode(DecimalAdjust)]
+    pub fn decmial_adjust(prevflags: Flags, val: u8) -> (u8, Flags) {
+        // Always clears HALFCARRY.
+        let mut flags = Flags::empty();
+        let mut res = val;
+        if prevflags.contains(Flags::SUB) {
+            if prevflags.contains(Flags::CARRY) {
+                flags |= Flags::CARRY;
+                res = res.wrapping_sub(0x60);
+            }
+            if prevflags.contains(Flags::HALFCARRY) {
+                res = res.wrapping_sub(0x06);
+            }
+        } else {
+            if prevflags.contains(Flags::CARRY) || val > 0x99 {
+                flags |= Flags::CARRY;
+                res = res.wrapping_add(0x60);
+            }
+            if prevflags.contains(Flags::HALFCARRY) || res & 0xf > 9 {
+                res = res.wrapping_add(0x06);
+            }
+        }
+        flags |= Flags::check_zero(res);
         (res, flags)
     }
 
