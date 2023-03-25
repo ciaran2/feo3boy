@@ -135,35 +135,45 @@ impl ApuState {
 pub trait Channel {
     fn get_sample(&self, sample_cursor: u32) -> u16;
 
-    fn set_control(&mut self, control: ChannelControl);
+    fn read_control(&self) -> u8;
+    fn set_control(&mut self, value: u8);
 
     fn tick(&mut self, tcycles: u64);
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PulseChannel {
+    pub envelope: Envelope,
+    pub timer: PulseTimer,
     period: u32,
     phase_offset: u32,
     active: bool,
     triggered: bool,
     timer_enable: bool,
-    envelope: Envelope,
-    timer: PulseTimer,
     timer_acc: u8,
     wavelength: u16,
     level: u16,
 }
 
-const pulse_table: [[u16;8];4] = [[1, 1, 1, 1, 1, 1, 1, 0],
+const PULSE_TABLE: [[u16;8];4] = [[1, 1, 1, 1, 1, 1, 1, 0],
                                   [0, 1, 1, 1, 1, 1, 1, 0],
                                   [0, 1, 1, 1, 1, 0, 0, 0],
                                   [1, 0, 0, 0, 0, 0, 0, 1]];
 
 impl PulseChannel {
-    fn set_envelope(&mut self, envelope: Envelope) {
+    pub fn wavelength_low(&self) -> u8 {
+        (self.wavelength & 0xff) as u8
+    }
+
+    pub fn set_envelope(&mut self, envelope: Envelope) {
         self.envelope = envelope;
         //set an envelope phase offset?
         //needs retrigger to take
+    }
+
+    pub fn set_wavelength_low(&mut self, low_byte: u8) {
+        self.wavelength = (self.wavelength & 0x700) | low_byte as u16;
+        self.generate_period();
     }
 
     fn generate_period(&mut self) {
@@ -175,14 +185,25 @@ impl Channel for PulseChannel {
     fn get_sample(&self, sample_cursor: u32) -> u16 {
         if self.active {
             let pulse_step = (((sample_cursor + self.phase_offset) % self.period) / (self.period / 8)) as usize;
-            pulse_table[self.timer.duty()][pulse_step] * self.level
+            PULSE_TABLE[self.timer.duty()][pulse_step] * self.level
         }
         else {
             0
         }
     }
 
-    fn set_control(&mut self, control: ChannelControl) {
+    fn read_control(&self) -> u8 {
+        if self.timer_enable {
+            ChannelControl::LENGTH_ENABLE.bits()
+        }
+        else {
+            0
+        }
+    }
+
+    fn set_control(&mut self, value: u8) {
+        let control = ChannelControl::from_bits_truncate(value);
+
         self.triggered = control.contains(ChannelControl::TRIGGER);
         self.timer_enable = control.contains(ChannelControl::LENGTH_ENABLE);
         self.wavelength = (self.wavelength & 0xff) | ((control & ChannelControl::WAVELENGTH_HIGH).bits() as u16) << 8;
