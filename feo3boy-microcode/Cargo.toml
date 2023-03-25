@@ -6,3 +6,5 @@ edition = "2021"
 [dependencies]
 bitflags = "1"
 feo3boy-microcode-generator = { path = "../feo3boy-microcode-generator" }
+proc-macro2 = "1"
+quote = "1"
