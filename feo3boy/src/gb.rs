@@ -166,6 +166,10 @@ impl ApuContext for Gb {
     fn apu_mut(&mut self) -> &mut ApuState {
         &mut self.apu
     }
+
+    fn consume_sample(&mut self) -> Option<(i16, i16)> {
+        self.apu.output_buffer.pop_front()
+    }
 }
 
 impl PpuContext for Gb {
