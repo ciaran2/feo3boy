@@ -546,6 +546,8 @@ version = "0.1.0"
 dependencies = [
  "bitflags",
  "feo3boy-microcode-generator",
+ "proc-macro2",
+ "quote",
 ]
 
 [[package]]

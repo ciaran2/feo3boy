@@ -1,12 +1,13 @@
 use proc_macro2::Ident;
+use quote::format_ident;
 use syn::{
-    Attribute, Error, FnArg, Item, ItemFn, ItemMacro, ItemMod, Meta, Result, ReturnType, Type,
+    Attribute, Error, FnArg, Item, ItemFn, ItemMacro, ItemMod, Meta, Pat, Result, ReturnType, Type,
     Visibility,
 };
 
 use crate::defs::{
-    AllowedType, AllowedTypes, Defs, FieldInfo, MicrocodeArg, MicrocodeOp, MicrocodeRes,
-    MicrocodeSubtype, MicrocodeTypeDef,
+    AllowedType, AllowedTypes, ArgSource, Defs, FieldInfo, MicrocodeArg, MicrocodeOp, MicrocodeRes,
+    MicrocodeSubtype, MicrocodeTypeDef, StackInfo,
 };
 use crate::parsing::AllowedTypesMappings;
 
@@ -28,6 +29,9 @@ pub fn extract_defs(name: Ident, mut module: ItemMod) -> Result<Defs> {
         }
     };
 
+    let externs_name = format_ident!("{}Extern", name);
+    let descriptor_name = format_ident!("{}Descriptor", name);
+
     Ok(Defs {
         module,
         microcode_type: MicrocodeTypeDef {
@@ -35,6 +39,8 @@ pub fn extract_defs(name: Ident, mut module: ItemMod) -> Result<Defs> {
             vis,
             docs,
             ops,
+            externs_name,
+            descriptor_name,
         },
         allowed_types,
     })
@@ -106,6 +112,8 @@ fn extract_and_filter_items(
         }
     };
 
+    ops.reverse();
+
     Ok((allowed_types, ops))
 }
 
@@ -124,6 +132,7 @@ fn extract_op_from_item(item: &mut ItemFn) -> Result<Option<MicrocodeOp>> {
                 args: extract_args(item.sig.inputs.iter_mut())?,
                 returns: extract_returns(&item.sig.output)?,
                 subtype,
+                sig: item.sig.clone(),
             })
         } else {
             None
@@ -247,10 +256,14 @@ fn extract_args<'a>(inputs: impl Iterator<Item = &'a mut FnArg> + 'a) -> Result<
                         }
                     }
                 }
-                let field_info = if is_field {
-                    match &*arg.pat {
-                        syn::Pat::Ident(ident) => Some(FieldInfo {
-                            name: ident.ident.clone(),
+
+                // Name of the argument.
+                let name = extract_ident_from_pat(&arg.pat).cloned();
+
+                let source = if is_field {
+                    match name {
+                        Some(ident) => ArgSource::Field(FieldInfo {
+                            name: ident.clone(),
                             docs,
                         }),
                         _ => {
@@ -261,15 +274,23 @@ fn extract_args<'a>(inputs: impl Iterator<Item = &'a mut FnArg> + 'a) -> Result<
                         }
                     }
                 } else {
-                    None
+                    ArgSource::Stack(StackInfo { name })
                 };
                 Ok(MicrocodeArg {
                     ty: arg.ty.as_ref().clone(),
-                    field_info,
+                    source,
                 })
             }
         })
         .collect()
+}
+
+/// If the pattern is a single identifier, return it, otherwise return none.
+fn extract_ident_from_pat(pat: &Pat) -> Option<&Ident> {
+    match pat {
+        Pat::Ident(ident) => Some(&ident.ident),
+        _ => None,
+    }
 }
 
 /// Extract the return types for a microcode operator. For most types, the type is

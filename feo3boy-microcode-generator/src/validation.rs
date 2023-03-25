@@ -1,6 +1,6 @@
 use syn::{Error, Result, Type};
 
-use crate::defs::{Defs, MicrocodeOp};
+use crate::defs::{ArgSource, Defs, MicrocodeOp};
 
 /// Provides basic validation of the extracted definitions before code generation.
 pub fn validate_defs(defs: &Defs) -> Result<()> {
@@ -14,7 +14,7 @@ pub fn validate_defs(defs: &Defs) -> Result<()> {
 /// Validates a particular microcode op.
 fn validate_op(code: &MicrocodeOp, defs: &Defs) -> Result<()> {
     for arg in &code.args {
-        if arg.field_info.is_none() {
+        if let ArgSource::Stack(_) = arg.source {
             validate_type(&arg.ty, defs)?;
         }
     }

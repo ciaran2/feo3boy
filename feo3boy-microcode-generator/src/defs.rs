@@ -1,5 +1,5 @@
 use proc_macro2::Ident;
-use syn::{Attribute, ItemMod, Type, Visibility};
+use syn::{Attribute, ItemMod, Signature, Type, Visibility};
 
 pub struct Defs {
     /// A transformed version of the input module, with all of the special attributes
@@ -24,6 +24,12 @@ pub struct MicrocodeTypeDef {
 
     /// List of operations defined by this microcode.
     pub ops: Vec<MicrocodeOp>,
+
+    /// Name of the type that defines the extern names.
+    pub externs_name: Ident,
+
+    /// Name of the type that defines the descriptors.
+    pub descriptor_name: Ident,
 }
 
 /// Defines a microcode operation defined in the `Microcode` type.
@@ -44,6 +50,8 @@ pub struct MicrocodeOp {
     pub returns: Vec<MicrocodeRes>,
     /// Which type of microcode this is.
     pub subtype: MicrocodeSubtype,
+    /// Signature of the function that implements this operation.
+    pub sig: Signature,
 }
 
 /// Defines the possible types of microcode operations.
@@ -57,6 +65,14 @@ pub enum MicrocodeSubtype {
     Function,
 }
 
+/// Where a microcode argument can come from.
+pub enum ArgSource {
+    /// Argument comes from the microcode stack.
+    Stack(StackInfo),
+    /// Argument comes from a field in the microcode enum.
+    Field(FieldInfo),
+}
+
 /// An argument to a microcode function. Most arguments come from the microcode stack,
 /// however parameters can be declared as `#[field]`, which causes them to come from a
 /// field in the Microcode enum instead. Note that `#[field]` arguments should not be used
@@ -68,8 +84,15 @@ pub struct MicrocodeArg {
     /// figuring out where it is actually defined, and will assume it is also available at
     /// the top-level outside of the microcode definition module.
     pub ty: Type,
-    /// Information about the field that this argument comes from.
-    pub field_info: Option<FieldInfo>,
+    /// How this argument is sourced.
+    pub source: ArgSource,
+}
+
+/// Information about a stack-sourced argument.
+pub struct StackInfo {
+    /// Name of a stack-sourced argument (may be absent if the argument uses a
+    /// non-ident pattern
+    pub name: Option<Ident>,
 }
 
 /// Information about a microcode field parameter.
