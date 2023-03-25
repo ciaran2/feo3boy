@@ -1,5 +1,5 @@
 [package]
-name = "feo3boy-microcode"
+name = "feo3boy-opcodes"
 version = "0.1.0"
 edition = "2021"
 
