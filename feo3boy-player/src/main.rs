@@ -10,6 +10,9 @@ use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::WindowBuilder;
 use winit_input_helper::WinitInputHelper;
 
+//use cpal::Data;
+//use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+
 use feo3boy::gb::Gb;
 use feo3boy::memdev::{BiosRom, Cartridge};
 use feo3boy::input::{InputContext, ButtonStates};
@@ -142,7 +145,8 @@ fn main() {
                         stdout.flush().unwrap();
                     }
                 }
-                match gb.tick() {
+                let (display, audio_sample) = gb.tick();
+                match display {
                     Some(screen_buffer) => {
                         pixels_render(&mut pixels, screen_buffer);
                         if let Err(err) = pixels.render() {
