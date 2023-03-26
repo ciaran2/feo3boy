@@ -191,11 +191,16 @@ fn main() {
 
     let mut rb = HeapRb::new(200);
     let (mut sample_producer, mut sample_consumer) = rb.split();
-    if let Some((stream, sample_rate)) = init_audio_stream(sample_consumer) {
-        gb.set_sample_rate(sample_rate.0);
-        if let Err(err) = stream.play() {
-            error!("Error playing audio stream: {}", err);
+    let audio_output_config = init_audio_stream(sample_consumer);
+
+    match audio_output_config {
+        Some((stream, sample_rate)) => {
+            gb.set_sample_rate(sample_rate.0);
+            if let Err(err) = stream.play() {
+                error!("Error playing audio stream: {}", err);
+            }
         }
+        _ => error!("No audio stream set up"),
     }
 
     let mut bindings = vec![ (VirtualKeyCode::W, ButtonStates::UP),
@@ -214,7 +219,6 @@ fn main() {
             if input_helper.close_requested() { control_flow.set_exit(); }
 
             gb.set_button_states(gen_button_states(&input_helper, &bindings));
-
             for _i in 0..100 {
                 {
                     let bytes = gb.serial.stream.receive_bytes();
