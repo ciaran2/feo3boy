@@ -2,6 +2,7 @@ use std::error::Error;
 use bitflags::bitflags;
 use crate::interrupts::{InterruptContext, InterruptFlags, Interrupts};
 use crate::memdev::{IoRegs, IoRegsContext};
+use crate::apu::{self, ApuContext};
 use log::{debug, trace, info};
 
 
@@ -28,7 +29,7 @@ impl TimerControl {
 }
 
 /// Context trait providing access to fields needed to service graphics.
-pub trait TimerContext: IoRegsContext + InterruptContext {
+pub trait TimerContext: IoRegsContext + InterruptContext + ApuContext {
     /// Get the timer state.
     fn timer(&self) -> &TimerState;
 
@@ -103,6 +104,23 @@ pub fn tick(ctx: &mut impl TimerContext, tcycles: u64) {
                tcycles > period as u64 {
                 increment_timer(ctx)
             }
+        }
+    }
+
+    // Update APU at ~512 Hz
+    // period will have to be dynamic to support GBC double speed
+    let period = 0x200;
+    // falling edge case when divider has been reset
+    if (ctx.timer().old_divider & (period >> 1)) != 0 &&
+       (divider & (period >> 1)) == 0 {
+        increment_timer(ctx);
+    }
+    else {
+        let mask = period - 1;
+
+        if divider & mask + tcycles as u16 & mask > period ||
+           tcycles > period as u64 {
+            apu::apu_tick(ctx);
         }
     }
 

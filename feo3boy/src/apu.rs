@@ -73,6 +73,12 @@ bitflags! {
     }
 }
 
+impl Envelope {
+    fn level(&self) -> u16 {
+        (*self & Self::INIT_VOL).bits() as u16 >> 4
+    }
+}
+
 bitflags! {
     #[derive(Default)]
     pub struct WavetableLevel : u8 {
@@ -127,8 +133,15 @@ impl ApuState {
         self.output_period = CLOCK_SPEED / sample_rate;
     }
 
-    pub fn output_sample(&self) -> Option<(i16, i16)> {
-        self.output_sample
+    pub fn consume_output_sample(&mut self) -> Option<(i16, i16)> {
+        let output_sample = self.output_sample;
+
+        //if let Some(sample) = output_sample {
+        //    info!("Emitting output sample {}, {}", sample.0, sample.1);
+        //}
+
+        self.output_sample = None;
+        output_sample
     }
 }
 
@@ -138,7 +151,8 @@ pub trait Channel {
     fn read_control(&self) -> u8;
     fn set_control(&mut self, value: u8);
 
-    fn tick(&mut self, tcycles: u64);
+    fn check_trigger(&mut self);
+    fn apu_tick(&mut self);
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -149,10 +163,13 @@ pub struct PulseChannel {
     phase_offset: u32,
     active: bool,
     triggered: bool,
-    timer_enable: bool,
-    timer_acc: u8,
     wavelength: u16,
     level: u16,
+    length_enable: bool,
+    length_acc: u8,
+    length_aticks: u8,
+    envelope_aticks: u8,
+    sweep_aticks: u8,
 }
 
 const PULSE_TABLE: [[u16;8];4] = [[1, 1, 1, 1, 1, 1, 1, 0],
@@ -185,7 +202,8 @@ impl Channel for PulseChannel {
     fn get_sample(&self, sample_cursor: u32) -> u16 {
         if self.active {
             let pulse_step = (((sample_cursor + self.phase_offset) % self.period) / (self.period / 8)) as usize;
-            PULSE_TABLE[self.timer.duty()][pulse_step] * self.level
+            info!("Pulse channel emitting level {}", PULSE_TABLE[self.timer.duty()][pulse_step] * self.envelope.level());
+            PULSE_TABLE[self.timer.duty()][pulse_step] * self.envelope.level()
         }
         else {
             0
@@ -193,7 +211,7 @@ impl Channel for PulseChannel {
     }
 
     fn read_control(&self) -> u8 {
-        if self.timer_enable {
+        if self.length_enable {
             ChannelControl::LENGTH_ENABLE.bits()
         }
         else {
@@ -205,22 +223,40 @@ impl Channel for PulseChannel {
         let control = ChannelControl::from_bits_truncate(value);
 
         self.triggered = control.contains(ChannelControl::TRIGGER);
-        self.timer_enable = control.contains(ChannelControl::LENGTH_ENABLE);
+
+        if self.triggered {
+            info!("Pulse channel triggered");
+        }
+
+        self.length_enable = control.contains(ChannelControl::LENGTH_ENABLE);
         self.wavelength = (self.wavelength & 0xff) | ((control & ChannelControl::WAVELENGTH_HIGH).bits() as u16) << 8;
         self.generate_period();
     }
 
-    fn tick(&mut self, tcycles: u64) {
-        if tcycles > (0xff - self.timer_acc) as u64 {
-            if self.timer_enable { self.active = false; }
-        }
-        else {
-            self.timer_acc += tcycles as u8;
-        }
-
+    fn check_trigger(&mut self) {
         if self.triggered {
             self.active = true;
             self.triggered = false;
+        }
+    }
+
+    fn apu_tick(&mut self) {
+        self.length_aticks += 1;
+        self.envelope_aticks += 1;
+        self.sweep_aticks += 1;
+
+        if self.length_aticks == 2 {
+            self.length_aticks = 0;
+            self.length_acc += 1;
+            if self.length_acc == 64 && self.length_enable {
+                self.active = false;
+            }
+        }
+        if self.sweep_aticks == 4 {
+            self.sweep_aticks = 0;
+        }
+        if self.envelope_aticks == 8 {
+            self.envelope_aticks = 0;
         }
     }
 }
@@ -242,37 +278,31 @@ pub struct NoiseChannel {
 pub trait ApuContext: IoRegsContext {
     fn apu(&self) -> &ApuState;
     fn apu_mut(&mut self) -> &mut ApuState;
-    //fn consume_sample(&mut self) -> Option<(i16, i16)>;
+}
+
+/// to be called on divider bit 4 (5 double speed) falling edge
+pub fn apu_tick(ctx: &mut impl ApuContext) {
+    ctx.ioregs_mut().ch1_mut().apu_tick();
+    ctx.ioregs_mut().ch2_mut().apu_tick();
 }
 
 pub fn tick(ctx: &mut impl ApuContext, tcycles: u64) {
 
-    ctx.apu_mut().output_sample = None;
     let mut sample_cursor = ctx.apu().sample_cursor;
+    ctx.ioregs_mut().ch1_mut().check_trigger();
+    ctx.ioregs_mut().ch2_mut().check_trigger();
 
     if ctx.apu().output_period > 0 {
+
         let next_sample = sample_cursor % ctx.apu().output_period;
         if tcycles > next_sample.into() {
-            ctx.ioregs_mut().ch1_mut().tick(next_sample as u64);
-            ctx.ioregs_mut().ch2_mut().tick(next_sample as u64);
             sample_cursor += next_sample;
             let mono_sample = ctx.ioregs().ch1().get_sample(sample_cursor) +
                                ctx.ioregs().ch2().get_sample(sample_cursor);
             let mono_sample_signed = -(mono_sample as i16 - 32);
             //ctx.apu_mut().output_buffer.push_back((mono_sample_signed, mono_sample_signed));
             ctx.apu_mut().output_sample = Some((mono_sample_signed, mono_sample_signed));
-
-            ctx.ioregs_mut().ch1_mut().tick(tcycles - next_sample as u64);
-            ctx.ioregs_mut().ch2_mut().tick(tcycles - next_sample as u64);
         }
-        else {
-            ctx.ioregs_mut().ch1_mut().tick(tcycles);
-            ctx.ioregs_mut().ch2_mut().tick(tcycles);
-        }
-    }
-    else {
-        ctx.ioregs_mut().ch1_mut().tick(tcycles);
-        ctx.ioregs_mut().ch2_mut().tick(tcycles);
     }
 
     if sample_cursor > MAX_PERIOD {

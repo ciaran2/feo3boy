@@ -50,11 +50,15 @@ impl Gb {
 
         if self.display_ready {
             self.display_ready = false;
-            (Some(self.ppu.screen_buffer()), self.apu.output_sample())
+            (Some(self.ppu.screen_buffer()), self.apu.consume_output_sample())
         }
         else {
-            (None, self.apu.output_sample())
+            (None, self.apu.consume_output_sample())
         }
+    }
+
+    pub fn set_sample_rate(&mut self, sample_rate: u32) {
+        self.apu.set_output_sample_rate(sample_rate);
     }
 }
 

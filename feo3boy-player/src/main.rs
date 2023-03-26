@@ -1,5 +1,6 @@
 use std::fs::File;
 use std::io::{self, Read, Write};
+use std::sync::mpsc::{self, Sender, Receiver};
 
 use clap::{App, Arg};
 use log::{info, error};
@@ -10,8 +11,8 @@ use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::WindowBuilder;
 use winit_input_helper::WinitInputHelper;
 
-//use cpal::Data;
-//use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::{Data, SampleRate, SampleFormat, Stream};
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 use feo3boy::gb::Gb;
 use feo3boy::memdev::{BiosRom, Cartridge};
@@ -26,6 +27,86 @@ fn ascii_render(screen_buffer: &[(u8, u8, u8)]) {
             ascii_buffer.push(brightness_scale.as_bytes()[brightness_scale.len() * ((pixel.0 as usize + pixel.1 as usize + pixel.2 as usize) / 3) / 256]);
         }
         print!("{}", std::str::from_utf8(&ascii_buffer).unwrap())
+    }
+}
+
+fn init_audio_stream(rx: Receiver<(i16, i16)>) -> Option<(Stream, SampleRate)> {
+    if let Some(device) = cpal::default_host().default_output_device() {
+        let supported_config = {
+            match device.supported_output_configs() {
+                Ok(mut supported_configs) => {
+                    loop {
+                        if let Some(config) = supported_configs.next() {
+                            if config.channels() == 2 {
+                                break Some(config.with_max_sample_rate());
+                            }
+                            else {
+                                continue;
+                            }
+                        }
+                        else {
+                            error!("Default audio output device does not support stereo, continuing in silence.");
+                            break None;
+                        }
+                    }
+                }
+                Err(err) => {
+                    error!("Error querying supported output configs: {:#?}\nContinuing in silence.", err);
+                    None
+                }
+            }
+        };
+
+        if let Some(supported_config) = supported_config {
+            let err_handler = |err| error!("Error in output audio stream: {}", err);
+            let sample_rate = supported_config.sample_rate();
+
+            match supported_config.sample_format() {
+                SampleFormat::I16 => {
+                    match device.build_output_stream(&supported_config.into(),
+                        move |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
+                            for stereo_sample in data.chunks_mut(2) {
+                                let (left, right) = rx.recv().unwrap();
+                                stereo_sample[0] = left * (i16::MAX / 0xff);
+                                stereo_sample[1] = right * (i16::MAX / 0xff);
+                            }
+                        }, err_handler, None) {
+                        Ok(stream) => Some((stream, sample_rate)),
+                        Err(err) => {
+                            error!("Error building audio output stream: {}", err);
+                            None
+                        }
+                    }
+                },
+                SampleFormat::F32 => {
+                    match device.build_output_stream(&supported_config.into(),
+                        move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                            for stereo_sample in data.chunks_mut(2) {
+                                let (left, right) = rx.recv().unwrap();
+                                stereo_sample[0] = left as f32 * (f32::MAX / 255.0);
+                                stereo_sample[1] = right as f32 * (f32::MAX / 255.0);
+                            }
+                        }, err_handler, None) {
+                        Ok(stream) => Some((stream, sample_rate)),
+                        Err(err) => {
+                            error!("Error building audio output stream: {}", err);
+                            None
+                        }
+                    }
+                },
+                _ => {
+                    error!("Unsupported audio sample format");
+                    None
+                }
+            }
+        }
+        else {
+            None
+        }
+    }
+    else {
+        error!("No audio output device found, continuing in silence.");
+        None
     }
 }
 
@@ -118,6 +199,14 @@ fn main() {
         PixelsBuilder::new(160, 144, surface_texture).enable_vsync(true).build().unwrap()
     };
 
+    let (sample_tx, sample_rx) = mpsc::channel();
+    if let Some((stream, sample_rate)) = init_audio_stream(sample_rx) {
+        gb.set_sample_rate(sample_rate.0);
+        if let Err(err) = stream.play() {
+            error!("Error playing audio stream: {}", err);
+        }
+    }
+
     let mut bindings = vec![ (VirtualKeyCode::W, ButtonStates::UP),
                               (VirtualKeyCode::A, ButtonStates::LEFT),
                               (VirtualKeyCode::S, ButtonStates::DOWN),
@@ -146,6 +235,9 @@ fn main() {
                     }
                 }
                 let (display, audio_sample) = gb.tick();
+                if let Some(sample) = audio_sample {
+                    sample_tx.send(sample);
+                }
                 match display {
                     Some(screen_buffer) => {
                         pixels_render(&mut pixels, screen_buffer);
