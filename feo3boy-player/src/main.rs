@@ -3,7 +3,7 @@ use std::io::{self, Read, Write};
 use std::sync::mpsc::{self, Sender, Receiver};
 
 use clap::{App, Arg};
-use log::{info, error};
+use log::{info, error, debug};
 
 use pixels::{Pixels, PixelsBuilder, SurfaceTexture, Error};
 use winit::event::{Event, DeviceEvent, WindowEvent, VirtualKeyCode, ElementState};
@@ -66,9 +66,16 @@ fn init_audio_stream(rx: Receiver<(i16, i16)>) -> Option<(Stream, SampleRate)> {
                     match device.build_output_stream(&supported_config.into(),
                         move |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
                             for stereo_sample in data.chunks_mut(2) {
-                                let (left, right) = rx.recv().unwrap();
-                                stereo_sample[0] = left * (i16::MAX / 0xff);
-                                stereo_sample[1] = right * (i16::MAX / 0xff);
+                                match rx.recv() {
+                                    Ok((left, right)) => {
+                                        stereo_sample[0] = left * (i16::MAX / 0xff);
+                                        stereo_sample[1] = right * (i16::MAX / 0xff);
+                                        debug!("Writing ({},{}) to audio buffer", stereo_sample[0], stereo_sample[1]);
+                                    }
+                                    Err(err) => {
+                                        error!("Error receiving from sample FIFO: {}", err);
+                                    }
+                                }
                             }
                         }, err_handler, None) {
                         Ok(stream) => Some((stream, sample_rate)),
@@ -85,6 +92,7 @@ fn init_audio_stream(rx: Receiver<(i16, i16)>) -> Option<(Stream, SampleRate)> {
                                 let (left, right) = rx.recv().unwrap();
                                 stereo_sample[0] = left as f32 * (f32::MAX / 255.0);
                                 stereo_sample[1] = right as f32 * (f32::MAX / 255.0);
+                                debug!("Writing ({},{}) to audio buffer", stereo_sample[0], stereo_sample[1]);
                             }
                         }, err_handler, None) {
                         Ok(stream) => Some((stream, sample_rate)),
@@ -236,7 +244,10 @@ fn main() {
                 }
                 let (display, audio_sample) = gb.tick();
                 if let Some(sample) = audio_sample {
-                    sample_tx.send(sample);
+                    debug!("Sending ({},{}) to sample FIFO", sample.0, sample.1);
+                    if let Err(err) = sample_tx.send(sample) {
+                        error!("Error sending to sample FIFO: {}", err);
+                    }
                 }
                 match display {
                     Some(screen_buffer) => {

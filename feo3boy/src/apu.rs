@@ -202,7 +202,7 @@ impl Channel for PulseChannel {
     fn get_sample(&self, sample_cursor: u32) -> u16 {
         if self.active {
             let pulse_step = (((sample_cursor + self.phase_offset) % self.period) / (self.period / 8)) as usize;
-            info!("Pulse channel emitting level {}", PULSE_TABLE[self.timer.duty()][pulse_step] * self.envelope.level());
+            debug!("Sampling pulse channel from step {} of duty cycle {}", pulse_step, self.timer.duty());
             PULSE_TABLE[self.timer.duty()][pulse_step] * self.envelope.level()
         }
         else {
@@ -224,10 +224,6 @@ impl Channel for PulseChannel {
 
         self.triggered = control.contains(ChannelControl::TRIGGER);
 
-        if self.triggered {
-            info!("Pulse channel triggered");
-        }
-
         self.length_enable = control.contains(ChannelControl::LENGTH_ENABLE);
         self.wavelength = (self.wavelength & 0xff) | ((control & ChannelControl::WAVELENGTH_HIGH).bits() as u16) << 8;
         self.generate_period();
@@ -235,6 +231,8 @@ impl Channel for PulseChannel {
 
     fn check_trigger(&mut self) {
         if self.triggered {
+            info!("Pulse channel triggered at frequency {}", CLOCK_SPEED / self.period);
+
             self.active = true;
             self.triggered = false;
         }
@@ -299,11 +297,14 @@ pub fn tick(ctx: &mut impl ApuContext, tcycles: u64) {
             sample_cursor += next_sample;
             let mono_sample = ctx.ioregs().ch1().get_sample(sample_cursor) +
                                ctx.ioregs().ch2().get_sample(sample_cursor);
+            debug!("Mono sample: {}", mono_sample);
             let mono_sample_signed = -(mono_sample as i16 - 32);
             //ctx.apu_mut().output_buffer.push_back((mono_sample_signed, mono_sample_signed));
             ctx.apu_mut().output_sample = Some((mono_sample_signed, mono_sample_signed));
         }
     }
+
+    sample_cursor += tcycles as u32;
 
     if sample_cursor > MAX_PERIOD {
         sample_cursor -= MAX_PERIOD;
