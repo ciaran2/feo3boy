@@ -1,10 +1,11 @@
 //! Provides instructions, which are the definitions of what opcodes do.
 
+use std::fmt;
 use std::ops::Index;
 use std::slice::SliceIndex;
 
 use crate::microcode::Microcode;
-use crate::opcode::{CBOpcode, Opcode};
+use crate::opcode::{CBOpcode, InternalFetch, Opcode};
 
 pub mod builder;
 
@@ -17,6 +18,16 @@ pub enum InstrId {
     CBOpcode(CBOpcode),
     /// Instruction implements the CPU internal-fetch routine.
     InternalFetch,
+}
+
+impl fmt::Display for InstrId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Opcode(opcode) => write!(f, "{}", opcode),
+            Self::CBOpcode(cbopcode) => write!(f, "{}", cbopcode),
+            Self::InternalFetch => write!(f, "{}", InternalFetch),
+        }
+    }
 }
 
 /// Definition of an instruction in the gbz80 CPU. Opcodes identify particular

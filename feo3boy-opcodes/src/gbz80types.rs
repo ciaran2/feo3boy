@@ -3,7 +3,7 @@ use bitflags::bitflags;
 use quote::quote;
 
 use crate::compiler::args::{AsLiteral, Literal};
-use crate::compiler::instr::builder::{MicrocodeWritable, MicrocodeReadable, InstrBuilder};
+use crate::compiler::instr::builder::{InstrBuilder, MicrocodeReadable, MicrocodeWritable};
 use crate::microcode::Microcode;
 
 bitflags! {
@@ -24,6 +24,12 @@ bitflags! {
 }
 
 impl Flags {
+    /// Merge the given flags into the current flags by applying the given mask to set
+    /// only flags in that mask.
+    pub fn merge(&mut self, flags: Flags, mask: Flags) {
+        *self = (*self & !mask) | (flags & mask);
+    }
+
     /// If the value is zero, returns `Flags::ZERO`, otherwise returns `Flags::empty()`.
     pub fn check_zero(val: u8) -> Flags {
         if val == 0 {

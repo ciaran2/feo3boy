@@ -97,18 +97,12 @@ impl InstrBuilder {
     }
 
     /// Run the given code if the u8 on top of the stack is non-zero.
-    pub fn then_if_true(
-        self,
-        code_if_true: impl Into<InstrBuilder>,
-    ) -> Self {
+    pub fn then_if_true(self, code_if_true: impl Into<InstrBuilder>) -> Self {
         self.then_cond(code_if_true, InstrBuilder::new())
     }
 
     /// Run the given code if the u8 on top of the stack is zero.
-    pub fn then_if_false(
-        self,
-        code_if_false: impl Into<InstrBuilder>,
-    ) -> Self {
+    pub fn then_if_false(self, code_if_false: impl Into<InstrBuilder>) -> Self {
         self.then_cond(InstrBuilder::new(), code_if_false)
     }
 

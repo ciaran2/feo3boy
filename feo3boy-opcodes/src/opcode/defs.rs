@@ -696,28 +696,29 @@ impl ConditionCode {
             ConditionCode::Unconditional => code_if_condition_true.into(),
             // To implement the inverted flags (NonZero and NoCarry), we execute the
             // "code_if_condition_true" in the "false" case of the InstrBuilder::cond.
-            ConditionCode::NonZero => InstrBuilder::read(Flags::ZERO).then(
-                InstrBuilder::cond(code_if_condition_false, code_if_condition_true),
-            ),
-            ConditionCode::Zero => InstrBuilder::read(Flags::ZERO).then(
-                InstrBuilder::cond(code_if_condition_true, code_if_condition_false),
-            ),
-            ConditionCode::NoCarry => InstrBuilder::read(Flags::CARRY).then(
-                InstrBuilder::cond(code_if_condition_false, code_if_condition_true),
-            ),
-            ConditionCode::Carry => InstrBuilder::read(Flags::CARRY).then(
-                InstrBuilder::cond(code_if_condition_true, code_if_condition_false),
-            ),
+            ConditionCode::NonZero => InstrBuilder::read(Flags::ZERO).then(InstrBuilder::cond(
+                code_if_condition_false,
+                code_if_condition_true,
+            )),
+            ConditionCode::Zero => InstrBuilder::read(Flags::ZERO).then(InstrBuilder::cond(
+                code_if_condition_true,
+                code_if_condition_false,
+            )),
+            ConditionCode::NoCarry => InstrBuilder::read(Flags::CARRY).then(InstrBuilder::cond(
+                code_if_condition_false,
+                code_if_condition_true,
+            )),
+            ConditionCode::Carry => InstrBuilder::read(Flags::CARRY).then(InstrBuilder::cond(
+                code_if_condition_true,
+                code_if_condition_false,
+            )),
         }
     }
 
     /// Wrap the given code to run only if this conditional evaluates to true. If
     /// unconditional, returns the microcode unchanged, otherwise runs the specified code
     /// only if the appropriate flag matches.
-    fn if_true(
-        self,
-        code_if_condition_true: impl Into<InstrBuilder>,
-    ) -> InstrBuilder {
+    fn if_true(self, code_if_condition_true: impl Into<InstrBuilder>) -> InstrBuilder {
         self.cond(code_if_condition_true, InstrBuilder::new())
     }
 }

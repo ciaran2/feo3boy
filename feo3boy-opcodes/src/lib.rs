@@ -11,7 +11,7 @@
 //! [`CBOpcode`][opcode::CBOpcode] which define the actual instructions the GameBoy CPU
 //! can execute.
 
-pub mod microcode;
 pub mod compiler;
-pub mod opcode;
 pub mod gbz80types;
+pub mod microcode;
+pub mod opcode;

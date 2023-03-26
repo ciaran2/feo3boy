@@ -48,7 +48,7 @@ impl Parse for AllowedTypesName {
 
 /// List of allowed types. Of the form:
 ///
-/// ```no_run
+/// ```text
 /// types = [
 ///     rust_type => EnumName,
 ///     rust_type2 => EnumName2,

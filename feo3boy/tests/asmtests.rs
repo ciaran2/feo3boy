@@ -1,6 +1,8 @@
 use std::{iter, mem};
 
-use feo3boy::gbz80core::{self, Gbz80State};
+use feo3boy::gbz80core::direct_executor::DirectExecutor;
+use feo3boy::gbz80core::executor::Executor;
+use feo3boy::gbz80core::Gbz80State;
 use feo3boy::memdev::{Addr, MemDevice};
 
 #[test]
@@ -10,7 +12,7 @@ fn fibonacci() {
     let mut mem = ExtendMem::from(include_bytes!("fibonacci.bin"));
     let mut cpu = Gbz80State::default();
     while !cpu.halted {
-        gbz80core::run_single_instruction(&mut (&mut cpu, &mut mem));
+        DirectExecutor::run_single_instruction(&mut (&mut cpu, &mut mem));
     }
 
     let (mut f1, mut f2) = (0, 1);
@@ -37,7 +39,7 @@ fn fibonacci16() {
     let mut mem = ExtendMem::from(include_bytes!("fibonacci16.bin"));
     let mut cpu = Gbz80State::default();
     while !cpu.halted {
-        gbz80core::run_single_instruction(&mut (&mut cpu, &mut mem));
+        DirectExecutor::run_single_instruction(&mut (&mut cpu, &mut mem));
     }
 
     let (mut f1, mut f2) = (0, 1);
@@ -65,7 +67,7 @@ fn squares() {
     let mut mem = ExtendMem::from(include_bytes!("squares.bin"));
     let mut cpu = Gbz80State::default();
     while !cpu.halted {
-        gbz80core::run_single_instruction(&mut (&mut cpu, &mut mem));
+        DirectExecutor::run_single_instruction(&mut (&mut cpu, &mut mem));
     }
 
     for (i, square) in (1..).map(|x| x * x).enumerate() {
@@ -85,8 +87,11 @@ mod test_roms {
     use std::ops::ControlFlow;
 
     use feo3boy::gb::Gb;
-    use feo3boy::gbz80core;
+    use feo3boy::gbz80core::direct_executor::DirectExecutor;
+    use feo3boy::gbz80core::executor::Executor;
+    use feo3boy::gbz80core::microcode_executor::MicrocodeExecutor;
     use feo3boy::memdev::{BiosRom, Cartridge};
+    use feo3boy_opcodes::opcode::Opcode;
 
     /// Checks if output matches the cpu_instrs output. Returns break when at the end of
     /// the passing output.
@@ -132,18 +137,17 @@ Passed all tests";
             if let ControlFlow::Break(()) = check_cpu_instrs_output(output.as_ref()) {
                 break;
             }
-            gbz80core::direct_executor::run_single_instruction(&mut *gb);
+            DirectExecutor::run_single_instruction(&mut *gb);
         }
     }
 
     /// Run the "cpu_instrs" cartridge.
     #[test]
-    #[cfg(feature = "microcode")]
     fn cpu_instrs_microcode() {
         let cart = Cartridge::parse(&include_bytes!("cpu_instrs.gb")[..]).unwrap();
         let bios = BiosRom::new(*include_bytes!("bios.bin"));
 
-        let mut gb = Box::new(Gb::new(bios.clone(), cart.clone()));
+        let mut gb = Box::new(Gb::new_microcode(bios.clone(), cart.clone()));
         let mut output = Vec::new();
 
         loop {
@@ -152,22 +156,20 @@ Passed all tests";
             if let ControlFlow::Break(()) = check_cpu_instrs_output(output.as_ref()) {
                 break;
             }
-            gbz80core::microcode_executor::run_single_instruction(&mut *gb);
+            MicrocodeExecutor::run_single_instruction(&mut *gb);
         }
     }
 
     /// Run the "cpu_instrs" comparing state between microcode and direct execution.
     #[test]
-    #[cfg(feature = "microcode")]
     fn cpu_instrs_comparison() {
-        use feo3boy::gbz80core::opcode::Opcode;
         use feo3boy::memdev::{Addr, MemDevice};
 
         let cart = Cartridge::parse(&include_bytes!("cpu_instrs.gb")[..]).unwrap();
         let bios = BiosRom::new(*include_bytes!("bios.bin"));
 
         let mut gb_direct = Box::new(Gb::new(bios.clone(), cart.clone()));
-        let mut gb_microcode = Box::new(Gb::new(bios.clone(), cart.clone()));
+        let mut gb_microcode = Box::new(Gb::new_microcode(bios.clone(), cart.clone()));
         let mut output_direct = Vec::new();
         let mut output_microcode = Vec::new();
 
@@ -178,8 +180,8 @@ Passed all tests";
             let ex_pc = gb_direct.cpustate.regs.pc;
             let instr_direct = Opcode::decode(gb_direct.mmu.read(Addr::from(ex_pc)));
             let instr_microcode = Opcode::decode(gb_microcode.mmu.read(Addr::from(ex_pc)));
-            gbz80core::direct_executor::run_single_instruction(&mut *gb_direct);
-            gbz80core::microcode_executor::run_single_instruction(&mut *gb_microcode);
+            DirectExecutor::run_single_instruction(&mut *gb_direct);
+            MicrocodeExecutor::run_single_instruction(&mut *gb_microcode);
             assert!(
                 gb_direct.cpustate == gb_microcode.cpustate,
                 "Mismatch after PC {}: {}/{}\nDirect: {:?}\nMicrodode: {:?}",

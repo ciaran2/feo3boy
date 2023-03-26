@@ -9,7 +9,7 @@ use crate::defs::{
 
 /// Generates the `Microcode` type from the [`MicrocodeTypeDef`].
 pub fn generate_microcode_type(def: &Defs) -> TokenStream {
-    let enum_def = generate_enum_def(&def.microcode_type);
+    let enum_def = generate_enum_def(&def.microcode_type, &def.module.ident);
     let allowed_types_def = generate_allowed_types_def(&def.allowed_types);
     let extern_names = generate_extern_names_def(&def.microcode_type);
     let descriptor_def = generate_descriptor_def(&def.microcode_type, &def.allowed_types);
@@ -36,8 +36,9 @@ fn generate_enum_def(
         ops,
         ..
     }: &MicrocodeTypeDef,
+    module_name: &Ident,
 ) -> TokenStream {
-    let member_defs = ops.iter().map(|op| generate_member_def(op));
+    let member_defs = ops.iter().map(|op| generate_member_def(op, module_name));
 
     quote! {
         #(#docs)*
@@ -56,8 +57,11 @@ fn generate_member_def(
         args,
         returns,
         sig,
+        subtype,
+        func_name,
         ..
     }: &MicrocodeOp,
+    module_name: &Ident,
 ) -> TokenStream {
     let fields: Vec<_> = args
         .iter()
@@ -79,6 +83,14 @@ fn generate_member_def(
             }
         });
         Some(quote!({ #(#field_defs)* }))
+    };
+
+    let extern_doc = match subtype {
+        MicrocodeSubtype::Extern => "This instruction is an extern.".into(),
+        MicrocodeSubtype::Function => format!(
+            "This instruction is defined by the function [`{}::{}`].",
+            module_name, func_name
+        ),
     };
 
     let sig_doc = format!("**Signature:** `{}`", sig.to_token_stream().to_string());
@@ -107,7 +119,7 @@ fn generate_member_def(
             #[doc = ""]
             #[doc = "**Pops these values off of the stack:**"]
             #[doc = "(in order from top of the stack to the bottom)"]
-            #[doc = "```no_run"]
+            #[doc = "```text"]
             #(#[doc = #pops_doc])*
             #[doc = "```"]
         }
@@ -129,7 +141,7 @@ fn generate_member_def(
             #[doc = ""]
             #[doc = "**Pushes these values onto the stack:**"]
             #[doc = "(in order from top of the stack to the bottom)"]
-            #[doc = "```no_run"]
+            #[doc = "```text"]
             #(#[doc = #pushes_doc])*
             #[doc = "```"]
         }
@@ -137,6 +149,8 @@ fn generate_member_def(
 
     quote! {
         #(#docs)*
+        #[doc = ""]
+        #[doc = #extern_doc]
         #[doc = ""]
         #[doc = #sig_doc]
         #pops_doc

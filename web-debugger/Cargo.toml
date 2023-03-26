@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 feo3boy = { path = "../feo3boy" }
+feo3boy-opcodes = { path = "../feo3boy-opcodes" }
 gloo = { version = "0.6", features = ["futures"] }
 console_log = "0.2"
 # Not direclty used but `now` doesn't link properly if we don't set the wasm-bindgen
