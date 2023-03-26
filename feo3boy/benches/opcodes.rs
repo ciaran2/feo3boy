@@ -1,10 +1,13 @@
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
+use feo3boy::gbz80core::direct_executor::DirectExecutor;
+use feo3boy::gbz80core::executor::Executor;
+use feo3boy::gbz80core::microcode_executor::{MicrocodeExecutor, MicrocodeState};
 use feo3boy::gbz80core::Gbz80State;
 use feo3boy::memdev::{Addr, MemDevice};
 
-fn run_until_halted(gb: &mut (Gbz80State, ByteMem)) -> (u8, u8, u8, u8) {
+fn run_until_halted<E: Executor>(gb: &mut (Gbz80State, ByteMem, E::State)) -> (u8, u8, u8, u8) {
     while !gb.0.halted {
-        feo3boy::gbz80core::run_single_instruction(gb);
+        E::run_single_instruction(gb);
     }
     (
         gb.1 .0[0xC000],
@@ -19,13 +22,23 @@ criterion_group!(basic, opcodes_benchmark);
 /// Benchmarks for opcodes.
 fn opcodes_benchmark(c: &mut Criterion) {
     let fib = include_bytes!("../tests/fibonacci.bin");
-    c.bench_function("fibonacci", |b| {
+    c.bench_function("fibonacci-direct", |b| {
         b.iter_batched_ref(
             || {
                 let mem = ByteMem::from(fib);
-                (Gbz80State::default(), mem)
+                (Gbz80State::default(), mem, ())
             },
-            |gb| run_until_halted(gb),
+            |gb| run_until_halted::<DirectExecutor>(gb),
+            BatchSize::LargeInput,
+        )
+    });
+    c.bench_function("fibonacci-microcode", |b| {
+        b.iter_batched_ref(
+            || {
+                let mem = ByteMem::from(fib);
+                (Gbz80State::default(), mem, MicrocodeState::default())
+            },
+            |gb| run_until_halted::<MicrocodeExecutor>(gb),
             BatchSize::LargeInput,
         )
     });

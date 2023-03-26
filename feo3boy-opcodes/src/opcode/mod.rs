@@ -3,7 +3,7 @@
 
 use std::fmt;
 
-use crate::opcode::args::{ConditionCode, Operand8, Operand16, AluOp, AluUnaryOp};
+use crate::opcode::args::{AluOp, AluUnaryOp, ConditionCode, Operand16, Operand8};
 
 pub mod args;
 pub mod defs;

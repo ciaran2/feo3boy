@@ -535,6 +535,7 @@ dependencies = [
  "bitflags",
  "criterion",
  "env_logger",
+ "feo3boy-opcodes",
  "log",
  "once_cell",
  "thiserror",
@@ -2114,6 +2115,7 @@ version = "0.1.0"
 dependencies = [
  "console_log",
  "feo3boy",
+ "feo3boy-opcodes",
  "gloo 0.6.1",
  "instant",
  "js-sys",

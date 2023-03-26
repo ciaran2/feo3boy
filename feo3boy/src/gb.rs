@@ -1,14 +1,17 @@
-use crate::gbz80core::{self, CpuContext, Gbz80State};
+use crate::gbz80core::direct_executor::DirectExecutor;
+use crate::gbz80core::executor::Executor;
+use crate::gbz80core::microcode_executor::MicrocodeExecutor;
+use crate::gbz80core::{CpuContext, ExecutorContext, Gbz80State};
+use crate::input::{self, ButtonStates, InputContext};
 use crate::interrupts::InterruptContext;
-use crate::memdev::{BiosRom, Cartridge, GbMmu, MaskableMem, IoRegsContext, MemContext, Vram, Oam};
-use crate::input::{self, InputContext, ButtonStates};
+use crate::memdev::{BiosRom, Cartridge, GbMmu, IoRegsContext, MemContext, Oam, Vram};
+use crate::ppu::{self, PpuContext, PpuState};
 use crate::serial::{self, SerialContext, SerialState};
-use crate::ppu::{self, PpuState, PpuContext};
-use crate::timer::{self, TimerState, TimerContext};
+use crate::timer::{self, TimerContext, TimerState};
 
 /// Represents a "real" gameboy, by explicitly using the GbMmu for memory.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Gb {
+pub struct Gb<E: Executor = DirectExecutor> {
     /// State of the CPU in the system.
     pub cpustate: Gbz80State,
     /// MMU for the system.
@@ -23,11 +26,28 @@ pub struct Gb {
     pub ppu: PpuState,
     /// Whether display is ready to be sent to the outside world
     pub display_ready: bool,
+    /// State of the executor.
+    pub executor_state: E::State,
 }
 
 impl Gb {
-    /// Create a `Gb` with the given bios and cartridge.
+    /// Create a `Gb` with the given bios and cartridge, using the default executor.
     pub fn new(bios: BiosRom, cart: Cartridge) -> Self {
+        Self::for_executor(bios, cart)
+    }
+}
+
+impl Gb<MicrocodeExecutor> {
+    /// Create a `Gb` with the given bios and cartridge, using the microcode executor
+    pub fn new_microcode(bios: BiosRom, cart: Cartridge) -> Self {
+        Self::for_executor(bios, cart)
+    }
+}
+
+impl<E: Executor> Gb<E> {
+    /// Create a `Gb` with the given bios and cartridge, using the executor specified by
+    /// this type.
+    pub fn for_executor(bios: BiosRom, cart: Cartridge) -> Self {
         Gb {
             cpustate: Gbz80State::new(),
             mmu: Box::new(GbMmu::new(bios, cart)),
@@ -36,33 +56,35 @@ impl Gb {
             timer: TimerState::new(),
             ppu: PpuState::new(),
             display_ready: false,
+            executor_state: E::State::default(),
         }
     }
 
     /// Tick forward by one instruction, executing background and graphics processing
     /// operations as needed.
     pub fn tick(&mut self) -> Option<&[(u8, u8, u8)]> {
-        gbz80core::run_single_instruction(self);
+        E::run_single_instruction(self);
 
         if self.display_ready {
             self.display_ready = false;
             Some(self.ppu.screen_buffer())
-        }
-        else {
+        } else {
             None
         }
     }
 }
 
-impl CpuContext for Gb {
+impl<E: Executor> ExecutorContext for Gb<E> {
+    type State = E::State;
+
     #[inline]
-    fn cpu(&self) -> &Gbz80State {
-        &self.cpustate
+    fn executor(&self) -> &E::State {
+        &self.executor_state
     }
 
     #[inline]
-    fn cpu_mut(&mut self) -> &mut Gbz80State {
-        &mut self.cpustate
+    fn executor_mut(&mut self) -> &mut E::State {
+        &mut self.executor_state
     }
 
     fn yield1m(&mut self) {
@@ -76,7 +98,19 @@ impl CpuContext for Gb {
     }
 }
 
-impl MemContext for Gb {
+impl<E: Executor> CpuContext for Gb<E> {
+    #[inline]
+    fn cpu(&self) -> &Gbz80State {
+        &self.cpustate
+    }
+
+    #[inline]
+    fn cpu_mut(&mut self) -> &mut Gbz80State {
+        &mut self.cpustate
+    }
+}
+
+impl<E: Executor> MemContext for Gb<E> {
     type Mem = GbMmu;
 
     #[inline]
@@ -90,7 +124,7 @@ impl MemContext for Gb {
     }
 }
 
-impl InterruptContext for Gb {
+impl<E: Executor> InterruptContext for Gb<E> {
     type Interrupts = <GbMmu as InterruptContext>::Interrupts;
 
     #[inline]
@@ -104,7 +138,7 @@ impl InterruptContext for Gb {
     }
 }
 
-impl IoRegsContext for Gb {
+impl<E: Executor> IoRegsContext for Gb<E> {
     type IoRegs = <GbMmu as IoRegsContext>::IoRegs;
 
     #[inline]
@@ -118,7 +152,7 @@ impl IoRegsContext for Gb {
     }
 }
 
-impl InputContext for Gb {
+impl<E: Executor> InputContext for Gb<E> {
     #[inline]
     fn button_states(&self) -> ButtonStates {
         self.button_states
@@ -129,7 +163,7 @@ impl InputContext for Gb {
     }
 }
 
-impl SerialContext for Gb {
+impl<E: Executor> SerialContext for Gb<E> {
     #[inline]
     fn serial(&self) -> &SerialState {
         &self.serial
@@ -140,7 +174,7 @@ impl SerialContext for Gb {
     }
 }
 
-impl TimerContext for Gb {
+impl<E: Executor> TimerContext for Gb<E> {
     #[inline]
     fn timer(&self) -> &TimerState {
         &self.timer
@@ -151,7 +185,7 @@ impl TimerContext for Gb {
     }
 }
 
-impl PpuContext for Gb {
+impl<E: Executor> PpuContext for Gb<E> {
     #[inline]
     fn ppu(&self) -> &PpuState {
         &self.ppu

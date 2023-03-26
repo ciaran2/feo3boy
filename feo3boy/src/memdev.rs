@@ -67,7 +67,7 @@ impl Addr {
 
 impl fmt::Display for Addr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:x}({:x})", self.raw, self.relative)
+        write!(f, "{:x}h({:x}h)", self.raw, self.relative)
     }
 }
 

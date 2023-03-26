@@ -1,5 +1,5 @@
-use std::ops::RangeInclusive;
 use std::ops::Deref;
+use std::ops::RangeInclusive;
 
 use feo3boy::gb::Gb;
 use feo3boy::interrupts::InterruptFlags;
