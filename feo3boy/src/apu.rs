@@ -266,13 +266,15 @@ impl Channel for PulseChannel {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WavetableChannel {
     period: u32,
     phase_offset: u32,
+    enabled: bool,
     active: bool,
     triggered: bool,
     wavelength: u16,
+    level_shift: u8,
     length_enable: bool,
     length_acc: u8,
     length_aticks: u8,
@@ -294,13 +296,27 @@ impl WavetableChannel {
         self.sample_table[base] << 4 + self.sample_table[base + 1]
     }
 
+    pub fn set_enable(&mut self, value: u8) {
+        self.enabled = (value & 0x80) != 0;
+    }
+
     pub fn set_samples(&mut self, samples: u16, value: u8) {
         let base = (samples * 2) as usize;
         self.sample_table[base] = (value & 0xf0) >> 4;
         self.sample_table[base + 1] = value & 0xf;
     }
 
-    fn generate_period(&mut self) {
+    pub fn set_level(&mut self, value: u8) {
+        let value = (value >> 5) & 0x3;
+        self.level_shift = if value == 0 {
+            4
+        }
+        else {
+            value - 1
+        };
+    }
+
+    pub fn generate_period(&mut self) {
         self.period = 64 * (2048 - self.wavelength as u32);
     }
 }
@@ -365,7 +381,7 @@ impl Channel for WavetableChannel {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NoiseChannel {
     noise_control: NoiseControl,
 }
