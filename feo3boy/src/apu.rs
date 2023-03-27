@@ -1,5 +1,4 @@
 use std::error::Error;
-use std::collections::{VecDeque};
 use bitflags::bitflags;
 use crate::memdev::{Addr, MemDevice, IoRegs, IoRegsContext};
 use log::{debug, trace, info};
@@ -150,6 +149,7 @@ pub trait Channel {
 
     fn read_control(&self) -> u8;
     fn set_control(&mut self, value: u8);
+    fn set_length(&mut self, value: u8);
 
     fn check_trigger(&mut self);
     fn apu_tick(&mut self);
@@ -229,6 +229,11 @@ impl Channel for PulseChannel {
         self.generate_period();
     }
 
+    fn set_length(&mut self, value: u8) {
+        self.timer = PulseTimer::from_bits_truncate(value);
+        self.length_acc = (self.timer & PulseTimer::INIT_TIMER).bits()
+    }
+
     fn check_trigger(&mut self) {
         if self.triggered {
             info!("Pulse channel triggered at frequency {}", CLOCK_SPEED / self.period);
@@ -267,7 +272,97 @@ pub struct WavetableChannel {
     phase_offset: u32,
     active: bool,
     triggered: bool,
+    wavelength: u16,
+    length_enable: bool,
+    length_acc: u8,
+    length_aticks: u8,
     sample_table: [u8;32],
+}
+
+impl WavetableChannel {
+    pub fn wavelength_low(&self) -> u8 {
+        (self.wavelength & 0xff) as u8
+    }
+
+    pub fn set_wavelength_low(&mut self, low_byte: u8) {
+        self.wavelength = (self.wavelength & 0x700) | low_byte as u16;
+        self.generate_period();
+    }
+
+    pub fn get_samples(&mut self, samples: usize) -> u8 {
+        let base = samples * 2;
+        self.sample_table[base] << 4 + self.sample_table[base + 1]
+    }
+
+    pub fn set_samples(&mut self, samples: u16, value: u8) {
+        let base = (samples * 2) as usize;
+        self.sample_table[base] = (value & 0xf0) >> 4;
+        self.sample_table[base + 1] = value & 0xf;
+    }
+
+    fn generate_period(&mut self) {
+        self.period = 64 * (2048 - self.wavelength as u32);
+    }
+}
+
+
+impl Channel for WavetableChannel {
+    fn get_sample(&self, sample_cursor: f32) -> u16 {
+        if self.active {
+            let wavetable_step = (((sample_cursor as u32 + self.phase_offset) % self.period) / (self.period / 32)) as usize;
+            debug!("Sampling wavetable channel from step {} of sample table.", wavetable_step);
+            self.sample_table[wavetable_step] as u16
+        }
+        else {
+            0
+        }
+    }
+
+    fn read_control(&self) -> u8 {
+        if self.length_enable {
+            ChannelControl::LENGTH_ENABLE.bits()
+        }
+        else {
+            0
+        }
+    }
+
+    fn set_control(&mut self, value: u8) {
+        let control = ChannelControl::from_bits_truncate(value);
+
+        self.triggered = control.contains(ChannelControl::TRIGGER);
+
+        self.length_enable = control.contains(ChannelControl::LENGTH_ENABLE);
+        self.wavelength = (self.wavelength & 0xff) | ((control & ChannelControl::WAVELENGTH_HIGH).bits() as u16) << 8;
+        self.generate_period();
+    }
+
+    fn set_length(&mut self, value: u8) {
+        self.length_acc = value;
+    }
+
+    fn check_trigger(&mut self) {
+        if self.triggered {
+            info!("Wavetable channel triggered at frequency {}", CLOCK_SPEED / self.period);
+
+            self.active = true;
+            self.triggered = false;
+        }
+    }
+
+    fn apu_tick(&mut self) {
+        self.length_aticks += 1;
+
+        if self.length_aticks == 2 {
+            self.length_aticks = 0;
+            if self.length_enable {
+                self.length_acc = self.length_acc.wrapping_add(1);
+                if self.length_acc == 64 {
+                    self.active = false;
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
