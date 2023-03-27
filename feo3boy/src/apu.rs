@@ -245,9 +245,11 @@ impl Channel for PulseChannel {
 
         if self.length_aticks == 2 {
             self.length_aticks = 0;
-            self.length_acc = self.length_acc.wrapping_add(1);
-            if self.length_acc == 64 && self.length_enable {
-                self.active = false;
+            if self.length_enable {
+                self.length_acc += 1;
+                if self.length_acc == 64 {
+                    self.active = false;
+                }
             }
         }
         if self.sweep_aticks == 4 {
