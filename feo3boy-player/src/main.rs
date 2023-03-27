@@ -65,6 +65,7 @@ fn init_audio_stream(mut sample_consumer: Consumer<(i16,i16), Arc<HeapRb<(i16,i1
 
             let callback = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                             info!("Running f32 audio callback");
+                            let mut last_sample = (0.0, 0.0);
                             for stereo_sample in data.chunks_mut(2) {
                                 let sample_pair = match sample_consumer.pop() {
                                     Some((left, right)) => {
@@ -74,11 +75,12 @@ fn init_audio_stream(mut sample_consumer: Consumer<(i16,i16), Arc<HeapRb<(i16,i1
                                     }
                                     None => {
                                         //warn!("Sample FIFO empty");
-                                        (0.0,0.0)
+                                        last_sample
                                     }
                                 };
                                 stereo_sample[0] = sample_pair.0;
                                 stereo_sample[1] = sample_pair.1;
+                                last_sample = sample_pair;
                             }
                         };
 
