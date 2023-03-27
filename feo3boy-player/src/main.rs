@@ -68,12 +68,12 @@ fn init_audio_stream(mut sample_consumer: Consumer<(i16,i16), Arc<HeapRb<(i16,i1
                             for stereo_sample in data.chunks_mut(2) {
                                 let sample_pair = match sample_consumer.pop() {
                                     Some((left, right)) => {
-                                        let sample_pair = (left as f32 * (f32::MAX / 255.0), right as f32 * (f32::MAX / 255.0));
-                                        debug!("Writing ({},{}) to audio buffer", sample_pair.0, sample_pair.1);
+                                        let sample_pair = (left as f32 / 255.0, right as f32 / 255.0);
+                                        info!("Writing ({},{}) to audio buffer", sample_pair.0, sample_pair.1);
                                         sample_pair
                                     }
                                     None => {
-                                        warn!("Sample FIFO empty");
+                                        //warn!("Sample FIFO empty");
                                         (0.0,0.0)
                                     }
                                 };
@@ -193,15 +193,19 @@ fn main() {
     let (mut sample_producer, mut sample_consumer) = rb.split();
     let audio_output_config = init_audio_stream(sample_consumer);
 
-    match audio_output_config {
+    let stream = match audio_output_config {
         Some((stream, sample_rate)) => {
             gb.set_sample_rate(sample_rate.0);
             if let Err(err) = stream.play() {
                 error!("Error playing audio stream: {}", err);
             }
+            Some(stream)
         }
-        _ => error!("No audio stream set up"),
-    }
+        _ => {
+            error!("No audio stream set up");
+            None
+        }
+    }.unwrap();
 
     let mut bindings = vec![ (VirtualKeyCode::W, ButtonStates::UP),
                               (VirtualKeyCode::A, ButtonStates::LEFT),
@@ -216,6 +220,7 @@ fn main() {
         control_flow.set_poll();
 
         if input_helper.update(&event) {
+
             if input_helper.close_requested() { control_flow.set_exit(); }
 
             gb.set_button_states(gen_button_states(&input_helper, &bindings));
