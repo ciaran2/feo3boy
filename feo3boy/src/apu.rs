@@ -111,12 +111,12 @@ const CLOCK_SPEED: u32= 4194304;
 // maximum period of any waveform in t cycles
 const MAX_PERIOD: u32 = 131072;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct ApuState {
     //pub output_buffer: VecDeque<(i16, i16)>,
     output_sample: Option<(i16, i16)>,
-    output_period: u32,
-    sample_cursor: u32,
+    output_period: f32,
+    sample_cursor: f32,
 }
 
 impl ApuState {
@@ -124,13 +124,13 @@ impl ApuState {
         ApuState {
             //output_buffer: VecDeque::new(),
             output_sample: None,
-            output_period: 0,
-            sample_cursor: 0,
+            output_period: 0.0,
+            sample_cursor: 0.0,
         }
     }
 
     pub fn set_output_sample_rate(&mut self, sample_rate: u32) {
-        self.output_period = CLOCK_SPEED / sample_rate;
+        self.output_period = CLOCK_SPEED as f32 / sample_rate as f32;
     }
 
     pub fn consume_output_sample(&mut self) -> Option<(i16, i16)> {
@@ -146,7 +146,7 @@ impl ApuState {
 }
 
 pub trait Channel {
-    fn get_sample(&self, sample_cursor: u32) -> u16;
+    fn get_sample(&self, sample_cursor: f32) -> u16;
 
     fn read_control(&self) -> u8;
     fn set_control(&mut self, value: u8);
@@ -199,9 +199,9 @@ impl PulseChannel {
 }
 
 impl Channel for PulseChannel {
-    fn get_sample(&self, sample_cursor: u32) -> u16 {
+    fn get_sample(&self, sample_cursor: f32) -> u16 {
         if self.active {
-            let pulse_step = (((sample_cursor + self.phase_offset) % self.period) / (self.period / 8)) as usize;
+            let pulse_step = (((sample_cursor as u32 + self.phase_offset) % self.period) / (self.period / 8)) as usize;
             debug!("Sampling pulse channel from step {} of duty cycle {}", pulse_step, self.timer.duty());
             PULSE_TABLE[self.timer.duty()][pulse_step] * self.envelope.level()
         }
@@ -292,10 +292,10 @@ pub fn tick(ctx: &mut impl ApuContext, tcycles: u64) {
     ctx.ioregs_mut().ch1_mut().check_trigger();
     ctx.ioregs_mut().ch2_mut().check_trigger();
 
-    if ctx.apu().output_period > 0 {
+    if ctx.apu().output_period > 0.0 {
 
         let next_sample = sample_cursor % ctx.apu().output_period;
-        if tcycles > next_sample.into() {
+        if tcycles as f32 > next_sample.into() {
             sample_cursor += next_sample;
             let mono_sample = ctx.ioregs().ch1().get_sample(sample_cursor) +
                                ctx.ioregs().ch2().get_sample(sample_cursor);
@@ -306,10 +306,10 @@ pub fn tick(ctx: &mut impl ApuContext, tcycles: u64) {
         }
     }
 
-    sample_cursor += tcycles as u32;
+    sample_cursor += tcycles as f32;
 
-    if sample_cursor > MAX_PERIOD {
-        sample_cursor -= MAX_PERIOD;
+    if sample_cursor > MAX_PERIOD as f32 {
+        sample_cursor -= MAX_PERIOD as f32;
     }
 
     ctx.apu_mut().sample_cursor = sample_cursor;

@@ -8,7 +8,7 @@ use crate::ppu::{self, PpuState, PpuContext};
 use crate::timer::{self, TimerState, TimerContext};
 
 /// Represents a "real" gameboy, by explicitly using the GbMmu for memory.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Gb {
     /// State of the CPU in the system.
     pub cpustate: Gbz80State,
