@@ -327,7 +327,7 @@ impl Channel for WavetableChannel {
         if self.active {
             let wavetable_step = (((sample_cursor as u32 + self.phase_offset) % self.period) / (self.period / 32)) as usize;
             debug!("Sampling wavetable channel from step {} of sample table.", wavetable_step);
-            self.sample_table[wavetable_step] as u16
+            (self.sample_table[wavetable_step] as u16) >> self.level_shift
         }
         else {
             0
@@ -395,6 +395,7 @@ pub trait ApuContext: IoRegsContext {
 pub fn apu_tick(ctx: &mut impl ApuContext) {
     ctx.ioregs_mut().ch1_mut().apu_tick();
     ctx.ioregs_mut().ch2_mut().apu_tick();
+    ctx.ioregs_mut().ch3_mut().apu_tick();
 }
 
 pub fn tick(ctx: &mut impl ApuContext, tcycles: u64) {
@@ -402,6 +403,7 @@ pub fn tick(ctx: &mut impl ApuContext, tcycles: u64) {
     let mut sample_cursor = ctx.apu().sample_cursor;
     ctx.ioregs_mut().ch1_mut().check_trigger();
     ctx.ioregs_mut().ch2_mut().check_trigger();
+    ctx.ioregs_mut().ch3_mut().check_trigger();
 
     if ctx.apu().output_period > 0.0 {
 
@@ -409,7 +411,8 @@ pub fn tick(ctx: &mut impl ApuContext, tcycles: u64) {
         if tcycles as f32 > next_sample.into() {
             sample_cursor += next_sample;
             let mono_sample = ctx.ioregs().ch1().get_sample(sample_cursor) +
-                               ctx.ioregs().ch2().get_sample(sample_cursor);
+                               ctx.ioregs().ch2().get_sample(sample_cursor) +
+                               ctx.ioregs().ch3().get_sample(sample_cursor);
             debug!("Mono sample: {}", mono_sample);
             let mono_sample_signed = -(mono_sample as i16 - 32);
             //ctx.apu_mut().output_buffer.push_back((mono_sample_signed, mono_sample_signed));
