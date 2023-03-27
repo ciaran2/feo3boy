@@ -193,19 +193,19 @@ fn main() {
     let (mut sample_producer, mut sample_consumer) = rb.split();
     let audio_output_config = init_audio_stream(sample_consumer);
 
-    let stream = match audio_output_config {
-        Some((stream, sample_rate)) => {
+    match audio_output_config {
+        Some((ref stream, sample_rate)) => {
             gb.set_sample_rate(sample_rate.0);
             if let Err(err) = stream.play() {
                 error!("Error playing audio stream: {}", err);
             }
-            Some(stream)
+            //Some(stream)
         }
         _ => {
             error!("No audio stream set up");
-            None
+            //None
         }
-    }.unwrap();
+    }
 
     let mut bindings = vec![ (VirtualKeyCode::W, ButtonStates::UP),
                               (VirtualKeyCode::A, ButtonStates::LEFT),
