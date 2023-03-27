@@ -113,7 +113,7 @@ pub fn tick(ctx: &mut impl TimerContext, tcycles: u64) {
     // falling edge case when divider has been reset
     if (ctx.timer().old_divider & (period >> 1)) != 0 &&
        (divider & (period >> 1)) == 0 {
-        increment_timer(ctx);
+        apu::apu_tick(ctx);
     }
     else {
         let mask = period - 1;
