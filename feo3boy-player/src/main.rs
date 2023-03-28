@@ -149,6 +149,13 @@ fn main() {
                 .help("File containing ROM dump"),
         )
         .arg(
+            Arg::with_name("mute")
+                .short("m")
+                .long("mute")
+                .takes_value(false)
+                .help("Mute the emulator (don't set up an audio stream)"),
+        )
+        .arg(
             Arg::with_name("ascii-video")
                 .long("ascii-video")
                 .takes_value(false)
@@ -195,17 +202,19 @@ fn main() {
     let (mut sample_producer, mut sample_consumer) = rb.split();
     let audio_output_config = init_audio_stream(sample_consumer);
 
-    match audio_output_config {
-        Some((ref stream, sample_rate)) => {
-            gb.set_sample_rate(sample_rate.0);
-            if let Err(err) = stream.play() {
-                error!("Error playing audio stream: {}", err);
+    if !argparser.is_present("mute") {
+        match audio_output_config {
+            Some((ref stream, sample_rate)) => {
+                gb.set_sample_rate(sample_rate.0);
+                if let Err(err) = stream.play() {
+                    error!("Error playing audio stream: {}", err);
+                }
+                //Some(stream)
             }
-            //Some(stream)
-        }
-        _ => {
-            error!("No audio stream set up");
-            //None
+            _ => {
+                error!("No audio stream set up");
+                //None
+            }
         }
     }
 
