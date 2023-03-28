@@ -104,9 +104,11 @@ impl NoiseControl {
         }
     }
 
-    fn period(&self) -> u16 {
-        let r = (*self | Self::CLOCK_DIV).bits() as u16;
-        let s = ((*self | Self::CLOCK_SHIFT).bits() >> 4) as u16;
+    fn period(&self) -> u32 {
+        let r = (*self | Self::CLOCK_DIV).bits() as u32;
+        let s = ((*self | Self::CLOCK_SHIFT).bits() >> 4) as u32;
+
+        info!("r: {}, s: {}", r, s);
 
         if r == 0 {
             1 << (s + 3)
@@ -417,6 +419,7 @@ pub struct NoiseChannel {
     length_acc: u8,
     length_aticks: u8,
     envelope_aticks: u8,
+    lfsr_ticks: u32,
 }
 
 impl NoiseChannel {
@@ -430,6 +433,24 @@ impl NoiseChannel {
         //needs retrigger to take
     }
 
+    // Unlike the other channels noise has state updates that
+    //  need to be updated faster than the div-apu tick
+    pub fn tick(&mut self, tcycles: u32) {
+        self.lfsr_ticks += tcycles;
+        if self.lfsr_ticks > self.noise_control.period() {
+            self.lfsr_ticks -= self.noise_control.period(); 
+
+            let feedback_bits = if (self.lfsr & 0x1) ^ ((self.lfsr >> 1) & 0x1) == 0 {
+                0x8080
+            }
+            else {
+                0x0
+            };
+
+            let lfsr_mask = self.noise_control.lfsr_mask();
+            self.lfsr = (self.lfsr & !lfsr_mask) | (feedback_bits & lfsr_mask);
+        }
+    }
 }
 
 impl Channel for NoiseChannel {
@@ -501,14 +522,19 @@ pub fn apu_tick(ctx: &mut impl ApuContext) {
     ctx.ioregs_mut().ch1_mut().apu_tick();
     ctx.ioregs_mut().ch2_mut().apu_tick();
     ctx.ioregs_mut().ch3_mut().apu_tick();
+    ctx.ioregs_mut().ch4_mut().apu_tick();
 }
 
 pub fn tick(ctx: &mut impl ApuContext, tcycles: u64) {
 
     let mut sample_cursor = ctx.apu().sample_cursor;
+
+    ctx.ioregs_mut().ch4_mut().tick(tcycles as u32);
+
     ctx.ioregs_mut().ch1_mut().check_trigger();
     ctx.ioregs_mut().ch2_mut().check_trigger();
     ctx.ioregs_mut().ch3_mut().check_trigger();
+    ctx.ioregs_mut().ch4_mut().check_trigger();
 
     if ctx.apu().output_period > 0.0 {
 
@@ -517,7 +543,8 @@ pub fn tick(ctx: &mut impl ApuContext, tcycles: u64) {
             sample_cursor += next_sample;
             let mono_sample = ctx.ioregs().ch1().get_sample(sample_cursor) +
                                ctx.ioregs().ch2().get_sample(sample_cursor) +
-                               ctx.ioregs().ch3().get_sample(sample_cursor);
+                               ctx.ioregs().ch3().get_sample(sample_cursor) +
+                               ctx.ioregs().ch4().get_sample(sample_cursor);
             debug!("Mono sample: {}", mono_sample);
             let mono_sample_signed = -(mono_sample as i16 - 32);
             //ctx.apu_mut().output_buffer.push_back((mono_sample_signed, mono_sample_signed));
