@@ -42,10 +42,53 @@ bitflags! {
 
 bitflags! {
     #[derive(Default)]
-    pub struct PulseSweep : u8 {
+    pub struct SweepControl : u8 {
         const PACE       = 0b01110000;
         const SLOPE_DIR  = 0b00001000;
         const SLOPE_CTRL = 0b00000111;
+    }
+}
+
+impl SweepControl {
+    fn new_sweep(&self) -> Sweep {
+        Sweep {
+            shift: (*self & Self::SLOPE_CTRL).bits(),
+            step: if self.contains(Self::SLOPE_DIR) { -1 } else { 1 },
+            pace: (*self & Self::PACE).bits() >> 4,
+            ticks: 0,
+        }
+    }
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
+struct Sweep {
+    shift: u8,
+    step: i16,
+    pace: u8,
+    ticks: u8,
+}
+
+impl Sweep {
+    fn apply(&self, wavelength: u16) -> u16 {
+        if self.shift == 0 {
+            wavelength
+        }
+        else {
+            (wavelength as i16 + self.step * (wavelength as i16 >> self.shift)) as u16
+        }
+    }
+
+    fn tick(&mut self) -> bool {
+        if self.pace == 0 { return false; }
+
+        self.ticks += 1;
+        if self.ticks == self.pace {
+            self.ticks = 0;
+            true
+        }
+        else {
+            false
+        }
     }
 }
 
@@ -101,8 +144,6 @@ impl Envelope {
             self.ticks += 1;
             if self.ticks == self.pace {
                 self.ticks = 0;
-                // can't find documentation on what the envelope does at the boundaries
-                // try this for now but may need to clamp instead
                 self.level = (self.level + self.step).clamp(0x0, 0xf);
             }
         }
@@ -215,6 +256,8 @@ pub trait Channel {
 pub struct PulseChannel {
     pub envelope_control: EnvelopeControl,
     envelope: Envelope,
+    sweep_control: SweepControl,
+    sweep: Sweep,
     pub timer: PulseTimer,
     period: u32,
     phase_offset: u32,
@@ -299,6 +342,7 @@ impl Channel for PulseChannel {
             self.active = true;
             self.triggered = false;
             self.envelope = self.envelope_control.new_envelope();
+            self.sweep = self.sweep_control.new_sweep();
         }
     }
 
@@ -318,6 +362,16 @@ impl Channel for PulseChannel {
         }
         if self.sweep_aticks == 4 {
             self.sweep_aticks = 0;
+            if self.sweep.tick() {
+                let wavelength = self.sweep.apply(self.wavelength);
+                if self.wavelength > 0x7ff {
+                    self.wavelength = 0;
+                    self.active = false;
+                }
+                else {
+                    self.wavelength = wavelength;
+                }
+            }
         }
         if self.envelope_aticks == 8 {
             self.envelope_aticks = 0;
