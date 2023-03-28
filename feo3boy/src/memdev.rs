@@ -8,7 +8,7 @@ use thiserror::Error;
 use crate::interrupts::{InterruptContext, InterruptEnable, InterruptFlags, Interrupts};
 use crate::ppu::{LcdFlags, LcdStat};
 use crate::apu::{SoundEnable, SoundPan, SoundVolume, Envelope,
-                 Channel, PulseChannel, WavetableChannel};
+                 Channel, PulseChannel, WavetableChannel, NoiseChannel};
 use crate::timer::{TimerControl};
 use crate::input::{ButtonRegister};
 
@@ -337,7 +337,7 @@ pub struct MemMappedIo {
     pub ch1: PulseChannel,
     pub ch2: PulseChannel,
     pub ch3: WavetableChannel,
-    //pub ch4: NoiseChannel,
+    pub ch4: NoiseChannel,
     pub sound_volume: SoundVolume,
     pub sound_pan: SoundPan,
     pub sound_enable: SoundEnable,
@@ -373,7 +373,7 @@ impl MemMappedIo {
             ch1: PulseChannel::default(),
             ch2: PulseChannel::default(),
             ch3: WavetableChannel::default(),
-            //ch4: NoiseChannel::default(),
+            ch4: NoiseChannel::default(),
             sound_volume: SoundVolume::empty(),
             sound_pan: SoundPan::empty(),
             sound_enable: SoundEnable::empty(),
@@ -463,12 +463,12 @@ impl MemDevice for MemMappedIo {
             0x0f => self.interrupt_flags = InterruptFlags::from_bits_truncate(value),
             0x10 => {},
             0x11 => self.ch1.set_length(value),
-            0x12 => self.ch1.set_envelope(Envelope::from_bits_truncate(value)),
+            0x12 => self.ch1.set_envelope(value),
             0x13 => self.ch1.set_wavelength_low(value),
             0x14 => self.ch1.set_control(value),
             0x15 => {},
             0x16 => self.ch2.set_length(value),
-            0x17 => self.ch2.set_envelope(Envelope::from_bits_truncate(value)),
+            0x17 => self.ch2.set_envelope(value),
             0x18 => self.ch2.set_wavelength_low(value),
             0x19 => self.ch2.set_control(value),
             0x1a => self.ch3.set_enable(value),
@@ -476,7 +476,12 @@ impl MemDevice for MemMappedIo {
             0x1c => self.ch3.set_level(value),
             0x1d => self.ch3.set_wavelength_low(value),
             0x1e => self.ch3.set_control(value),
-            0x1e..=0x2f => {},
+            0x20 => self.ch4.set_length(value),
+            0x21 => self.ch4.set_envelope(value),
+            0x22 => self.ch4.set_noise_control(value),
+            0x23 => self.ch4.set_control(value),
+            0x1f => {},
+            0x24..=0x2f => {},
             0x30..=0x3f => self.ch3.set_samples(addr.offset_by(0x30).relative(), value),
             0x40 => self.lcd_control = LcdFlags::from_bits_truncate(value),
             0x41 => self.lcd_status = self.lcd_status.set_writeable(value),
@@ -571,6 +576,13 @@ impl IoRegs for MemMappedIo {
     }
     fn ch3_mut(&mut self) -> &mut WavetableChannel {
         &mut self.ch3
+    }
+
+    fn ch4(&self) -> &NoiseChannel {
+        &self.ch4
+    }
+    fn ch4_mut(&mut self) -> &mut NoiseChannel {
+        &mut self.ch4
     }
 
     fn sound_volume(&self) -> SoundVolume {
@@ -704,8 +716,8 @@ pub trait IoRegs {
     fn ch2_mut(&mut self) -> &mut PulseChannel;
     fn ch3(&self) -> &WavetableChannel;
     fn ch3_mut(&mut self) -> &mut WavetableChannel;
-    //fn ch4(&self) -> &NoiseChannel;
-    //fn ch4_mut(&mut self) -> &mut NoiseChannel;
+    fn ch4(&self) -> &NoiseChannel;
+    fn ch4_mut(&mut self) -> &mut NoiseChannel;
 
     fn sound_volume(&self) -> SoundVolume;
     fn sound_pan(&self) -> SoundPan;

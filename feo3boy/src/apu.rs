@@ -205,8 +205,8 @@ impl PulseChannel {
         (self.wavelength & 0xff) as u8
     }
 
-    pub fn set_envelope(&mut self, envelope: Envelope) {
-        self.envelope = envelope;
+    pub fn set_envelope(&mut self, value: u8) {
+        self.envelope = Envelope::from_bits_truncate(value);
         //set an envelope phase offset?
         //needs retrigger to take
     }
@@ -423,6 +423,13 @@ impl NoiseChannel {
     pub fn set_noise_control(&mut self, value: u8) {
         self.noise_control = NoiseControl::from_bits_truncate(value);
     }
+
+    pub fn set_envelope(&mut self, value: u8) {
+        self.envelope = Envelope::from_bits_truncate(value);
+        //set an envelope phase offset?
+        //needs retrigger to take
+    }
+
 }
 
 impl Channel for NoiseChannel {
