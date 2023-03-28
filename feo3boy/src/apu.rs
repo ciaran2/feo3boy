@@ -304,7 +304,7 @@ impl Channel for PulseChannel {
             let pulse_step = (((sample_cursor as u32 + self.phase_offset) % self.period) / (self.period / 8)) as usize;
             debug!("Sampling pulse channel from step {} of duty cycle {}", pulse_step, self.timer.duty());
             let dac_input = PULSE_TABLE[self.timer.duty()][pulse_step] * self.envelope.level();
-            -(dac_input as i16 - 32)
+            -(dac_input as i16 - 8)
         }
         else {
             0
@@ -442,7 +442,7 @@ impl Channel for WavetableChannel {
             let wavetable_step = (((sample_cursor as u32 + self.phase_offset) % self.period) / (self.period / 32)) as usize;
             debug!("Sampling wavetable channel from step {} of sample table.", wavetable_step);
             let dac_input = (self.sample_table[wavetable_step] as u16) >> self.level_shift;
-            -(dac_input as i16 - 32)
+            -(dac_input as i16 - 8)
         }
         else {
             0
@@ -548,7 +548,7 @@ impl Channel for NoiseChannel {
     fn get_sample(&self, sample_cursor: f32) -> i16 {
         if self.active {
             let dac_input = (self.lfsr & 0x1) * self.envelope.level();
-            -(dac_input as i16 - 32)
+            -(dac_input as i16 - 8)
         }
         else {
             0
