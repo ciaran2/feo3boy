@@ -1,17 +1,16 @@
 use std::fs::File;
 use std::io::{self, Read, Write};
-use std::sync::mpsc::{self, Sender, Receiver};
 
 use clap::{App, Arg};
 use log::{info, warn, error, debug};
 
-use pixels::{Pixels, PixelsBuilder, SurfaceTexture, Error};
-use winit::event::{Event, DeviceEvent, WindowEvent, VirtualKeyCode, ElementState};
-use winit::event_loop::{ControlFlow, EventLoop};
+use pixels::{Pixels, PixelsBuilder, SurfaceTexture};
+use winit::event::{VirtualKeyCode};
+use winit::event_loop::{EventLoop};
 use winit::window::WindowBuilder;
 use winit_input_helper::WinitInputHelper;
 
-use cpal::{Data, SampleRate, SampleFormat, Stream};
+use cpal::{SampleRate, SampleFormat, Stream};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::Arc;
 use ringbuf::{HeapRb, Consumer};
@@ -198,8 +197,8 @@ fn main() {
         PixelsBuilder::new(160, 144, surface_texture).enable_vsync(true).build().unwrap()
     };
 
-    let mut rb = HeapRb::new(200);
-    let (mut sample_producer, mut sample_consumer) = rb.split();
+    let rb = HeapRb::new(200);
+    let (mut sample_producer, sample_consumer) = rb.split();
     let audio_output_config = init_audio_stream(sample_consumer);
 
     if !argparser.is_present("mute") {

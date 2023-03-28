@@ -1,4 +1,3 @@
-use std::error::Error;
 use bitflags::bitflags;
 use crate::interrupts::{InterruptContext, InterruptFlags, Interrupts};
 use crate::memdev::{IoRegs, IoRegsContext};
