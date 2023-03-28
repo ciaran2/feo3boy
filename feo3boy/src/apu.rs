@@ -89,8 +89,31 @@ bitflags! {
     #[derive(Default)]
     pub struct NoiseControl : u8 {
         const CLOCK_SHIFT = 0b11110000;
-        const LSFR_WIDTH  = 0b00001000;
+        const LFSR_WIDTH  = 0b00001000;
         const CLOCK_DIV   = 0b00000111;
+    }
+}
+
+impl NoiseControl {
+    fn lfsr_mask(&self) -> u16 {
+        if self.contains(Self::LFSR_WIDTH) {
+            0x8080
+        }
+        else {
+            0x8000
+        }
+    }
+
+    fn period(&self) -> u16 {
+        let r = (*self | Self::CLOCK_DIV).bits() as u16;
+        let s = ((*self | Self::CLOCK_SHIFT).bits() >> 4) as u16;
+
+        if r == 0 {
+            1 << (s + 3)
+        }
+        else {
+            r << (s + 4)
+        }
     }
 }
 
@@ -383,7 +406,82 @@ impl Channel for WavetableChannel {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NoiseChannel {
+    phase_offset: u32,
+    enabled: bool,
+    active: bool,
+    triggered: bool,
     noise_control: NoiseControl,
+    lfsr: u16,
+    envelope: Envelope,
+    length_enable: bool,
+    length_acc: u8,
+    length_aticks: u8,
+    envelope_aticks: u8,
+}
+
+impl NoiseChannel {
+    pub fn set_noise_control(&mut self, value: u8) {
+        self.noise_control = NoiseControl::from_bits_truncate(value);
+    }
+}
+
+impl Channel for NoiseChannel {
+    fn get_sample(&self, sample_cursor: f32) -> u16 {
+        if self.active && self.lfsr & 0x1 != 0 {
+            self.envelope.level()
+        }
+        else {
+            0
+        }
+    }
+
+    fn read_control(&self) -> u8 {
+        if self.length_enable {
+            ChannelControl::LENGTH_ENABLE.bits()
+        }
+        else {
+            0
+        }
+    }
+
+    fn set_control(&mut self, value: u8) {
+        let control = ChannelControl::from_bits_truncate(value);
+
+        self.triggered = control.contains(ChannelControl::TRIGGER);
+
+        self.length_enable = control.contains(ChannelControl::LENGTH_ENABLE);
+    }
+
+    fn set_length(&mut self, value: u8) {
+        self.length_acc = value & 0x1f;
+    }
+
+    fn check_trigger(&mut self) {
+        if self.triggered {
+            info!("Noise channel triggered");
+
+            self.active = true;
+            self.triggered = false;
+        }
+    }
+
+    fn apu_tick(&mut self) {
+        self.length_aticks += 1;
+        self.envelope_aticks += 1;
+
+        if self.length_aticks == 2 {
+            self.length_aticks = 0;
+            if self.length_enable {
+                self.length_acc = self.length_acc.wrapping_add(1);
+                if self.length_acc == 64 {
+                    self.active = false;
+                }
+            }
+        }
+        if self.envelope_aticks == 8 {
+            self.envelope_aticks = 0;
+        }
+    }
 }
 
 pub trait ApuContext: IoRegsContext {
