@@ -170,7 +170,7 @@ impl ApuState {
 }
 
 pub trait Channel {
-    fn get_sample(&self, sample_cursor: f32) -> u16;
+    fn get_sample(&self, sample_cursor: f32) -> i16;
 
     fn read_control(&self) -> u8;
     fn set_control(&mut self, value: u8);
@@ -224,11 +224,12 @@ impl PulseChannel {
 }
 
 impl Channel for PulseChannel {
-    fn get_sample(&self, sample_cursor: f32) -> u16 {
+    fn get_sample(&self, sample_cursor: f32) -> i16 {
         if self.active {
             let pulse_step = (((sample_cursor as u32 + self.phase_offset) % self.period) / (self.period / 8)) as usize;
             debug!("Sampling pulse channel from step {} of duty cycle {}", pulse_step, self.timer.duty());
-            PULSE_TABLE[self.timer.duty()][pulse_step] * self.envelope.level()
+            let dac_input = PULSE_TABLE[self.timer.duty()][pulse_step] * self.envelope.level();
+            -(dac_input as i16 - 32)
         }
         else {
             0
@@ -348,11 +349,12 @@ impl WavetableChannel {
 
 
 impl Channel for WavetableChannel {
-    fn get_sample(&self, sample_cursor: f32) -> u16 {
+    fn get_sample(&self, sample_cursor: f32) -> i16 {
         if self.active {
             let wavetable_step = (((sample_cursor as u32 + self.phase_offset) % self.period) / (self.period / 32)) as usize;
             debug!("Sampling wavetable channel from step {} of sample table.", wavetable_step);
-            (self.sample_table[wavetable_step] as u16) >> self.level_shift
+            let dac_input = (self.sample_table[wavetable_step] as u16) >> self.level_shift;
+            -(dac_input as i16 - 32)
         }
         else {
             0
@@ -454,9 +456,10 @@ impl NoiseChannel {
 }
 
 impl Channel for NoiseChannel {
-    fn get_sample(&self, sample_cursor: f32) -> u16 {
-        if self.active && self.lfsr & 0x1 != 0 {
-            self.envelope.level()
+    fn get_sample(&self, sample_cursor: f32) -> i16 {
+        if self.active {
+            let dac_input = (self.lfsr & 0x1) * self.envelope.level();
+            -(dac_input as i16 - 32)
         }
         else {
             0
@@ -546,9 +549,9 @@ pub fn tick(ctx: &mut impl ApuContext, tcycles: u64) {
                                ctx.ioregs().ch3().get_sample(sample_cursor) +
                                ctx.ioregs().ch4().get_sample(sample_cursor);
             debug!("Mono sample: {}", mono_sample);
-            let mono_sample_signed = -(mono_sample as i16 - 32);
+            //let mono_sample_signed = -(mono_sample as i16 - 32);
             //ctx.apu_mut().output_buffer.push_back((mono_sample_signed, mono_sample_signed));
-            ctx.apu_mut().output_sample = Some((mono_sample_signed, mono_sample_signed));
+            ctx.apu_mut().output_sample = Some((mono_sample, mono_sample));
         }
     }
 
