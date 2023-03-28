@@ -5,12 +5,13 @@ use crate::gbz80core::{CpuContext, ExecutorContext, Gbz80State};
 use crate::input::{self, ButtonStates, InputContext};
 use crate::interrupts::InterruptContext;
 use crate::memdev::{BiosRom, Cartridge, GbMmu, IoRegsContext, MemContext, Oam, Vram};
-use crate::ppu::{self, PpuContext, PpuState};
 use crate::serial::{self, SerialContext, SerialState};
-use crate::timer::{self, TimerContext, TimerState};
+use crate::apu::{self, ApuContext, ApuState};
+use crate::ppu::{self, PpuState, PpuContext};
+use crate::timer::{self, TimerState, TimerContext};
 
 /// Represents a "real" gameboy, by explicitly using the GbMmu for memory.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Gb<E: Executor = DirectExecutor> {
     /// State of the CPU in the system.
     pub cpustate: Gbz80State,
@@ -22,6 +23,8 @@ pub struct Gb<E: Executor = DirectExecutor> {
     pub serial: SerialState,
     /// State of timer updates
     pub timer: TimerState,
+    /// State of audio rendering
+    pub apu: ApuState,
     /// State of video rendering
     pub ppu: PpuState,
     /// Whether display is ready to be sent to the outside world
@@ -54,6 +57,7 @@ impl<E: Executor> Gb<E> {
             button_states: ButtonStates::empty(),
             serial: SerialState::new(),
             timer: TimerState::new(),
+            apu: ApuState::new(),
             ppu: PpuState::new(),
             display_ready: false,
             executor_state: E::State::default(),
@@ -62,15 +66,20 @@ impl<E: Executor> Gb<E> {
 
     /// Tick forward by one instruction, executing background and graphics processing
     /// operations as needed.
-    pub fn tick(&mut self) -> Option<&[(u8, u8, u8)]> {
+    pub fn tick(&mut self) -> (Option<&[(u8, u8, u8)]>, Option<(i16, i16)>) {
         E::run_single_instruction(self);
 
         if self.display_ready {
             self.display_ready = false;
-            Some(self.ppu.screen_buffer())
-        } else {
-            None
+            (Some(self.ppu.screen_buffer()), self.apu.consume_output_sample())
         }
+        else {
+            (None, self.apu.consume_output_sample())
+        }
+    }
+
+    pub fn set_sample_rate(&mut self, sample_rate: u32) {
+        self.apu.set_output_sample_rate(sample_rate);
     }
 }
 
@@ -93,6 +102,8 @@ impl<E: Executor> ExecutorContext for Gb<E> {
         input::update(self);
         self.mmu.tick(4);
         serial::tick(self, 4);
+        // apu must update before timer to catch falling edges from CPU writes
+        apu::tick(self, 4);
         timer::tick(self, 4);
         ppu::tick(self, 4);
     }
@@ -182,6 +193,17 @@ impl<E: Executor> TimerContext for Gb<E> {
 
     fn timer_mut(&mut self) -> &mut TimerState {
         &mut self.timer
+    }
+}
+
+impl<E: Executor> ApuContext for Gb<E> {
+    #[inline]
+    fn apu(&self) -> &ApuState {
+        &self.apu
+    }
+
+    fn apu_mut(&mut self) -> &mut ApuState {
+        &mut self.apu
     }
 }
 

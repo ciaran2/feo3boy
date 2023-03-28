@@ -5,4 +5,5 @@ pub mod interrupts;
 pub mod memdev;
 pub mod ppu;
 pub mod serial;
+pub mod apu;
 pub mod timer;
