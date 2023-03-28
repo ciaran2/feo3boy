@@ -1,14 +1,20 @@
 use std::fs::File;
 use std::io::{self, Read, Write};
+use std::sync::mpsc::{self, Sender, Receiver};
 
 use clap::{App, Arg};
-use log::{info, error};
+use log::{info, warn, error, debug};
 
 use pixels::{Pixels, PixelsBuilder, SurfaceTexture, Error};
 use winit::event::{Event, DeviceEvent, WindowEvent, VirtualKeyCode, ElementState};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::WindowBuilder;
 use winit_input_helper::WinitInputHelper;
+
+use cpal::{Data, SampleRate, SampleFormat, Stream};
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use std::sync::Arc;
+use ringbuf::{HeapRb, Consumer};
 
 use feo3boy::gb::Gb;
 use feo3boy::memdev::{BiosRom, Cartridge};
@@ -23,6 +29,76 @@ fn ascii_render(screen_buffer: &[(u8, u8, u8)]) {
             ascii_buffer.push(brightness_scale.as_bytes()[brightness_scale.len() * ((pixel.0 as usize + pixel.1 as usize + pixel.2 as usize) / 3) / 256]);
         }
         print!("{}", std::str::from_utf8(&ascii_buffer).unwrap())
+    }
+}
+
+fn init_audio_stream(mut sample_consumer: Consumer<(i16,i16), Arc<HeapRb<(i16,i16)>>>) -> Option<(Stream, SampleRate)> {
+    if let Some(device) = cpal::default_host().default_output_device() {
+        let supported_config = {
+            match device.supported_output_configs() {
+                Ok(mut supported_configs) => {
+                    loop {
+                        if let Some(config) = supported_configs.next() {
+                            if config.channels() == 2 && config.sample_format() == SampleFormat::F32 {
+                                break Some(config.with_max_sample_rate());
+                            }
+                            else {
+                                continue;
+                            }
+                        }
+                        else {
+                            error!("Default audio output device does not support stereo, continuing in silence.");
+                            break None;
+                        }
+                    }
+                }
+                Err(err) => {
+                    error!("Error querying supported output configs: {:#?}\nContinuing in silence.", err);
+                    None
+                }
+            }
+        };
+
+        if let Some(supported_config) = supported_config {
+            let err_handler = |err| error!("Error in output audio stream: {}", err);
+            let sample_rate = supported_config.sample_rate();
+
+            let callback = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                            info!("Running f32 audio callback");
+                            let mut last_sample = (0.0, 0.0);
+                            for stereo_sample in data.chunks_mut(2) {
+                                let sample_pair = match sample_consumer.pop() {
+                                    Some((left, right)) => {
+                                        let sample_pair = (left as f32 / 255.0, right as f32 / 255.0);
+                                        info!("Writing ({},{}) to audio buffer", sample_pair.0, sample_pair.1);
+                                        sample_pair
+                                    }
+                                    None => {
+                                        //warn!("Sample FIFO empty");
+                                        last_sample
+                                    }
+                                };
+                                stereo_sample[0] = sample_pair.0;
+                                stereo_sample[1] = sample_pair.1;
+                                last_sample = sample_pair;
+                            }
+                        };
+
+            match device.build_output_stream(&supported_config.into(), callback, err_handler, None) {
+                Ok(stream) => Some((stream, sample_rate)),
+                Err(err) => {
+                    error!("Error building audio output stream: {}", err);
+                    None
+                }
+            }
+        }
+        else {
+            None
+        }
+    }
+    else {
+        error!("No audio output device found, continuing in silence.");
+        None
     }
 }
 
@@ -73,6 +149,13 @@ fn main() {
                 .help("File containing ROM dump"),
         )
         .arg(
+            Arg::with_name("mute")
+                .short("m")
+                .long("mute")
+                .takes_value(false)
+                .help("Mute the emulator (don't set up an audio stream)"),
+        )
+        .arg(
             Arg::with_name("ascii-video")
                 .long("ascii-video")
                 .takes_value(false)
@@ -115,6 +198,26 @@ fn main() {
         PixelsBuilder::new(160, 144, surface_texture).enable_vsync(true).build().unwrap()
     };
 
+    let mut rb = HeapRb::new(200);
+    let (mut sample_producer, mut sample_consumer) = rb.split();
+    let audio_output_config = init_audio_stream(sample_consumer);
+
+    if !argparser.is_present("mute") {
+        match audio_output_config {
+            Some((ref stream, sample_rate)) => {
+                gb.set_sample_rate(sample_rate.0);
+                if let Err(err) = stream.play() {
+                    error!("Error playing audio stream: {}", err);
+                }
+                //Some(stream)
+            }
+            _ => {
+                error!("No audio stream set up");
+                //None
+            }
+        }
+    }
+
     let mut bindings = vec![ (VirtualKeyCode::W, ButtonStates::UP),
                               (VirtualKeyCode::A, ButtonStates::LEFT),
                               (VirtualKeyCode::S, ButtonStates::DOWN),
@@ -128,10 +231,10 @@ fn main() {
         control_flow.set_poll();
 
         if input_helper.update(&event) {
+
             if input_helper.close_requested() { control_flow.set_exit(); }
 
             gb.set_button_states(gen_button_states(&input_helper, &bindings));
-
             for _i in 0..100 {
                 {
                     let bytes = gb.serial.stream.receive_bytes();
@@ -142,7 +245,14 @@ fn main() {
                         stdout.flush().unwrap();
                     }
                 }
-                match gb.tick() {
+                let (display, audio_sample) = gb.tick();
+                if let Some(sample) = audio_sample {
+                    debug!("Sending ({},{}) to sample FIFO", sample.0, sample.1);
+                    if let Err(sample) = sample_producer.push(sample) {
+                        debug!("Error sending {} {} to sample FIFO", sample.0, sample.1);
+                    }
+                }
+                match display {
                     Some(screen_buffer) => {
                         pixels_render(&mut pixels, screen_buffer);
                         if let Err(err) = pixels.render() {

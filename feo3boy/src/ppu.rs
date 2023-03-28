@@ -311,14 +311,14 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
         ctx.ppu_mut().scanline_ticks += tcycles;
         let lcd_stat = ctx.ioregs().lcd_stat();
         let mut lcdc_y = ctx.ioregs().lcdc_y();
-        debug!("LCD is enabled.");
-        debug!("LCD status {:b}", lcd_stat);
-        debug!("Current scanline: {}", lcdc_y);
-        debug!("Scanline progress: {}", ctx.ppu().scanline_ticks);
+        trace!("LCD is enabled.");
+        trace!("LCD status {:b}", lcd_stat);
+        trace!("Current scanline: {}", lcdc_y);
+        trace!("Scanline progress: {}", ctx.ppu().scanline_ticks);
 
         match ctx.ioregs().lcd_stat().get_mode() {
             LcdMode::HBlank       => {
-                debug!("HBlank");
+                trace!("HBlank");
                 if ctx.ppu().scanline_ticks > 456 {
                     debug!("End of scan line {}", lcdc_y);
                     ctx.ppu_mut().scanline_reset();
@@ -351,7 +351,7 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
                 }
             }
             LcdMode::VBlank       => {
-                debug!("VBlank");
+                trace!("VBlank");
                 if ctx.ppu().scanline_ticks > 456 {
                     debug!("End of scan line {}", lcdc_y);
                     ctx.ppu_mut().scanline_ticks -= 456;
@@ -370,7 +370,7 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
                 }
             }
             LcdMode::OamScan      => {
-                debug!("OAMScan");
+                trace!("OAMScan");
                 
                 let end_object = (ctx.ppu().scanline_ticks as u16 / 2);
 
@@ -407,7 +407,7 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
                 }
             }
             LcdMode::WriteScreen  => {
-                debug!("WriteScreen");
+                trace!("WriteScreen");
 
                 for _i in 0..tcycles {
                     if ctx.ioregs().lcd_control().contains(LcdFlags::WINDOW_ENABLE) &&
