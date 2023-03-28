@@ -7,8 +7,7 @@ use thiserror::Error;
 
 use crate::interrupts::{InterruptContext, InterruptEnable, InterruptFlags, Interrupts};
 use crate::ppu::{LcdFlags, LcdStat};
-use crate::apu::{SoundEnable, SoundPan, SoundVolume, Envelope,
-                 Channel, PulseChannel, WavetableChannel, NoiseChannel};
+use crate::apu::{SoundEnable, SoundPan, SoundVolume, Channel, PulseChannel, WavetableChannel, NoiseChannel};
 use crate::timer::{TimerControl};
 use crate::input::{ButtonRegister};
 
@@ -421,12 +420,12 @@ impl MemDevice for MemMappedIo {
             0x0f => self.interrupt_flags.bits(),
             0x10 => 0xff,
             0x11 => self.ch1.timer.bits(),
-            0x12 => self.ch1.envelope.bits(),
+            0x12 => self.ch1.envelope_control.bits(),
             0x13 => self.ch1.wavelength_low(),
             0x14 => self.ch1.read_control(),
             0x15 => 0xff,
             0x16 => self.ch2.timer.bits(),
-            0x17 => self.ch2.envelope.bits(),
+            0x17 => self.ch2.envelope_control.bits(),
             0x18 => self.ch2.wavelength_low(),
             0x19 => self.ch2.read_control(),
             0x1a..=0x3f => 0xff,

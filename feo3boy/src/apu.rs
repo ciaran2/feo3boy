@@ -65,16 +65,47 @@ impl PulseTimer {
 
 bitflags! {
     #[derive(Default)]
-    pub struct Envelope : u8 {
+    pub struct EnvelopeControl : u8 {
         const INIT_VOL  = 0b11110000;
         const DIRECTION = 0b00001000;
         const PACE      = 0b00000111;
     }
 }
 
+impl EnvelopeControl {
+    fn new_envelope(&self) -> Envelope {
+        Envelope {
+            level: (*self & Self::INIT_VOL).bits() as i8 >> 4,
+            step: if self.contains(Self::DIRECTION) { 1 } else { -1 },
+            pace: (*self & Self::PACE).bits(),
+            ticks: 0,
+        }
+    }
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
+struct Envelope {
+    level: i8,
+    step: i8,
+    pace: u8,
+    ticks: u8,
+}
+
 impl Envelope {
     fn level(&self) -> u16 {
-        (*self & Self::INIT_VOL).bits() as u16 >> 4
+        self.level as u16
+    }
+
+    fn tick(&mut self) {
+        if self.pace > 0 {
+            self.ticks += 1;
+            if self.ticks == self.pace {
+                self.ticks = 0;
+                // can't find documentation on what the envelope does at the boundaries
+                // try this for now but may need to clamp instead
+                self.level = (self.level + self.step).clamp(0x0, 0xf);
+            }
+        }
     }
 }
 
@@ -182,7 +213,8 @@ pub trait Channel {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PulseChannel {
-    pub envelope: Envelope,
+    pub envelope_control: EnvelopeControl,
+    envelope: Envelope,
     pub timer: PulseTimer,
     period: u32,
     phase_offset: u32,
@@ -208,7 +240,7 @@ impl PulseChannel {
     }
 
     pub fn set_envelope(&mut self, value: u8) {
-        self.envelope = Envelope::from_bits_truncate(value);
+        self.envelope_control = EnvelopeControl::from_bits_truncate(value);
         //set an envelope phase offset?
         //needs retrigger to take
     }
@@ -266,6 +298,7 @@ impl Channel for PulseChannel {
 
             self.active = true;
             self.triggered = false;
+            self.envelope = self.envelope_control.new_envelope();
         }
     }
 
@@ -288,6 +321,7 @@ impl Channel for PulseChannel {
         }
         if self.envelope_aticks == 8 {
             self.envelope_aticks = 0;
+            self.envelope.tick();
         }
     }
 }
@@ -416,6 +450,7 @@ pub struct NoiseChannel {
     triggered: bool,
     noise_control: NoiseControl,
     lfsr: u16,
+    envelope_control: EnvelopeControl,
     envelope: Envelope,
     length_enable: bool,
     length_acc: u8,
@@ -430,7 +465,7 @@ impl NoiseChannel {
     }
 
     pub fn set_envelope(&mut self, value: u8) {
-        self.envelope = Envelope::from_bits_truncate(value);
+        self.envelope_control = EnvelopeControl::from_bits_truncate(value);
         //set an envelope phase offset?
         //needs retrigger to take
     }
@@ -493,6 +528,7 @@ impl Channel for NoiseChannel {
 
             self.active = true;
             self.triggered = false;
+            self.envelope = self.envelope_control.new_envelope();
         }
     }
 
@@ -511,6 +547,7 @@ impl Channel for NoiseChannel {
         }
         if self.envelope_aticks == 8 {
             self.envelope_aticks = 0;
+            self.envelope.tick();
         }
     }
 }
