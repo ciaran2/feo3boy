@@ -19,18 +19,6 @@ use feo3boy::gb::Gb;
 use feo3boy::memdev::{BiosRom, Cartridge};
 use feo3boy::input::{InputContext, ButtonStates};
 
-fn ascii_render(screen_buffer: &[(u8, u8, u8)]) {
-    let brightness_scale = ".'`^\",:;Il!i><~+_-?][}{1)(|\\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$";
-
-    for line in screen_buffer.chunks(160) {
-        let mut ascii_buffer = Vec::new();
-        for pixel in line {
-            ascii_buffer.push(brightness_scale.as_bytes()[brightness_scale.len() * ((pixel.0 as usize + pixel.1 as usize + pixel.2 as usize) / 3) / 256]);
-        }
-        print!("{}", std::str::from_utf8(&ascii_buffer).unwrap())
-    }
-}
-
 fn init_audio_stream(mut sample_consumer: Consumer<(i16,i16), Arc<HeapRb<(i16,i16)>>>) -> Option<(Stream, SampleRate)> {
     if let Some(device) = cpal::default_host().default_output_device() {
         let supported_config = {
@@ -153,12 +141,6 @@ fn main() {
                 .long("mute")
                 .takes_value(false)
                 .help("Mute the emulator (don't set up an audio stream)"),
-        )
-        .arg(
-            Arg::with_name("ascii-video")
-                .long("ascii-video")
-                .takes_value(false)
-                .help("Dump screen buffer to terminal rendered with ASCII characters"),
         )
         .get_matches();
 

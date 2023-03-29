@@ -1,5 +1,4 @@
-use std::error::Error;
-use std::collections::{VecDeque};
+use std::collections::VecDeque;
 use std::ops::Deref;
 use bitflags::bitflags;
 use crate::interrupts::{InterruptContext, InterruptFlags, Interrupts};
@@ -190,13 +189,6 @@ pub trait PpuContext: IoRegsContext + InterruptContext {
     fn oam_mut(&mut self) -> &mut Oam;
 
     fn display_ready(&mut self);
-}
-
-/// Allows core ppu implementation to be agnostic of render implementation
-pub trait PpuBackend {
-  /// Receive a screen buffer in the form of a list of RGBA quads and forward to the rendering
-  /// backend in whatever format is appropriate.
-  fn process_buffer(&self, screen_buffer: &[u8]) -> Result<(), &dyn Error>;
 }
 
 pub fn palette_lookup(palette: u8, color: u8) -> usize {
