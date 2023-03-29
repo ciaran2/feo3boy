@@ -26,7 +26,7 @@ impl ButtonStates {
         (if no_directions {
             0xf
         } else {
-            !(self.bits() >> 4)
+            !(self.bits() >> 4) & 0xf
         }) & (if no_actions {
             0xf
         } else {
@@ -80,6 +80,7 @@ pub fn update(ctx: &mut impl InputContext) {
         ctx.button_states()
             .select_buttons(no_directions, no_actions),
     );
+
 
     // trigger interrupt on falling edge
     if !(!new_button_status & old_button_status).is_empty() {
