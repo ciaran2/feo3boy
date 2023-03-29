@@ -9,7 +9,6 @@ use crate::apu::{
     Channel, NoiseChannel, PulseChannel, SoundEnable, SoundPan, SoundVolume, WavetableChannel,
 };
 use crate::input::ButtonRegister;
-use crate::input::ButtonRegister;
 use crate::interrupts::{InterruptContext, InterruptEnable, InterruptFlags, Interrupts};
 use crate::ppu::{LcdFlags, LcdStat};
 use crate::timer::TimerControl;
@@ -811,7 +810,7 @@ impl GbMmu {
         }
     }
 
-    pub fn tick(&mut self, tcycles: u64) {
+    pub fn tick(&mut self, _tcycles: u64) {
         // very dirty implementation rn
         if self.dma_active {
             let byte = self.read(Addr::from(self.dma_base + self.dma_offset));

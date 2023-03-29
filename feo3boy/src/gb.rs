@@ -1,5 +1,4 @@
 use crate::apu::{self, ApuContext, ApuState};
-use crate::gbz80core::{self, CpuContext, Gbz80State};
 use crate::gbz80core::direct_executor::DirectExecutor;
 use crate::gbz80core::executor::Executor;
 use crate::gbz80core::microcode_executor::MicrocodeExecutor;
@@ -199,7 +198,7 @@ impl<E: Executor> TimerContext for Gb<E> {
     }
 }
 
-impl<E: Executor> ApuContext for Gb {
+impl<E: Executor> ApuContext for Gb<E> {
     #[inline]
     fn apu(&self) -> &ApuState {
         &self.apu

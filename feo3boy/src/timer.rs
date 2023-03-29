@@ -2,7 +2,6 @@ use crate::apu::{self, ApuContext};
 use crate::interrupts::{InterruptContext, InterruptFlags, Interrupts};
 use crate::memdev::{IoRegs, IoRegsContext};
 use bitflags::bitflags;
-use log::{debug, info, trace};
 
 bitflags! {
     /// Lcd control status flags
