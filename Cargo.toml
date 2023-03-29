@@ -2,6 +2,11 @@
 members = [
   "feo3boy",
   "feo3boy-player",
+  "feo3boy-opcodes",
+  "feo3boy-microcode-generator",
   "web-debugger",
 ]
 resolver = "2"
+
+[profile.dev]
+opt-level = 1

@@ -1,8 +1,7 @@
 use bitflags::bitflags;
+
 use crate::interrupts::{InterruptContext, InterruptFlags, Interrupts};
 use crate::memdev::{IoRegs, IoRegsContext};
-use log::{debug, trace, info};
-
 
 bitflags! {
     /// Lcd control status flags
@@ -22,11 +21,17 @@ bitflags! {
 }
 
 impl ButtonStates {
-
     /// Get an inverted bitfield nybble for the selected buttons
-    pub fn select_buttons (&self, no_directions: bool, no_actions: bool) -> u8 {
-        (if no_directions { 0xf } else { !(self.bits() >> 4) })
-         & (if no_actions { 0xf } else { !(*self & ButtonStates::ACTIONS).bits() })
+    pub fn select_buttons(&self, no_directions: bool, no_actions: bool) -> u8 {
+        (if no_directions {
+            0xf
+        } else {
+            !(self.bits() >> 4)
+        }) & (if no_actions {
+            0xf
+        } else {
+            !(*self & ButtonStates::ACTIONS).bits()
+        })
     }
 }
 
@@ -48,7 +53,8 @@ bitflags! {
 
 impl ButtonRegister {
     pub fn set_writable(&self, data: u8) -> ButtonRegister {
-        (*self & ButtonRegister::BUTTONS) | (ButtonRegister::from_bits_truncate(data) & ButtonRegister::BUTTON_SELECTORS)
+        (*self & ButtonRegister::BUTTONS)
+            | (ButtonRegister::from_bits_truncate(data) & ButtonRegister::BUTTON_SELECTORS)
     }
 }
 
@@ -70,12 +76,16 @@ pub fn update(ctx: &mut impl InputContext) {
     let no_actions = button_reg.contains(ButtonRegister::NO_ACTIONS);
 
     let old_button_status = button_reg & ButtonRegister::BUTTONS;
-    let new_button_status = ButtonRegister::from_bits(ctx.button_states().select_buttons(no_directions, no_actions)).unwrap();
+    let new_button_status = ButtonRegister::from_bits_truncate(
+        ctx.button_states()
+            .select_buttons(no_directions, no_actions),
+    );
 
     // trigger interrupt on falling edge
     if !(!new_button_status & old_button_status).is_empty() {
         ctx.interrupts_mut().send(InterruptFlags::JOYPAD);
     }
 
-    ctx.ioregs_mut().set_buttons((button_reg & ButtonRegister::BUTTON_SELECTORS) | new_button_status);
+    ctx.ioregs_mut()
+        .set_buttons((button_reg & ButtonRegister::BUTTON_SELECTORS) | new_button_status);
 }

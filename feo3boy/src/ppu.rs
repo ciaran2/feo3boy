@@ -1,10 +1,9 @@
+use crate::interrupts::{InterruptContext, InterruptFlags, Interrupts};
+use crate::memdev::{Addr, IoRegs, IoRegsContext, MemDevice, Oam, Vram};
+use bitflags::bitflags;
+use log::{debug, trace};
 use std::collections::VecDeque;
 use std::ops::Deref;
-use bitflags::bitflags;
-use crate::interrupts::{InterruptContext, InterruptFlags, Interrupts};
-use crate::memdev::{Addr, MemDevice, IoRegs, IoRegsContext, Vram, Oam};
-use log::{debug, trace, info};
-
 
 pub enum LcdMode {
     HBlank,
@@ -30,37 +29,35 @@ bitflags! {
 }
 
 impl LcdStat {
-
     pub fn get_mode(&self) -> LcdMode {
         match (*self & LcdStat::MODE).bits() {
             0 => LcdMode::HBlank,
             1 => LcdMode::VBlank,
             2 => LcdMode::OamScan,
             3 => LcdMode::WriteScreen,
-            _ => panic!("Illegal mode number encountered. This should be impossible.")
+            _ => panic!("Illegal mode number encountered. This should be impossible."),
         }
     }
 
     pub fn set_mode(&self, mode: LcdMode) -> LcdStat {
         /*debug!("Set mode result {:b}", (*self & !LcdStat::MODE) |
-            LcdStat::from_bits_truncate(match mode {
-                LcdMode::HBlank       => 0,
-                LcdMode::VBlank       => 1,
-                LcdMode::OamScan      => 2,
-                LcdMode::WriteScreen  => 3
-            }));*/
-        (*self & !LcdStat::MODE) |
-            LcdStat::from_bits_truncate(match mode {
-                LcdMode::HBlank       => 0,
-                LcdMode::VBlank       => 1,
-                LcdMode::OamScan      => 2,
-                LcdMode::WriteScreen  => 3
+        LcdStat::from_bits_truncate(match mode {
+            LcdMode::HBlank       => 0,
+            LcdMode::VBlank       => 1,
+            LcdMode::OamScan      => 2,
+            LcdMode::WriteScreen  => 3
+        }));*/
+        (*self & !LcdStat::MODE)
+            | LcdStat::from_bits_truncate(match mode {
+                LcdMode::HBlank => 0,
+                LcdMode::VBlank => 1,
+                LcdMode::OamScan => 2,
+                LcdMode::WriteScreen => 3,
             })
     }
 
     pub fn set_writeable(&self, data: u8) -> LcdStat {
-        (*self & !LcdStat::READ_WRITE) | 
-            (LcdStat::from_bits_truncate(data) & LcdStat::READ_WRITE)
+        (*self & !LcdStat::READ_WRITE) | (LcdStat::from_bits_truncate(data) & LcdStat::READ_WRITE)
     }
 }
 
@@ -87,9 +84,12 @@ bitflags! {
 }
 
 impl LcdFlags {
-
     fn sprite_height(&self) -> u8 {
-        if self.contains(Self::OBJ_SIZE) { 16 } else { 8 }
+        if self.contains(Self::OBJ_SIZE) {
+            16
+        } else {
+            8
+        }
     }
 }
 
@@ -110,8 +110,7 @@ impl ObjAttrs {
     fn palette(&self) -> usize {
         if self.contains(Self::PALETTE) {
             1
-        }
-        else {
+        } else {
             0
         }
     }
@@ -122,7 +121,7 @@ struct Object {
     y: u8,
     x: u8,
     tile_id: u8,
-    attrs: ObjAttrs
+    attrs: ObjAttrs,
 }
 
 impl Object {
@@ -130,7 +129,9 @@ impl Object {
         let object_line = ctx.ioregs().lcdc_y() + 16 - self.y;
         let object_line = if self.attrs.contains(ObjAttrs::Y_FLIP) {
             ctx.ioregs().lcd_control().sprite_height() - object_line
-        } else { object_line };
+        } else {
+            object_line
+        };
 
         let tile_offset = object_line / 8;
         let tile_id = self.tile_id + tile_offset;
@@ -195,37 +196,47 @@ pub fn palette_lookup(palette: u8, color: u8) -> usize {
     ((palette & (3 << color * 2)) >> color * 2) as usize
 }
 
-fn get_tile_line(ctx: &impl PpuContext, tile_id: u8, line: u8, low_data: bool, flip_x: bool) -> [u8;8] {
+fn get_tile_line(
+    ctx: &impl PpuContext,
+    tile_id: u8,
+    line: u8,
+    low_data: bool,
+    flip_x: bool,
+) -> [u8; 8] {
     let base_address = if low_data { 0x0 } else { 0x1000 };
-    let tile_offset = if low_data { tile_id as i16 } else { tile_id as i8 as i16 };
+    let tile_offset = if low_data {
+        tile_id as i16
+    } else {
+        tile_id as i8 as i16
+    };
 
     let line_address = (base_address + 16 * tile_offset + 2 * line as i16) as u16;
 
     let low_bits = ctx.vram().deref().read(Addr::from(line_address));
     let high_bits = ctx.vram().deref().read(Addr::from(line_address + 1));
 
-    let mut output = [0;8];
+    let mut output = [0; 8];
     for i in 0..=7 {
-        let bit = if flip_x {i} else {7 - i};
-        output[i] = ((low_bits & (1<<bit)) >> bit) + (2 * ((high_bits & (1<<bit)) >> bit));
+        let bit = if flip_x { i } else { 7 - i };
+        output[i] = ((low_bits & (1 << bit)) >> bit) + (2 * ((high_bits & (1 << bit)) >> bit));
     }
-    
+
     output
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PpuState {
-  truecolor_palette: [(u8, u8, u8); 4],
-  screen_buffer: [(u8, u8, u8); 23040],
-  scanline_ticks: u64,
-  object_cursor: u16,
-  scanline_x: u8,
-  fetcher_x: u16,
-  obj_queue: VecDeque<Object>,
-  bg_fifo: VecDeque<u8>,
-  obj_fifo: VecDeque<(u8, ObjAttrs)>,
-  bg_discard: u8,
-  in_window: bool,
+    truecolor_palette: [(u8, u8, u8); 4],
+    screen_buffer: [(u8, u8, u8); 23040],
+    scanline_ticks: u64,
+    object_cursor: u16,
+    scanline_x: u8,
+    fetcher_x: u16,
+    obj_queue: VecDeque<Object>,
+    bg_fifo: VecDeque<u8>,
+    obj_fifo: VecDeque<(u8, ObjAttrs)>,
+    bg_discard: u8,
+    in_window: bool,
 }
 
 impl PpuState {
@@ -253,7 +264,12 @@ impl PpuState {
 impl Default for PpuState {
     fn default() -> PpuState {
         PpuState {
-            truecolor_palette: [(0xff, 0xff, 0xff), (0xd3, 0xd3, 0xd3), (0x5a, 0x5a, 0x5a), (0x00, 0x00, 0x00)],
+            truecolor_palette: [
+                (0xff, 0xff, 0xff),
+                (0xd3, 0xd3, 0xd3),
+                (0x5a, 0x5a, 0x5a),
+                (0x00, 0x00, 0x00),
+            ],
             screen_buffer: [(0xff, 0xff, 0xff); 23040],
             scanline_ticks: 0,
             object_cursor: 0,
@@ -269,28 +285,59 @@ impl Default for PpuState {
 }
 
 pub fn bg_tile_fetch(ctx: &mut impl PpuContext) {
-    let tile_map_flag = if ctx.ppu().in_window { LcdFlags::WINDOW_TILE_MAP }
-                        else { LcdFlags::BG_TILE_MAP };
+    let tile_map_flag = if ctx.ppu().in_window {
+        LcdFlags::WINDOW_TILE_MAP
+    } else {
+        LcdFlags::BG_TILE_MAP
+    };
 
-    let scroll_offset_x = if ctx.ppu().in_window { 0 } else { ctx.ioregs().scroll_x() as u16 / 8 };
+    let scroll_offset_x = if ctx.ppu().in_window {
+        0
+    } else {
+        ctx.ioregs().scroll_x() as u16 / 8
+    };
 
-    let tile_map_y = if ctx.ppu().in_window { (ctx.ioregs().lcdc_y() - ctx.ioregs().window_y()) as u16 } else { ctx.ioregs().lcdc_y().wrapping_add(ctx.ioregs().scroll_y()) as u16 };
+    let tile_map_y = if ctx.ppu().in_window {
+        (ctx.ioregs().lcdc_y() - ctx.ioregs().window_y()) as u16
+    } else {
+        ctx.ioregs().lcdc_y().wrapping_add(ctx.ioregs().scroll_y()) as u16
+    };
 
-    let tile_id_base = if ctx.ioregs().lcd_control().contains(tile_map_flag) {0x1c00} else {0x1800};
+    let tile_id_base = if ctx.ioregs().lcd_control().contains(tile_map_flag) {
+        0x1c00
+    } else {
+        0x1800
+    };
 
-    let tile_id_offset = ((tile_map_y as u16 / 8) & 0x1f) * 32 + ((ctx.ppu().fetcher_x + scroll_offset_x) & 0x1f);
+    let tile_id_offset =
+        ((tile_map_y as u16 / 8) & 0x1f) * 32 + ((ctx.ppu().fetcher_x + scroll_offset_x) & 0x1f);
 
-    let tile_id = ctx.vram().deref().read(Addr::from(tile_id_base + tile_id_offset));
+    let tile_id = ctx
+        .vram()
+        .deref()
+        .read(Addr::from(tile_id_base + tile_id_offset));
 
     if ctx.ioregs().lcdc_y() / 8 == 0 {
-        debug!("tile_id_offset: {}, fetcher_x: {}, scroll_offset: {}, tile_id: {:x}", tile_id_offset, ctx.ppu().fetcher_x, scroll_offset_x, tile_id);
+        debug!(
+            "tile_id_offset: {}, fetcher_x: {}, scroll_offset: {}, tile_id: {:x}",
+            tile_id_offset,
+            ctx.ppu().fetcher_x,
+            scroll_offset_x,
+            tile_id
+        );
     }
 
     let line = (tile_map_y & 0x7) as u8;
 
     trace!("Fetching line {} of tile {}", line, tile_id);
 
-    let tile_line = get_tile_line(ctx, tile_id, line, ctx.ioregs().lcd_control().contains(LcdFlags::BG_TILE_DATA), false);
+    let tile_line = get_tile_line(
+        ctx,
+        tile_id,
+        line,
+        ctx.ioregs().lcd_control().contains(LcdFlags::BG_TILE_DATA),
+        false,
+    );
 
     ctx.ppu_mut().bg_fifo.extend(&tile_line);
 
@@ -298,7 +345,11 @@ pub fn bg_tile_fetch(ctx: &mut impl PpuContext) {
 }
 
 pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
-    if ctx.ioregs().lcd_control().contains(LcdFlags::DISPLAY_ENABLE) {
+    if ctx
+        .ioregs()
+        .lcd_control()
+        .contains(LcdFlags::DISPLAY_ENABLE)
+    {
         ctx.ppu_mut().scanline_ticks += tcycles;
         let lcd_stat = ctx.ioregs().lcd_stat();
         let mut lcdc_y = ctx.ioregs().lcdc_y();
@@ -308,7 +359,7 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
         trace!("Scanline progress: {}", ctx.ppu().scanline_ticks);
 
         match ctx.ioregs().lcd_stat().get_mode() {
-            LcdMode::HBlank       => {
+            LcdMode::HBlank => {
                 trace!("HBlank");
                 if ctx.ppu().scanline_ticks > 456 {
                     debug!("End of scan line {}", lcdc_y);
@@ -316,23 +367,25 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
                     lcdc_y += 1;
                     ctx.ioregs_mut().set_lcdc_y(lcdc_y);
 
-                    if lcdc_y == ctx.ioregs().lcdc_y_compare() &&
-                        lcd_stat.contains(LcdStat::Y_COINCIDENCE_INTERRUPT_ENABLE) {
+                    if lcdc_y == ctx.ioregs().lcdc_y_compare()
+                        && lcd_stat.contains(LcdStat::Y_COINCIDENCE_INTERRUPT_ENABLE)
+                    {
                         ctx.interrupts_mut().send(InterruptFlags::STAT);
                     }
 
                     if lcdc_y < 144 {
                         debug!("Video mode transition from 0 (HBlank) to 2 (OAMScan)");
                         ctx.oam_mut().mask();
-                        ctx.ioregs_mut().set_lcd_stat(lcd_stat.set_mode(LcdMode::OamScan));
+                        ctx.ioregs_mut()
+                            .set_lcd_stat(lcd_stat.set_mode(LcdMode::OamScan));
                         ctx.ppu_mut().bg_discard = ctx.ioregs().scroll_x() & 0x7;
                         if lcd_stat.contains(LcdStat::OAM_INTERRUPT_ENABLE) {
                             ctx.interrupts_mut().send(InterruptFlags::STAT);
                         }
-                    }
-                    else {
+                    } else {
                         debug!("Video mode transition from 0 (HBlank) to 1 (VBlank)");
-                        ctx.ioregs_mut().set_lcd_stat(lcd_stat.set_mode(LcdMode::VBlank));
+                        ctx.ioregs_mut()
+                            .set_lcd_stat(lcd_stat.set_mode(LcdMode::VBlank));
                         ctx.interrupts_mut().send(InterruptFlags::VBLANK);
                         if lcd_stat.contains(LcdStat::VBLANK_INTERRUPT_ENABLE) {
                             ctx.interrupts_mut().send(InterruptFlags::STAT);
@@ -341,7 +394,7 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
                     }
                 }
             }
-            LcdMode::VBlank       => {
+            LcdMode::VBlank => {
                 trace!("VBlank");
                 if ctx.ppu().scanline_ticks > 456 {
                     debug!("End of scan line {}", lcdc_y);
@@ -352,7 +405,8 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
                     if lcdc_y > 153 {
                         debug!("Video mode transition from 1 (VBlank) to 2 (OAMScan)");
                         ctx.ioregs_mut().set_lcdc_y(0);
-                        ctx.ioregs_mut().set_lcd_stat(lcd_stat.set_mode(LcdMode::OamScan));
+                        ctx.ioregs_mut()
+                            .set_lcd_stat(lcd_stat.set_mode(LcdMode::OamScan));
                         ctx.ppu_mut().bg_discard = ctx.ioregs().scroll_x() & 0x7;
                         if lcd_stat.contains(LcdStat::OAM_INTERRUPT_ENABLE) {
                             ctx.interrupts_mut().send(InterruptFlags::STAT);
@@ -360,13 +414,13 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
                     }
                 }
             }
-            LcdMode::OamScan      => {
+            LcdMode::OamScan => {
                 trace!("OAMScan");
-                
+
                 let end_object = ctx.ppu().scanline_ticks as u16 / 2;
 
                 for i in ctx.ppu().object_cursor..end_object {
-                    if ctx.ppu().obj_queue.len() < 10  && i < 40 {
+                    if ctx.ppu().obj_queue.len() < 10 && i < 40 {
                         let object = ctx.oam().get_object(i);
                         let sprite_height = ctx.ioregs().lcd_control().sprite_height();
 
@@ -382,8 +436,7 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
 
                             ppu.obj_queue.insert(insert_index, object);
                         }
-                    }
-                    else {
+                    } else {
                         break;
                     }
                 }
@@ -393,17 +446,18 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
                 if ctx.ppu().scanline_ticks > 80 {
                     debug!("Video mode transition from 2 (OAMScan) to 3 (WriteScreen)");
                     ctx.vram_mut().mask();
-                    ctx.ioregs_mut().set_lcd_stat(lcd_stat.set_mode(LcdMode::WriteScreen))
-
+                    ctx.ioregs_mut()
+                        .set_lcd_stat(lcd_stat.set_mode(LcdMode::WriteScreen))
                 }
             }
-            LcdMode::WriteScreen  => {
+            LcdMode::WriteScreen => {
                 trace!("WriteScreen");
 
                 for _i in 0..tcycles {
-                    if ctx.ioregs().lcd_control().contains(LcdFlags::WINDOW_ENABLE) &&
-                        ctx.ppu().scanline_x + 7 == ctx.ioregs().window_x() &&
-                        lcdc_y >= ctx.ioregs().window_y() {
+                    if ctx.ioregs().lcd_control().contains(LcdFlags::WINDOW_ENABLE)
+                        && ctx.ppu().scanline_x + 7 == ctx.ioregs().window_x()
+                        && lcdc_y >= ctx.ioregs().window_y()
+                    {
                         ctx.ppu_mut().bg_fifo.clear();
                         ctx.ppu_mut().fetcher_x = 0;
                         ctx.ppu_mut().in_window = true;
@@ -414,7 +468,8 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
                     }
 
                     if !ctx.ppu().obj_queue.is_empty()
-                       && ctx.ppu().obj_queue[0].x == ctx.ppu().scanline_x + 8 {
+                        && ctx.ppu().obj_queue[0].x == ctx.ppu().scanline_x + 8
+                    {
                         ctx.ppu_mut().obj_queue.pop_front().unwrap().fetch_line(ctx);
                     }
 
@@ -438,36 +493,38 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
                     ctx.ppu_mut().screen_buffer[buffer_index] = {
                         let gb_color = match obj_pixel {
                             Some(obj_pixel) => {
-                                if obj_pixel.0 == 0 || obj_pixel.1.contains(ObjAttrs::UNDER_BG) && bg_pixel != 0 {
+                                if obj_pixel.0 == 0
+                                    || obj_pixel.1.contains(ObjAttrs::UNDER_BG) && bg_pixel != 0
+                                {
                                     palette_lookup(ctx.ioregs().bg_palette(), bg_pixel)
-                                }
-                                else {
+                                } else {
                                     let obj_palette = obj_pixel.1.palette();
-                                    palette_lookup(ctx.ioregs().obj_palette(obj_palette), obj_pixel.0)
+                                    palette_lookup(
+                                        ctx.ioregs().obj_palette(obj_palette),
+                                        obj_pixel.0,
+                                    )
                                 }
                             }
-                            None => palette_lookup(ctx.ioregs().bg_palette(), bg_pixel)
+                            None => palette_lookup(ctx.ioregs().bg_palette(), bg_pixel),
                         };
                         ctx.ppu().truecolor_palette[gb_color]
                     };
-
 
                     ctx.ppu_mut().scanline_x += 1;
                     if ctx.ppu().scanline_x > 159 {
                         debug!("Video mode transition from 3 (WriteScreen) to 0 (HBlank) after {} cycles.", ctx.ppu().scanline_ticks - 80);
                         ctx.oam_mut().unmask();
                         ctx.vram_mut().unmask();
-                        ctx.ioregs_mut().set_lcd_stat(lcd_stat.set_mode(LcdMode::HBlank));
+                        ctx.ioregs_mut()
+                            .set_lcd_stat(lcd_stat.set_mode(LcdMode::HBlank));
                         if lcd_stat.contains(LcdStat::HBLANK_INTERRUPT_ENABLE) {
                             ctx.interrupts_mut().send(InterruptFlags::STAT)
                         }
                     }
                 }
-
             }
         }
-    }
-    else {
+    } else {
         trace!("LCD is disabled.");
     }
 }

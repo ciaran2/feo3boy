@@ -4,7 +4,20 @@ version = "0.1.0"
 authors = ["ciaran"]
 edition = "2018"
 
+[features]
+test-roms = []
+
 [dependencies]
+feo3boy-opcodes = { path = "../feo3boy-opcodes" }
 bitflags = "1"
 log = "0.4"
+once_cell = "1"
 thiserror = "1"
+
+[dev-dependencies]
+env_logger = "0.9"
+criterion = "0.4"
+
+[[bench]]
+name = "opcodes"
+harness = false

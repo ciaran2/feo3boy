@@ -1,7 +1,7 @@
 //! Prints out all CB-prefixed opcodes in a CSV table for comparison against published opcode
 //! tables.
 
-use feo3boy::gbz80core::CBOpcode;
+use feo3boy_opcodes::opcode::CBOpcode;
 
 fn main() {
     for l in 0u8..=0xF {

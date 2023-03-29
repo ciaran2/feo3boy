@@ -66,6 +66,7 @@ pub trait SerialContext: IoRegsContext + InterruptContext {
 }
 
 const SLOW_TPERIOD: u64 = 512;
+#[allow(unused)]
 const FAST_TPERIOD: u64 = 16;
 
 #[derive(Default, Debug, Clone, PartialEq, Eq)]

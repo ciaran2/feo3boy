@@ -1,5 +1,6 @@
-use feo3boy::gbz80core::{CBOpcode, ConditionCode, Opcode, Operand16, Operand8};
 use feo3boy::memdev::MemDevice;
+use feo3boy_opcodes::opcode::args::{ConditionCode, Operand16, Operand8};
+use feo3boy_opcodes::opcode::{CBOpcode, Opcode};
 use yew::prelude::*;
 
 /// Info needed to show instruction disassembly.
