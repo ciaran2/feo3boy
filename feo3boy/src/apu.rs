@@ -1,9 +1,12 @@
-use crate::memdev::{IoRegs, IoRegsContext};
 use bitflags::bitflags;
 use log::{debug, info};
 
+use crate::bits::BitGroup;
+use crate::memdev::{IoRegs, IoRegsContext};
+
 bitflags! {
     #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+    #[repr(transparent)]
     pub struct SoundEnable : u8 {
         const ALL = 0b10000000;
         const CH4 = 0b00001000;
@@ -16,6 +19,7 @@ bitflags! {
 
 bitflags! {
     #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+    #[repr(transparent)]
     pub struct SoundPan : u8 {
         const CH4_LEFT  = 0b10000000;
         const CH3_LEFT  = 0b01000000;
@@ -28,35 +32,153 @@ bitflags! {
     }
 }
 
-bitflags! {
-    #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
-    pub struct SoundVolume : u8 {
-        const VIN_LEFT  = 0b10000000;
-        const VOL_LEFT  = 0b01110000;
-        const VIN_RIGHT = 0b00001000;
-        const VOL_RIGHT = 0b00000111;
+/// Represends sound and volume settings.
+#[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[repr(transparent)]
+pub struct SoundVolume(u8);
+
+impl SoundVolume {
+    const VIN_LEFT: BitGroup = BitGroup(0b1000_0000);
+    const VOL_LEFT: BitGroup = BitGroup(0b0111_0000);
+    const VIN_RIGHT: BitGroup = BitGroup(0b0000_1000);
+    const VOL_RIGHT: BitGroup = BitGroup(0b0000_0111);
+
+    /// Get the bit representation of this value.
+    #[inline]
+    pub fn bits(self) -> u8 {
+        self.0
+    }
+
+    /// Set all the values at once from a u8.
+    #[inline]
+    pub fn set_bits(&mut self, val: u8) {
+        self.0 = val;
+    }
+
+    /// Get the vin_left
+    #[inline]
+    pub fn vin_left(self) -> bool {
+        Self::VIN_LEFT.extract_bool(self.0)
+    }
+
+    /// Set the vin_left
+    #[inline]
+    pub fn set_vin_left(&mut self, val: bool) {
+        Self::VIN_LEFT.apply(&mut self.0, val as u8);
+    }
+
+    /// Get the left volume.
+    #[inline]
+    pub fn vol_left(self) -> u8 {
+        Self::VOL_LEFT.extract(self.0)
+    }
+
+    /// Set the left volume.
+    #[inline]
+    pub fn set_vol_left(&mut self, val: u8) {
+        Self::VOL_LEFT.apply(&mut self.0, val);
+    }
+
+    /// Get the vin_right
+    #[inline]
+    pub fn vin_right(self) -> bool {
+        Self::VIN_RIGHT.extract_bool(self.0)
+    }
+
+    /// Set the vin_right
+    #[inline]
+    pub fn set_vin_right(&mut self, val: bool) {
+        Self::VIN_RIGHT.apply(&mut self.0, val as u8);
+    }
+
+    /// Get the right volume.
+    #[inline]
+    pub fn vol_right(self) -> u8 {
+        Self::VOL_RIGHT.extract(self.0)
+    }
+
+    /// Set the right volume.
+    #[inline]
+    pub fn set_vol_right(&mut self, val: u8) {
+        Self::VOL_RIGHT.apply(&mut self.0, val);
     }
 }
 
-bitflags! {
-    #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
-    pub struct SweepControl : u8 {
-        const PACE       = 0b01110000;
-        const SLOPE_DIR  = 0b00001000;
-        const SLOPE_CTRL = 0b00000111;
-    }
-}
+/// Represends sweep control settings.
+#[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[repr(transparent)]
+pub struct SweepControl(u8);
 
 impl SweepControl {
+    const PACE: BitGroup = BitGroup(0b1000_0000);
+    const SLOPE_DIR: BitGroup = BitGroup(0b0111_0000);
+    const SLOPE_CTRL: BitGroup = BitGroup(0b0000_1000);
+    const ALL: BitGroup = BitGroup(0b0111_1111);
+
+    /// Get the bit representation of this value.
+    #[inline]
+    pub fn bits(self) -> u8 {
+        self.0
+    }
+
+    /// Set all the values at once from a u8.
+    #[inline]
+    pub fn set_bits(&mut self, val: u8) {
+        Self::ALL.apply(&mut self.0, val);
+    }
+
+    /// Get the pace.
+    #[inline]
+    pub fn pace(self) -> u8 {
+        Self::PACE.extract(self.0)
+    }
+
+    /// Set the pace
+    #[inline]
+    pub fn set_pace(&mut self, val: u8) {
+        Self::PACE.apply(&mut self.0, val);
+    }
+
+    /// Get whether the slope is negative.
+    #[inline]
+    pub fn slope_negative(self) -> bool {
+        Self::SLOPE_DIR.extract_bool(self.0)
+    }
+
+    /// Get an i16 indicating the slope direction; -1 for negative, +1 for positive.
+    #[inline]
+    pub fn slope_dir(self) -> i16 {
+        if self.slope_negative() {
+            -1
+        } else {
+            1
+        }
+    }
+
+    /// Set the vin_right
+    #[inline]
+    pub fn set_slope_negative(&mut self, val: bool) {
+        Self::SLOPE_DIR.apply(&mut self.0, val as u8);
+    }
+
+    /// Get the slope control.
+    #[inline]
+    pub fn slope_ctrl(self) -> u8 {
+        Self::SLOPE_CTRL.extract(self.0)
+    }
+
+    /// Set the right volume.
+    #[inline]
+    pub fn set_slope_ctrl(&mut self, val: u8) {
+        Self::SLOPE_CTRL.apply(&mut self.0, val);
+    }
+
+    /// Build a new [`Sweep`] from the current [`SweepControl`] settings.
     fn new_sweep(&self) -> Sweep {
         Sweep {
-            shift: (*self & Self::SLOPE_CTRL).bits(),
-            step: if self.contains(Self::SLOPE_DIR) {
-                -1
-            } else {
-                1
-            },
-            pace: (*self & Self::PACE).bits() >> 4,
+            shift: self.slope_ctrl(),
+            step: self.slope_dir(),
+            pace: self.pace(),
             ticks: 0,
         }
     }
@@ -94,39 +216,141 @@ impl Sweep {
     }
 }
 
-bitflags! {
-    #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
-    pub struct PulseTimer : u8 {
-        const DUTY_CYCLE = 0b11000000;
-        const INIT_TIMER = 0b00111111;
-    }
-}
+#[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[repr(transparent)]
+pub struct PulseTimer(u8);
 
 impl PulseTimer {
-    pub fn duty(&self) -> usize {
-        ((*self | PulseTimer::DUTY_CYCLE).bits() >> 6) as usize
+    const DUTY_CYCLE: BitGroup = BitGroup(0b1100_0000);
+    const INIT_TIMER: BitGroup = BitGroup(0b0011_1111);
+
+    /// Create a [`PulseTimer`] from the given bit value.
+    #[inline]
+    pub fn from_bits(val: u8) -> Self {
+        Self(val)
+    }
+
+    /// Get the bit representation of this value.
+    #[inline]
+    pub fn bits(self) -> u8 {
+        self.0
+    }
+
+    /// Set all the values at once from a u8.
+    #[inline]
+    pub fn set_bits(&mut self, val: u8) {
+        self.0 = val;
+    }
+
+    /// Get the duty cycle.
+    #[inline]
+    pub fn duty_cycle(self) -> u8 {
+        Self::DUTY_CYCLE.extract(self.0)
+    }
+
+    /// Gets the duty cycle as a usize index.
+    #[inline]
+    pub fn duty(self) -> usize {
+        self.duty_cycle() as usize
+    }
+
+    /// Set the duty cycle.
+    #[inline]
+    pub fn set_duty_cycle(&mut self, val: u8) {
+        Self::DUTY_CYCLE.apply(&mut self.0, val);
+    }
+
+    /// Get the init timer
+    #[inline]
+    pub fn init_timer(self) -> u8 {
+        Self::INIT_TIMER.extract(self.0)
+    }
+
+    /// Set the init timer.
+    #[inline]
+    pub fn set_init_timer(&mut self, val: u8) {
+        Self::INIT_TIMER.apply(&mut self.0, val);
     }
 }
 
-bitflags! {
-    #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
-    pub struct EnvelopeControl : u8 {
-        const INIT_VOL  = 0b11110000;
-        const DIRECTION = 0b00001000;
-        const PACE      = 0b00000111;
-    }
-}
+#[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[repr(transparent)]
+pub struct EnvelopeControl(u8);
 
 impl EnvelopeControl {
+    const INIT_VOL: BitGroup = BitGroup(0b1111_0000);
+    const DIRECTION: BitGroup = BitGroup(0b0000_1000);
+    const PACE: BitGroup = BitGroup(0b0000_0111);
+
+    /// Create an [`EnvelopeControl`] from the given bit value.
+    #[inline]
+    pub fn from_bits(val: u8) -> Self {
+        Self(val)
+    }
+
+    /// Get the bit representation of this value.
+    #[inline]
+    pub fn bits(self) -> u8 {
+        self.0
+    }
+
+    /// Set all the values at once from a u8.
+    #[inline]
+    pub fn set_bits(&mut self, val: u8) {
+        self.0 = val;
+    }
+
+    /// Get the init vol
+    #[inline]
+    pub fn init_vol(self) -> i8 {
+        Self::INIT_VOL.extract_signed(self.0)
+    }
+
+    /// Set the init vol.
+    #[inline]
+    pub fn set_init_vol(&mut self, val: i8) {
+        Self::INIT_VOL.apply(&mut self.0, val as u8);
+    }
+
+    /// Get whether the direction is negative.
+    #[inline]
+    pub fn direction_negative(self) -> bool {
+        Self::DIRECTION.extract_bool(self.0)
+    }
+
+    /// Get a signed value indicating the direction, either `-1` or `1`.
+    #[inline]
+    pub fn direction(self) -> i8 {
+        if self.direction_negative() {
+            -1
+        } else {
+            1
+        }
+    }
+
+    /// Set whether the direction is negative
+    #[inline]
+    pub fn set_direction_negative(&mut self, val: bool) {
+        Self::DIRECTION.apply(&mut self.0, val as u8);
+    }
+
+    /// Get the pace.
+    #[inline]
+    pub fn pace(self) -> u8 {
+        Self::PACE.extract(self.0)
+    }
+
+    /// Set the init vol.
+    #[inline]
+    pub fn set_pace(&mut self, val: u8) {
+        Self::PACE.apply(&mut self.0, val);
+    }
+
     fn new_envelope(&self) -> Envelope {
         Envelope {
-            level: (*self & Self::INIT_VOL).bits() as i8 >> 4,
-            step: if self.contains(Self::DIRECTION) {
-                1
-            } else {
-                -1
-            },
-            pace: (*self & Self::PACE).bits(),
+            level: self.init_vol(),
+            step: self.direction(),
+            pace: self.pace(),
             ticks: 0,
         }
     }
@@ -156,34 +380,113 @@ impl Envelope {
     }
 }
 
-bitflags! {
-    #[derive(Default)]
-    pub struct WavetableLevel : u8 {
-        const LEVEL = 0b01100000;
+#[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[repr(transparent)]
+pub struct WavetableLevel(u8);
+
+impl WavetableLevel {
+    const LEVEL: BitGroup = BitGroup(0b0110_0000);
+    const ALL: BitGroup = BitGroup(0b0110_1000);
+
+    /// Get the bit representation of this value.
+    #[inline]
+    pub fn bits(self) -> u8 {
+        self.0
+    }
+
+    /// Set all the values at once from a u8.
+    #[inline]
+    pub fn set_bits(&mut self, val: u8) {
+        Self::ALL.apply(&mut self.0, val);
+    }
+
+    /// Get the level.
+    #[inline]
+    pub fn level(self) -> u8 {
+        Self::LEVEL.extract(self.0)
+    }
+
+    /// Set the level.
+    #[inline]
+    pub fn set_level(&mut self, val: u8) {
+        Self::LEVEL.apply(&mut self.0, val);
     }
 }
 
-bitflags! {
-    #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
-    pub struct NoiseControl : u8 {
-        const CLOCK_SHIFT = 0b11110000;
-        const LFSR_WIDTH  = 0b00001000;
-        const CLOCK_DIV   = 0b00000111;
-    }
-}
+#[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[repr(transparent)]
+pub struct NoiseControl(u8);
 
 impl NoiseControl {
-    fn lfsr_mask(&self) -> u16 {
-        if self.contains(Self::LFSR_WIDTH) {
+    const CLOCK_SHIFT: BitGroup = BitGroup(0b1111_0000);
+    const LFSR_WIDTH: BitGroup = BitGroup(0b0000_1000);
+    const CLOCK_DIV: BitGroup = BitGroup(0b0000_0111);
+
+    /// Create a NoiseControl from the full set of bits of the value.
+    pub fn from_bits(val: u8) -> Self {
+        Self(val)
+    }
+
+    /// Get the bit representation of this value.
+    #[inline]
+    pub fn bits(self) -> u8 {
+        self.0
+    }
+
+    /// Set all the values at once from a u8.
+    #[inline]
+    pub fn set_bits(&mut self, val: u8) {
+        self.0 = val;
+    }
+
+    /// Get the clock shift.
+    #[inline]
+    pub fn clock_shift(self) -> u8 {
+        Self::CLOCK_SHIFT.extract(self.0)
+    }
+
+    /// Set the clock shift.
+    #[inline]
+    pub fn set_clock_shift(&mut self, val: u8) {
+        Self::CLOCK_SHIFT.apply(&mut self.0, val);
+    }
+
+    /// Get the LFSR width bit.
+    #[inline]
+    pub fn lfsr_width(self) -> bool {
+        Self::LFSR_WIDTH.extract_bool(self.0)
+    }
+
+    /// Get the LFSR mask based on whether the LFSR bit is set.
+    fn lfsr_mask(self) -> u16 {
+        if self.lfsr_width() {
             0x8080
         } else {
             0x8000
         }
     }
 
+    /// Set the LFSR width bit.
+    #[inline]
+    pub fn set_lfsr_width(&mut self, val: bool) {
+        Self::LFSR_WIDTH.apply(&mut self.0, val as u8);
+    }
+
+    /// Get the clock div.
+    #[inline]
+    pub fn clock_div(self) -> u8 {
+        Self::CLOCK_DIV.extract(self.0)
+    }
+
+    /// Set the clock div.
+    #[inline]
+    pub fn set_clock_div(&mut self, val: u8) {
+        Self::CLOCK_DIV.apply(&mut self.0, val);
+    }
+
     fn period(&self) -> u32 {
-        let r = (*self | Self::CLOCK_DIV).bits() as u32;
-        let s = ((*self | Self::CLOCK_SHIFT).bits() >> 4) as u32;
+        let r = self.clock_div() as u32;
+        let s = self.clock_shift() as u32;
 
         info!("r: {}, s: {}", r, s);
 
@@ -196,12 +499,32 @@ impl NoiseControl {
 }
 
 bitflags! {
-    #[derive(Default)]
+    #[derive(Default, Debug, Copy, Clone, Eq, PartialEq)]
     pub struct ChannelControl : u8 {
-        const TRIGGER         = 0b10000000;
-        const LENGTH_ENABLE   = 0b01000000;
-        const WAVELENGTH_HIGH = 0b00000111;
-        const READABLE        = 0b01000000;
+        const TRIGGER            = 0b1000_0000;
+        const LENGTH_ENABLE      = 0b0100_0000;
+        /// Bit 0 of `WAVELENGTH_HIGH`. This pseudo-flag allows `from_bits_truncate` to
+        /// set this bit independently of the rest of the wavelength bits.
+        const WAVELENGTH_HIGH_B0 = 0b0000_0001;
+        /// Bit 1 of `WAVELENGTH_HIGH`. This pseudo-flag allows `from_bits_truncate` to
+        /// set this bit independently of the rest of the wavelength bits.
+        const WAVELENGTH_HIGH_B1 = 0b0000_0010;
+        /// Bit 2 of `WAVELENGTH_HIGH`. This pseudo-flag allows `from_bits_truncate` to
+        /// set this bit independently of the rest of the wavelength bits.
+        const WAVELENGTH_HIGH_B2 = 0b0000_0100;
+        const READABLE           = 0b0100_0000;
+    }
+}
+
+impl ChannelControl {
+    const WAVELENGTH_HIGH: BitGroup = BitGroup(0b0000_0111);
+
+    pub fn wavelength_high(self) -> u8 {
+        Self::WAVELENGTH_HIGH.extract(self.bits())
+    }
+
+    pub fn set_wavelength_high(&mut self, val: u8) {
+        Self::WAVELENGTH_HIGH.apply_bits(self, val);
     }
 }
 
@@ -289,7 +612,7 @@ impl PulseChannel {
     }
 
     pub fn set_envelope(&mut self, value: u8) {
-        self.envelope_control = EnvelopeControl::from_bits_truncate(value);
+        self.envelope_control = EnvelopeControl::from_bits(value);
         //set an envelope phase offset?
         //needs retrigger to take
     }
@@ -335,14 +658,13 @@ impl Channel for PulseChannel {
         self.triggered = control.contains(ChannelControl::TRIGGER);
 
         self.length_enable = control.contains(ChannelControl::LENGTH_ENABLE);
-        self.wavelength = (self.wavelength & 0xff)
-            | ((control & ChannelControl::WAVELENGTH_HIGH).bits() as u16) << 8;
+        self.wavelength = (self.wavelength & 0xff) | (control.wavelength_high() as u16) << 8;
         self.generate_period();
     }
 
     fn set_length(&mut self, value: u8) {
-        self.timer = PulseTimer::from_bits_truncate(value);
-        self.length_acc = (self.timer & PulseTimer::INIT_TIMER).bits()
+        self.timer = PulseTimer::from_bits(value);
+        self.length_acc = self.timer.init_timer();
     }
 
     fn check_trigger(&mut self) {
@@ -472,8 +794,7 @@ impl Channel for WavetableChannel {
         self.triggered = control.contains(ChannelControl::TRIGGER);
 
         self.length_enable = control.contains(ChannelControl::LENGTH_ENABLE);
-        self.wavelength = (self.wavelength & 0xff)
-            | ((control & ChannelControl::WAVELENGTH_HIGH).bits() as u16) << 8;
+        self.wavelength = (self.wavelength & 0xff) | (control.wavelength_high() as u16) << 8;
         self.generate_period();
     }
 
@@ -527,11 +848,11 @@ pub struct NoiseChannel {
 
 impl NoiseChannel {
     pub fn set_noise_control(&mut self, value: u8) {
-        self.noise_control = NoiseControl::from_bits_truncate(value);
+        self.noise_control = NoiseControl::from_bits(value);
     }
 
     pub fn set_envelope(&mut self, value: u8) {
-        self.envelope_control = EnvelopeControl::from_bits_truncate(value);
+        self.envelope_control = EnvelopeControl::from_bits(value);
         //set an envelope phase offset?
         //needs retrigger to take
     }

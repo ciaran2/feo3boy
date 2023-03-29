@@ -1,3 +1,4 @@
+use crate::bits::BitGroup;
 use crate::interrupts::{InterruptContext, InterruptFlags, Interrupts};
 use crate::memdev::{Addr, IoRegs, IoRegsContext, MemDevice, Oam, Vram};
 use bitflags::bitflags;
@@ -6,31 +7,41 @@ use std::collections::VecDeque;
 use std::ops::Deref;
 
 pub enum LcdMode {
-    HBlank,
-    VBlank,
-    OamScan,
-    WriteScreen,
+    HBlank = 0,
+    VBlank = 1,
+    OamScan = 2,
+    WriteScreen = 3,
 }
 
 bitflags! {
     /// Lcd control status flags
     #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+    #[repr(transparent)]
     pub struct LcdStat: u8 {
-        const READ_WRITE = 0b1111000;
+        /// Mask for selecting the bits which are readable/writiable via memory access.
+        const READ_WRITE = 0b111_1000;
 
-        const MODE = 0b0000011;
-        const Y_COINCIDENCE = 0b0000100;
+        /// Bit 0 of `MODE`. This pseudo-flag allows `from_bits_truncate` to
+        /// set this bit independently of the rest of the mode bits.
+        const MODE_B0 = 0b000_0001;
+        /// Bit 1 of `MODE`. This pseudo-flag allows `from_bits_truncate` to
+        /// set this bit independently of the rest of the mode bits.
+        const MODE_B1 = 0b000_0010;
 
-        const HBLANK_INTERRUPT_ENABLE = 0b0001000;
-        const VBLANK_INTERRUPT_ENABLE = 0b0010000;
-        const OAM_INTERRUPT_ENABLE = 0b0100000;
-        const Y_COINCIDENCE_INTERRUPT_ENABLE = 0b1000000;
+        const Y_COINCIDENCE = 0b000_0100;
+
+        const HBLANK_INTERRUPT_ENABLE = 0b000_1000;
+        const VBLANK_INTERRUPT_ENABLE = 0b001_0000;
+        const OAM_INTERRUPT_ENABLE = 0b010_0000;
+        const Y_COINCIDENCE_INTERRUPT_ENABLE = 0b100_0000;
     }
 }
 
 impl LcdStat {
-    pub fn get_mode(&self) -> LcdMode {
-        match (*self & LcdStat::MODE).bits() {
+    const MODE: BitGroup = BitGroup(0b0000_0011);
+
+    pub fn mode(&self) -> LcdMode {
+        match Self::MODE.extract(self.bits()) {
             0 => LcdMode::HBlank,
             1 => LcdMode::VBlank,
             2 => LcdMode::OamScan,
@@ -39,31 +50,20 @@ impl LcdStat {
         }
     }
 
-    pub fn set_mode(&self, mode: LcdMode) -> LcdStat {
-        /*debug!("Set mode result {:b}", (*self & !LcdStat::MODE) |
-        LcdStat::from_bits_truncate(match mode {
-            LcdMode::HBlank       => 0,
-            LcdMode::VBlank       => 1,
-            LcdMode::OamScan      => 2,
-            LcdMode::WriteScreen  => 3
-        }));*/
-        (*self & !LcdStat::MODE)
-            | LcdStat::from_bits_truncate(match mode {
-                LcdMode::HBlank => 0,
-                LcdMode::VBlank => 1,
-                LcdMode::OamScan => 2,
-                LcdMode::WriteScreen => 3,
-            })
+    pub fn with_mode(mut self, mode: LcdMode) -> LcdStat {
+        Self::MODE.apply_bits(&mut self, mode as u8);
+        self
     }
 
-    pub fn set_writeable(&self, data: u8) -> LcdStat {
-        (*self & !LcdStat::READ_WRITE) | (LcdStat::from_bits_truncate(data) & LcdStat::READ_WRITE)
+    pub fn with_writeable(self, data: u8) -> LcdStat {
+        (self - LcdStat::READ_WRITE) | (LcdStat::from_bits_truncate(data) & LcdStat::READ_WRITE)
     }
 }
 
 bitflags! {
     /// Available set of interrupt flags.
     #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+    #[repr(transparent)]
     pub struct LcdFlags: u8 {
         const BG_DISPLAY = 0b00000001;
 
@@ -95,23 +95,36 @@ impl LcdFlags {
 
 bitflags! {
     #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+    #[repr(transparent)]
     pub struct ObjAttrs: u8 {
-        const CGB_PALETTE   = 0b00000111;
-        const CGB_VRAM_BANK = 0b00001000;
-        const PALETTE       = 0b00010000;
-        const X_FLIP        = 0b00100000;
-        const Y_FLIP        = 0b01000000;
-        const UNDER_BG      = 0b10000000;
+        /// First bit of the CGB palette index. This flag exists only to allow
+        /// `from_bits_truncate` to set this big independently.
+        const CGB_PALETTE_B0 = 0b0000_0001;
+        /// Second bit of the CGB palette index. This flag exists only to allow
+        /// `from_bits_truncate` to set this big independently.
+        const CGB_PALETTE_B1 = 0b0000_0010;
+        /// Third bit of the CGB palette index. This flag exists only to allow
+        /// `from_bits_truncate` to set this big independently.
+        const CGB_PALETTE_B2 = 0b0000_0100;
+
+        const CGB_VRAM_BANK  = 0b0000_1000;
+        const PALETTE        = 0b0001_0000;
+        const X_FLIP         = 0b0010_0000;
+        const Y_FLIP         = 0b0100_0000;
+        const UNDER_BG       = 0b1000_0000;
     }
 }
 
 impl ObjAttrs {
-    fn palette(&self) -> usize {
-        if self.contains(Self::PALETTE) {
-            1
-        } else {
-            0
-        }
+    /// Mask for selecting the bits corresponding to the CGB palette index.
+    const CGB_PALETTE: BitGroup = BitGroup(0b0000_0111);
+
+    pub fn cgb_palette(self) -> u8 {
+        Self::CGB_PALETTE.extract(self.bits())
+    }
+
+    fn palette(self) -> usize {
+        self.contains(Self::PALETTE) as usize
     }
 }
 
@@ -357,7 +370,7 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
         trace!("Current scanline: {}", lcdc_y);
         trace!("Scanline progress: {}", ctx.ppu().scanline_ticks);
 
-        match ctx.ioregs().lcd_stat().get_mode() {
+        match ctx.ioregs().lcd_stat().mode() {
             LcdMode::HBlank => {
                 trace!("HBlank");
                 if ctx.ppu().scanline_ticks > 456 {
@@ -376,7 +389,7 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
                         debug!("Video mode transition from 0 (HBlank) to 2 (OAMScan)");
                         ctx.oam_mut().mask();
                         ctx.ioregs_mut()
-                            .set_lcd_stat(lcd_stat.set_mode(LcdMode::OamScan));
+                            .set_lcd_stat(lcd_stat.with_mode(LcdMode::OamScan));
                         ctx.ppu_mut().bg_discard = ctx.ioregs().scroll_x() & 0x7;
                         if lcd_stat.contains(LcdStat::OAM_INTERRUPT_ENABLE) {
                             ctx.interrupts_mut().send(InterruptFlags::STAT);
@@ -384,7 +397,7 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
                     } else {
                         debug!("Video mode transition from 0 (HBlank) to 1 (VBlank)");
                         ctx.ioregs_mut()
-                            .set_lcd_stat(lcd_stat.set_mode(LcdMode::VBlank));
+                            .set_lcd_stat(lcd_stat.with_mode(LcdMode::VBlank));
                         ctx.interrupts_mut().send(InterruptFlags::VBLANK);
                         if lcd_stat.contains(LcdStat::VBLANK_INTERRUPT_ENABLE) {
                             ctx.interrupts_mut().send(InterruptFlags::STAT);
@@ -405,7 +418,7 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
                         debug!("Video mode transition from 1 (VBlank) to 2 (OAMScan)");
                         ctx.ioregs_mut().set_lcdc_y(0);
                         ctx.ioregs_mut()
-                            .set_lcd_stat(lcd_stat.set_mode(LcdMode::OamScan));
+                            .set_lcd_stat(lcd_stat.with_mode(LcdMode::OamScan));
                         ctx.ppu_mut().bg_discard = ctx.ioregs().scroll_x() & 0x7;
                         if lcd_stat.contains(LcdStat::OAM_INTERRUPT_ENABLE) {
                             ctx.interrupts_mut().send(InterruptFlags::STAT);
@@ -446,7 +459,7 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
                     debug!("Video mode transition from 2 (OAMScan) to 3 (WriteScreen)");
                     ctx.vram_mut().mask();
                     ctx.ioregs_mut()
-                        .set_lcd_stat(lcd_stat.set_mode(LcdMode::WriteScreen))
+                        .set_lcd_stat(lcd_stat.with_mode(LcdMode::WriteScreen))
                 }
             }
             LcdMode::WriteScreen => {
@@ -515,7 +528,7 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
                         ctx.oam_mut().unmask();
                         ctx.vram_mut().unmask();
                         ctx.ioregs_mut()
-                            .set_lcd_stat(lcd_stat.set_mode(LcdMode::HBlank));
+                            .set_lcd_stat(lcd_stat.with_mode(LcdMode::HBlank));
                         if lcd_stat.contains(LcdStat::HBLANK_INTERRUPT_ENABLE) {
                             ctx.interrupts_mut().send(InterruptFlags::STAT)
                         }
