@@ -1,6 +1,5 @@
-use std::error::Error;
 use bitflags::bitflags;
-use crate::memdev::{Addr, MemDevice, IoRegs, IoRegsContext};
+use crate::memdev::{IoRegs, IoRegsContext};
 use log::{debug, trace, info};
 
 bitflags! {
@@ -545,7 +544,7 @@ impl NoiseChannel {
 }
 
 impl Channel for NoiseChannel {
-    fn get_sample(&self, sample_cursor: f32) -> i16 {
+    fn get_sample(&self, _sample_cursor: f32) -> i16 {
         if self.active {
             let dac_input = (self.lfsr & 0x1) * self.envelope.level();
             -(dac_input as i16 - 8)

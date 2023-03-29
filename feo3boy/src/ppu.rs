@@ -1,6 +1,4 @@
-use core::cmp::Ordering;
-use std::error::Error;
-use std::collections::{VecDeque, BinaryHeap};
+use std::collections::VecDeque;
 use std::ops::Deref;
 use bitflags::bitflags;
 use crate::interrupts::{InterruptContext, InterruptFlags, Interrupts};
@@ -130,7 +128,7 @@ struct Object {
 impl Object {
     fn fetch_line(&self, ctx: &mut impl PpuContext) {
         let object_line = ctx.ioregs().lcdc_y() + 16 - self.y;
-        let object_line = if (self.attrs.contains(ObjAttrs::Y_FLIP)) {
+        let object_line = if self.attrs.contains(ObjAttrs::Y_FLIP) {
             ctx.ioregs().lcd_control().sprite_height() - object_line
         } else { object_line };
 
@@ -191,13 +189,6 @@ pub trait PpuContext: IoRegsContext + InterruptContext {
     fn oam_mut(&mut self) -> &mut Oam;
 
     fn display_ready(&mut self);
-}
-
-/// Allows core ppu implementation to be agnostic of render implementation
-pub trait PpuBackend {
-  /// Receive a screen buffer in the form of a list of RGBA quads and forward to the rendering
-  /// backend in whatever format is appropriate.
-  fn process_buffer(&self, screen_buffer: &[u8]) -> Result<(), &dyn Error>;
 }
 
 pub fn palette_lookup(palette: u8, color: u8) -> usize {
@@ -372,7 +363,7 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
             LcdMode::OamScan      => {
                 trace!("OAMScan");
                 
-                let end_object = (ctx.ppu().scanline_ticks as u16 / 2);
+                let end_object = ctx.ppu().scanline_ticks as u16 / 2;
 
                 for i in ctx.ppu().object_cursor..end_object {
                     if ctx.ppu().obj_queue.len() < 10  && i < 40 {
@@ -380,7 +371,7 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
                         let sprite_height = ctx.ioregs().lcd_control().sprite_height();
 
                         if lcdc_y + 16 >= object.y && lcdc_y + 16 < object.y + sprite_height {
-                            let mut ppu = ctx.ppu_mut();
+                            let ppu = ctx.ppu_mut();
                             let mut insert_index = ppu.obj_queue.len();
                             for (i, queued_object) in ppu.obj_queue.iter().enumerate() {
                                 if object.x < queued_object.x {
@@ -440,12 +431,12 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
                     //    info!("scanline_x: {}, bg_fifo: {:?}", ctx.ppu().scanline_x, ctx.ppu().bg_fifo);
                     //}
 
-                    let buffer_index = (lcdc_y as usize * 160 + ctx.ppu().scanline_x as usize);
+                    let buffer_index = lcdc_y as usize * 160 + ctx.ppu().scanline_x as usize;
                     let bg_pixel = ctx.ppu_mut().bg_fifo.pop_front().unwrap();
                     let obj_pixel = ctx.ppu_mut().obj_fifo.pop_front();
 
                     ctx.ppu_mut().screen_buffer[buffer_index] = {
-                        let gb_color = match (obj_pixel) {
+                        let gb_color = match obj_pixel {
                             Some(obj_pixel) => {
                                 if obj_pixel.0 == 0 || obj_pixel.1.contains(ObjAttrs::UNDER_BG) && bg_pixel != 0 {
                                     palette_lookup(ctx.ioregs().bg_palette(), bg_pixel)

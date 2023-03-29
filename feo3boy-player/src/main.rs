@@ -1,17 +1,16 @@
 use std::fs::File;
 use std::io::{self, Read, Write};
-use std::sync::mpsc::{self, Sender, Receiver};
 
 use clap::{App, Arg};
 use log::{info, warn, error, debug};
 
-use pixels::{Pixels, PixelsBuilder, SurfaceTexture, Error};
-use winit::event::{Event, DeviceEvent, WindowEvent, VirtualKeyCode, ElementState};
-use winit::event_loop::{ControlFlow, EventLoop};
+use pixels::{Pixels, PixelsBuilder, SurfaceTexture};
+use winit::event::{VirtualKeyCode};
+use winit::event_loop::{EventLoop};
 use winit::window::WindowBuilder;
 use winit_input_helper::WinitInputHelper;
 
-use cpal::{Data, SampleRate, SampleFormat, Stream};
+use cpal::{SampleRate, SampleFormat, Stream};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::Arc;
 use ringbuf::{HeapRb, Consumer};
@@ -19,18 +18,6 @@ use ringbuf::{HeapRb, Consumer};
 use feo3boy::gb::Gb;
 use feo3boy::memdev::{BiosRom, Cartridge};
 use feo3boy::input::{InputContext, ButtonStates};
-
-fn ascii_render(screen_buffer: &[(u8, u8, u8)]) {
-    let brightness_scale = ".'`^\",:;Il!i><~+_-?][}{1)(|\\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$";
-
-    for line in screen_buffer.chunks(160) {
-        let mut ascii_buffer = Vec::new();
-        for pixel in line {
-            ascii_buffer.push(brightness_scale.as_bytes()[brightness_scale.len() * ((pixel.0 as usize + pixel.1 as usize + pixel.2 as usize) / 3) / 256]);
-        }
-        print!("{}", std::str::from_utf8(&ascii_buffer).unwrap())
-    }
-}
 
 fn init_audio_stream(mut sample_consumer: Consumer<(i16,i16), Arc<HeapRb<(i16,i16)>>>) -> Option<(Stream, SampleRate)> {
     if let Some(device) = cpal::default_host().default_output_device() {
@@ -155,12 +142,6 @@ fn main() {
                 .takes_value(false)
                 .help("Mute the emulator (don't set up an audio stream)"),
         )
-        .arg(
-            Arg::with_name("ascii-video")
-                .long("ascii-video")
-                .takes_value(false)
-                .help("Dump screen buffer to terminal rendered with ASCII characters"),
-        )
         .get_matches();
 
     let bios = match argparser.value_of("bios") {
@@ -198,8 +179,8 @@ fn main() {
         PixelsBuilder::new(160, 144, surface_texture).enable_vsync(true).build().unwrap()
     };
 
-    let mut rb = HeapRb::new(200);
-    let (mut sample_producer, mut sample_consumer) = rb.split();
+    let rb = HeapRb::new(200);
+    let (mut sample_producer, sample_consumer) = rb.split();
     let audio_output_config = init_audio_stream(sample_consumer);
 
     if !argparser.is_present("mute") {

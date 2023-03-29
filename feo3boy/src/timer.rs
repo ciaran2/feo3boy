@@ -1,4 +1,3 @@
-use std::error::Error;
 use bitflags::bitflags;
 use crate::interrupts::{InterruptContext, InterruptFlags, Interrupts};
 use crate::memdev::{IoRegs, IoRegsContext};
@@ -57,7 +56,7 @@ impl TimerState {
 }
 
 fn increment_timer(ctx: &mut impl TimerContext) {
-    let (mut timer, overflow) = ctx.ioregs().timer().overflowing_add(1);
+    let (timer, overflow) = ctx.ioregs().timer().overflowing_add(1);
 
     if overflow {
         ctx.timer_mut().queue_interrupt();
