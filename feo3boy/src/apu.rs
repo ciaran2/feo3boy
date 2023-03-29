@@ -3,7 +3,7 @@ use bitflags::bitflags;
 use log::{debug, info};
 
 bitflags! {
-    #[derive(Default)]
+    #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
     pub struct SoundEnable : u8 {
         const ALL = 0b10000000;
         const CH4 = 0b00001000;
@@ -15,7 +15,7 @@ bitflags! {
 }
 
 bitflags! {
-    #[derive(Default)]
+    #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
     pub struct SoundPan : u8 {
         const CH4_LEFT  = 0b10000000;
         const CH3_LEFT  = 0b01000000;
@@ -29,7 +29,7 @@ bitflags! {
 }
 
 bitflags! {
-    #[derive(Default)]
+    #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
     pub struct SoundVolume : u8 {
         const VIN_LEFT  = 0b10000000;
         const VOL_LEFT  = 0b01110000;
@@ -39,7 +39,7 @@ bitflags! {
 }
 
 bitflags! {
-    #[derive(Default)]
+    #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
     pub struct SweepControl : u8 {
         const PACE       = 0b01110000;
         const SLOPE_DIR  = 0b00001000;
@@ -95,7 +95,7 @@ impl Sweep {
 }
 
 bitflags! {
-    #[derive(Default)]
+    #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
     pub struct PulseTimer : u8 {
         const DUTY_CYCLE = 0b11000000;
         const INIT_TIMER = 0b00111111;
@@ -109,7 +109,7 @@ impl PulseTimer {
 }
 
 bitflags! {
-    #[derive(Default)]
+    #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
     pub struct EnvelopeControl : u8 {
         const INIT_VOL  = 0b11110000;
         const DIRECTION = 0b00001000;
@@ -164,7 +164,7 @@ bitflags! {
 }
 
 bitflags! {
-    #[derive(Default)]
+    #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
     pub struct NoiseControl : u8 {
         const CLOCK_SHIFT = 0b11110000;
         const LFSR_WIDTH  = 0b00001000;

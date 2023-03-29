@@ -106,7 +106,7 @@ impl Component for Breakpoints {
         let change_addr = link.callback(|e| Msg::ChangeAddr {
             input: get_value_from_input_event(e),
         });
-        let onsubmit = link.callback(|e: FocusEvent| {
+        let onsubmit = link.callback(|e: SubmitEvent| {
             e.prevent_default();
             Msg::Add
         });

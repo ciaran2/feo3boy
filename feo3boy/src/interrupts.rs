@@ -6,7 +6,7 @@ use crate::memdev::{Addr, MemDevice};
 
 bitflags! {
     /// Available set of interrupt flags.
-    #[derive(Default)]
+    #[derive(Default, Debug, Copy, Clone, Eq, PartialEq)]
     pub struct InterruptFlags: u8 {
         /// Vertical blanking of the display.
         const VBLANK = 0b00001;
@@ -27,11 +27,6 @@ bitflags! {
 }
 
 impl InterruptFlags {
-    /// Gets an interator over the flags that are set in this InterruptFlags.
-    pub fn iter(self) -> InterruptFlagsIter {
-        self.into_iter()
-    }
-
     /// Gets the handler address for this particular interrupt. Panics if more than one
     /// flag is set.
     pub fn handler_addr(self) -> u16 {
@@ -39,23 +34,10 @@ impl InterruptFlags {
         const INTERRUPT_GAP: u16 = 0x08;
 
         assert!(
-            self.bits.count_ones() == 1,
+            self.bits().count_ones() == 1,
             "mut have exactly on interrupt handler set"
         );
-        FIRST_INTERRUPT + self.bits.trailing_zeros() as u16 * INTERRUPT_GAP
-    }
-}
-
-/// Gets an interator over the flags that are set in this InterruptFlags.
-impl IntoIterator for InterruptFlags {
-    type Item = InterruptFlags;
-    type IntoIter = InterruptFlagsIter;
-
-    fn into_iter(self) -> Self::IntoIter {
-        InterruptFlagsIter {
-            flags: self,
-            next: 1,
-        }
+        FIRST_INTERRUPT + self.bits().trailing_zeros() as u16 * INTERRUPT_GAP
     }
 }
 
@@ -95,7 +77,7 @@ impl MemDevice for InterruptEnable {
             "Address {}  out of range for Interrupt Enable Register",
             addr
         );
-        self.0.bits
+        self.0.bits()
     }
 
     fn write(&mut self, addr: Addr, value: u8) {
@@ -187,7 +169,7 @@ impl<M: MemDevice> Interrupts for MemInterrupts<M> {
     }
 
     fn set_queued(&mut self, flags: InterruptFlags) {
-        self.0.write(0xff0f.into(), flags.bits);
+        self.0.write(0xff0f.into(), flags.bits());
     }
 
     fn enabled(&self) -> InterruptFlags {
@@ -195,6 +177,6 @@ impl<M: MemDevice> Interrupts for MemInterrupts<M> {
     }
 
     fn set_enabled(&mut self, flags: InterruptFlags) {
-        self.0.write(0xffff.into(), flags.bits);
+        self.0.write(0xffff.into(), flags.bits());
     }
 }

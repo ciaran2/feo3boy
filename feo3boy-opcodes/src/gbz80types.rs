@@ -8,7 +8,7 @@ use crate::microcode::Microcode;
 
 bitflags! {
     /// Flags set after various operations.
-    #[derive(Default)]
+    #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
     pub struct Flags: u8 {
         /// result was zero.
         const ZERO = 0x80;
@@ -69,7 +69,7 @@ impl MicrocodeReadable for Flags {
 
 impl AsLiteral for Flags {
     fn as_literal(&self) -> Literal {
-        let val = self.bits;
+        let val = self.bits();
         quote! { Flags::from_bits_retain(#val) }.into()
     }
 }

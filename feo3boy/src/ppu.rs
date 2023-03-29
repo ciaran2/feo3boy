@@ -14,7 +14,7 @@ pub enum LcdMode {
 
 bitflags! {
     /// Lcd control status flags
-    #[derive(Default)]
+    #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
     pub struct LcdStat: u8 {
         const READ_WRITE = 0b1111000;
 
@@ -63,7 +63,7 @@ impl LcdStat {
 
 bitflags! {
     /// Available set of interrupt flags.
-    #[derive(Default)]
+    #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
     pub struct LcdFlags: u8 {
         const BG_DISPLAY = 0b00000001;
 
@@ -94,8 +94,7 @@ impl LcdFlags {
 }
 
 bitflags! {
-
-    #[derive(Default)]
+    #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
     pub struct ObjAttrs: u8 {
         const CGB_PALETTE   = 0b00000111;
         const CGB_VRAM_BANK = 0b00001000;

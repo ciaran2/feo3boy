@@ -6,8 +6,8 @@ edition = "2021"
 [dependencies]
 feo3boy = { path = "../feo3boy" }
 feo3boy-opcodes = { path = "../feo3boy-opcodes" }
-gloo = { version = "0.6", features = ["futures"] }
-console_log = "0.2"
+gloo = { version = "0.8", features = ["futures"] }
+console_log = { version = "1", features = ["color"] }
 # Not direclty used but `now` doesn't link properly if we don't set the wasm-bindgen
 # feature, and that's needed when actually using Serde or Serde-Json, and breaks the whole
 # app.
@@ -20,7 +20,7 @@ serde = "1"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
-yew = "0.19"
+yew = { version = "0.20", features = ["csr"] }
 
 [dependencies.web-sys]
 version = "0.3"

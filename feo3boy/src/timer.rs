@@ -5,7 +5,7 @@ use bitflags::bitflags;
 
 bitflags! {
     /// Lcd control status flags
-    #[derive(Default)]
+    #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
     pub struct TimerControl: u8 {
         const TIMER_PERIOD = 0b0000011;
         const TIMER_ENABLE = 0b0000100;
