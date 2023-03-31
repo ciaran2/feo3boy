@@ -2,11 +2,12 @@ use std::mem;
 
 use bitflags::bitflags;
 
-use crate::memdev::{Addr, MemDevice};
+use crate::memdev::MemDevice;
 
 bitflags! {
     /// Available set of interrupt flags.
-    #[derive(Default, Debug, Copy, Clone, Eq, PartialEq)]
+    #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, MemDevice)]
+    #[memdev(bitflags)]
     pub struct InterruptFlags: u8 {
         /// Vertical blanking of the display.
         const VBLANK = 0b00001;
@@ -41,54 +42,10 @@ impl InterruptFlags {
     }
 }
 
-/// Iterates over InterruptFlags in priority order.
-pub struct InterruptFlagsIter {
-    /// The flags being iterated.
-    flags: InterruptFlags,
-    /// The next bit to check.
-    next: u8,
-}
-
-impl Iterator for InterruptFlagsIter {
-    type Item = InterruptFlags;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            let flag = InterruptFlags::from_bits_truncate(self.next);
-            if flag.is_empty() {
-                return None;
-            }
-            self.next <<= 1;
-            if self.flags.contains(flag) {
-                return Some(flag);
-            }
-        }
-    }
-}
-
 /// The Interrupt Enable (IE) register. Implements MemDevice.
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, MemDevice)]
+#[memdev(passthrough)]
 pub struct InterruptEnable(pub InterruptFlags);
-
-impl MemDevice for InterruptEnable {
-    fn read(&self, addr: Addr) -> u8 {
-        assert!(
-            addr.relative() == 0,
-            "Address {}  out of range for Interrupt Enable Register",
-            addr
-        );
-        self.0.bits()
-    }
-
-    fn write(&mut self, addr: Addr, value: u8) {
-        assert!(
-            addr.relative() == 0,
-            "Address {}  out of range for Interrupt Enable Register",
-            addr
-        );
-        self.0 = InterruptFlags::from_bits_truncate(value);
-    }
-}
 
 /// Context trait for accessing interrupts.
 pub trait InterruptContext {

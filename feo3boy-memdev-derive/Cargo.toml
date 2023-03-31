@@ -1,5 +1,5 @@
 [package]
-name = "feo3boy-microcode-generator"
+name = "feo3boy-memdev-derive"
 version = "0.1.0"
 edition = "2021"
 
@@ -10,5 +10,5 @@ proc-macro = true
 derive-syn-parse = "0.1"
 syn = { version = "2", features = ["full"] }
 proc-macro2 = "1"
-quote = "1"
 proc-macro-crate = "1"
+quote = "1"

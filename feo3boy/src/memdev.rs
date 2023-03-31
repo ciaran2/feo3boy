@@ -5,13 +5,14 @@ use std::ops::{Deref, DerefMut};
 use log::trace;
 use thiserror::Error;
 
-use crate::apu::{
-    Channel, NoiseChannel, PulseChannel, SoundEnable, SoundPan, SoundVolume, WavetableChannel,
-};
+pub use feo3boy_memdev_derive::MemDevice;
+
+use crate::apu::ApuRegs;
 use crate::input::ButtonRegister;
 use crate::interrupts::{InterruptContext, InterruptEnable, InterruptFlags, Interrupts};
-use crate::ppu::{LcdFlags, LcdStat};
-use crate::timer::TimerControl;
+use crate::ppu::PpuRegs;
+use crate::serial::SerialRegs;
+use crate::timer::TimerRegs;
 
 pub use cartridge::{Cartridge, Mbc1Rom, ParseCartridgeError, RamBank, RomBank, RomOnly};
 
@@ -59,11 +60,36 @@ impl Addr {
     }
 
     /// Constructs a new address, offsetting the relative address by the specified amount.
+    /// Intended to be used to offset to the start of a child [`MemDevice`].
+    ///
+    /// Produces an address which is relative to `shift` in the current relative address
+    /// space. This is useful when passing an address to a child mem device: call
+    /// `offset_by` with the index of the start of the child relative to the parent to get
+    /// an address which indexes from the start of the child.
     pub fn offset_by(&self, shift: u16) -> Self {
-        assert!(shift <= self.relative, "Attempting to offset with overflow");
+        assert!(
+            shift <= self.relative,
+            "Attempting to offset with overflow. Addr: {self}, shift: {shift}"
+        );
         Addr {
             raw: self.raw,
             relative: self.relative - shift,
+        }
+    }
+
+    /// Skip over is the reverse of `offset_by`. It is intended to be used when you want
+    /// to bypass part of a child `MemDevice`. It produces an address which skips the
+    /// first `skipped` bytes of the current relative address space. Typical usage would
+    /// be `addr.offset_by(child_start).skip_over(num_bytes_to_skip)`.
+    pub fn skip_over(&self, skipped: u16) -> Self {
+        Addr {
+            raw: self.raw,
+            relative: match self.relative.checked_add(skipped) {
+                Some(val) => val,
+                None => {
+                    panic!("Attempting to skip_over with overflow. Addr: {self}, shift: {skipped}")
+                }
+            },
         }
     }
 }
@@ -228,6 +254,46 @@ impl TryFrom<Vec<u8>> for BiosRom {
     }
 }
 
+/// Memory Device for the bios-enable bit.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct BiosEnable(bool);
+
+impl BiosEnable {
+    /// Return true if bios is enabled.
+    pub fn enabled(&self) -> bool {
+        self.0
+    }
+}
+
+impl Default for BiosEnable {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
+impl MemDevice for BiosEnable {
+    fn read(&self, addr: Addr) -> u8 {
+        assert!(
+            addr.index() == 0,
+            "Address {} out of range for BiosEnable",
+            addr
+        );
+        // Should this return 0 for enabled? You write nonzero to it to *disable* bios.
+        // Actually, should it even return anything at all? Is it even readable?
+        self.0 as u8
+    }
+
+    fn write(&mut self, addr: Addr, data: u8) {
+        assert!(
+            addr.index() == 0,
+            "Address {} out of range for BiosEnable",
+            addr
+        );
+        // If value is false, stay false. If passed a non-zero value, become false.
+        self.0 = self.0 && data == 0;
+    }
+}
+
 impl<const N: usize> MemDevice for [u8; N] {
     fn read(&self, addr: Addr) -> u8 {
         match self.get(addr.index()) {
@@ -314,451 +380,75 @@ impl<M> DerefMut for MaskableMem<M> {
     }
 }
 
+/// A u8 acts as a single-byte memory device.
+impl MemDevice for u8 {
+    #[inline]
+    fn read(&self, addr: Addr) -> u8 {
+        assert!(addr.index() == 0, "Address {} out of range for u8", addr);
+        *self
+    }
+
+    #[inline]
+    fn write(&mut self, addr: Addr, val: u8) {
+        assert!(addr.index() == 0, "Address {} out of range for u8", addr);
+        *self = val;
+    }
+}
+
 // This makes sure that Box<dyn MemDevice> implements MemDevice (as well as Box<Anything that
 // implements MemDevice>).
 impl<D: MemDevice + ?Sized> MemDevice for Box<D> {
+    #[inline]
     fn read(&self, addr: Addr) -> u8 {
         (**self).read(addr)
     }
 
+    #[inline]
     fn write(&mut self, addr: Addr, value: u8) {
         (**self).write(addr, value)
     }
 }
 
 /// Memory device connecting memory mapped IO.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct MemMappedIo {
     pub buttons: ButtonRegister,
-    pub serial_data: u8,
-    pub serial_control: u8,
-    pub divider: u16,
-    pub timer: u8,
-    pub timer_mod: u8,
-    pub timer_control: TimerControl,
-    pub bios_enabled: bool,
-    // apu status and settings
-    pub ch1: PulseChannel,
-    pub ch2: PulseChannel,
-    pub ch3: WavetableChannel,
-    pub ch4: NoiseChannel,
-    pub sound_volume: SoundVolume,
-    pub sound_pan: SoundPan,
-    pub sound_enable: SoundEnable,
-    pub wavetable: [u8; 16],
-    // ppu status and settings
-    pub lcd_control: LcdFlags,
-    pub lcd_status: LcdStat,
-    pub scroll_y: u8,
-    pub scroll_x: u8,
-    pub lcdc_y: u8,
-    pub lcdc_y_compare: u8,
-    pub dma_addr: u8,
-    pub bg_palette: u8,
-    pub obj_palette: [u8; 2],
-    pub window_y: u8,
-    pub window_x: u8,
+    /// Registers used by the serial subsystem.
+    pub serial_regs: SerialRegs,
+    /// Registers used by the timer.
+    pub timer_regs: TimerRegs,
+    /// Set of active interrupts.
     pub interrupt_flags: InterruptFlags,
+    /// apu status and settings
+    pub apu_regs: ApuRegs,
+    /// ppu status and settings
+    pub ppu_regs: PpuRegs,
+    pub bios_enable: BiosEnable,
 }
 
 impl MemMappedIo {
     /// Construct new memory-mapped IO manager.
     pub fn new() -> Self {
-        MemMappedIo {
-            buttons: ButtonRegister::all(),
-            serial_data: 0x00,
-            serial_control: 0x00,
-            divider: 0x0000,
-            timer: 0x00,
-            timer_mod: 0x00,
-            timer_control: TimerControl::default(),
-            bios_enabled: true,
-            // apu status and settings
-            ch1: PulseChannel::default(),
-            ch2: PulseChannel::default(),
-            ch3: WavetableChannel::default(),
-            ch4: NoiseChannel::default(),
-            sound_volume: SoundVolume::default(),
-            sound_pan: SoundPan::empty(),
-            sound_enable: SoundEnable::empty(),
-            wavetable: [0; 16],
-            // ppu status and settings
-            lcd_control: LcdFlags::empty(),
-            lcd_status: LcdStat::empty(),
-            scroll_y: 0x00,
-            scroll_x: 0x00,
-            lcdc_y: 0x00,
-            lcdc_y_compare: 0x00,
-            dma_addr: 0x00,
-            bg_palette: 0x00,
-            obj_palette: [0x00; 2],
-            window_y: 0x00,
-            window_x: 0x00,
-            interrupt_flags: InterruptFlags::empty(),
-        }
-    }
-
-    /// Returns true if bios is enabled.
-    pub fn bios_enabled(&self) -> bool {
-        self.bios_enabled
+        Default::default()
     }
 }
 
-impl Default for MemMappedIo {
-    fn default() -> Self {
-        Self::new()
+memdev_fields! {
+    MemMappedIo {
+        0x00 => buttons,
+        0x01..=0x02 => serial_regs,
+        0x03 => 0xff,
+        0x04..=0x07 => timer_regs,
+        0x08..=0x0e => 0xff,
+        0x0f => interrupt_flags,
+        0x10 => 0xff,
+        0x10..=0x23 => apu_regs,
+        0x24..=0x3f => 0xff,
+        0x40..=0x4b => ppu_regs,
+        0x4c..=0x4f => 0xff,
+        0x50 => bios_enable,
+        0x51..=0x7f => 0xff,
     }
-}
-
-impl MemDevice for MemMappedIo {
-    fn read(&self, addr: Addr) -> u8 {
-        match addr.relative() {
-            0x00 => self.buttons.bits(),
-            0x01 => self.serial_data,
-            0x02 => self.serial_control,
-            0x03 => 0xff,
-            0x04 => (self.divider / 0x100) as u8,
-            0x05 => self.timer,
-            0x06 => self.timer_mod,
-            0x07 => self.timer_control.bits(),
-            0x08..=0x0e => 0xff,
-            0x0f => self.interrupt_flags.bits(),
-            0x10 => 0xff,
-            0x11 => self.ch1.timer.bits(),
-            0x12 => self.ch1.envelope_control.bits(),
-            0x13 => self.ch1.wavelength_low(),
-            0x14 => self.ch1.read_control(),
-            0x15 => 0xff,
-            0x16 => self.ch2.timer.bits(),
-            0x17 => self.ch2.envelope_control.bits(),
-            0x18 => self.ch2.wavelength_low(),
-            0x19 => self.ch2.read_control(),
-            0x1a..=0x3f => 0xff,
-            0x40 => self.lcd_control.bits(),
-            0x41 => self.lcd_status.bits(),
-            0x42 => self.scroll_y,
-            0x43 => self.scroll_x,
-            0x44 => self.lcdc_y,
-            0x45 => self.lcdc_y_compare,
-            0x46 => self.dma_addr,
-            0x47 => self.bg_palette,
-            0x48 => self.obj_palette[0],
-            0x49 => self.obj_palette[1],
-            0x4a => self.window_y,
-            0x4b => self.window_x,
-            0x4c..=0x4f => 0xff,
-            0x50 => self.bios_enabled as u8,
-            0x51..=0x7f => 0xff,
-            _ => panic!("Address {} out of range for Mem Mapped IO", addr),
-        }
-    }
-
-    fn write(&mut self, addr: Addr, value: u8) {
-        match addr.relative() {
-            0x00 => self.buttons = self.buttons.set_writable(value),
-            0x01 => self.serial_data = value,
-            0x02 => self.serial_control = value,
-            0x03 => {}
-            0x04 => self.divider = 0x0000,
-            0x05 => self.timer = value,
-            0x06 => self.timer_mod = value,
-            0x07 => self.timer_control = TimerControl::from_bits(value),
-            0x08..=0x0e => {}
-            0x0f => self.interrupt_flags = InterruptFlags::from_bits_truncate(value),
-            0x10 => {}
-            0x11 => self.ch1.set_length(value),
-            0x12 => self.ch1.set_envelope(value),
-            0x13 => self.ch1.set_wavelength_low(value),
-            0x14 => self.ch1.set_control(value),
-            0x15 => {}
-            0x16 => self.ch2.set_length(value),
-            0x17 => self.ch2.set_envelope(value),
-            0x18 => self.ch2.set_wavelength_low(value),
-            0x19 => self.ch2.set_control(value),
-            0x1a => self.ch3.set_enable(value),
-            0x1b => self.ch3.set_length(value),
-            0x1c => self.ch3.set_level(value),
-            0x1d => self.ch3.set_wavelength_low(value),
-            0x1e => self.ch3.set_control(value),
-            0x20 => self.ch4.set_length(value),
-            0x21 => self.ch4.set_envelope(value),
-            0x22 => self.ch4.set_noise_control(value),
-            0x23 => self.ch4.set_control(value),
-            0x1f => {}
-            0x24..=0x2f => {}
-            0x30..=0x3f => self.ch3.set_samples(addr.offset_by(0x30).relative(), value),
-            0x40 => self.lcd_control = LcdFlags::from_bits_truncate(value),
-            0x41 => self.lcd_status = self.lcd_status.with_writeable(value),
-            0x42 => self.scroll_y = value,
-            0x43 => self.scroll_x = value,
-            0x44 => {}
-            0x45 => self.lcdc_y_compare = value,
-            0x46 => self.dma_addr = value,
-            0x47 => self.bg_palette = value,
-            0x48 => self.obj_palette[0] = value,
-            0x49 => self.obj_palette[1] = value,
-            0x4a => self.window_y = value,
-            0x4b => self.window_x = value,
-            0x4c..=0x4f => {}
-            0x50 => {
-                if value & 1 != 0 {
-                    self.bios_enabled = false;
-                }
-            }
-            0x51..=0x7f => {}
-            _ => panic!("Address {} out of range for Mem Mapped IO", addr),
-        }
-    }
-}
-
-impl IoRegs for MemMappedIo {
-    fn buttons(&self) -> ButtonRegister {
-        self.buttons
-    }
-    fn set_buttons(&mut self, val: ButtonRegister) {
-        self.buttons = val;
-    }
-
-    fn serial_data(&self) -> u8 {
-        self.serial_data
-    }
-
-    fn set_serial_data(&mut self, val: u8) {
-        self.serial_data = val;
-    }
-
-    fn serial_control(&self) -> u8 {
-        self.serial_control
-    }
-
-    fn set_serial_control(&mut self, val: u8) {
-        self.serial_control = val;
-    }
-
-    fn divider(&self) -> u16 {
-        self.divider
-    }
-    fn set_divider(&mut self, val: u16) {
-        self.divider = val;
-    }
-    fn timer(&self) -> u8 {
-        self.timer
-    }
-    fn set_timer(&mut self, val: u8) {
-        self.timer = val;
-    }
-    fn timer_mod(&self) -> u8 {
-        self.timer_mod
-    }
-    fn set_timer_mod(&mut self, val: u8) {
-        self.timer_mod = val;
-    }
-    fn timer_control(&self) -> TimerControl {
-        self.timer_control
-    }
-    fn set_timer_control(&mut self, val: TimerControl) {
-        self.timer_control = val;
-    }
-
-    // apu status and settings
-    fn ch1(&self) -> &PulseChannel {
-        &self.ch1
-    }
-    fn ch1_mut(&mut self) -> &mut PulseChannel {
-        &mut self.ch1
-    }
-
-    fn ch2(&self) -> &PulseChannel {
-        &self.ch2
-    }
-    fn ch2_mut(&mut self) -> &mut PulseChannel {
-        &mut self.ch2
-    }
-
-    fn ch3(&self) -> &WavetableChannel {
-        &self.ch3
-    }
-    fn ch3_mut(&mut self) -> &mut WavetableChannel {
-        &mut self.ch3
-    }
-
-    fn ch4(&self) -> &NoiseChannel {
-        &self.ch4
-    }
-    fn ch4_mut(&mut self) -> &mut NoiseChannel {
-        &mut self.ch4
-    }
-
-    fn sound_volume(&self) -> SoundVolume {
-        self.sound_volume
-    }
-    fn sound_pan(&self) -> SoundPan {
-        self.sound_pan
-    }
-    fn sound_enable(&self) -> SoundEnable {
-        self.sound_enable
-    }
-    fn wavetable(&self) -> [u8; 16] {
-        self.wavetable
-    }
-
-    fn lcd_control(&self) -> LcdFlags {
-        self.lcd_control
-    }
-
-    fn lcd_stat(&self) -> LcdStat {
-        self.lcd_status
-    }
-    fn set_lcd_stat(&mut self, val: LcdStat) {
-        self.lcd_status = val;
-    }
-
-    fn scroll_y(&self) -> u8 {
-        self.scroll_y
-    }
-    fn set_scroll_y(&mut self, val: u8) {
-        self.scroll_y = val;
-    }
-
-    fn scroll_x(&self) -> u8 {
-        self.scroll_x
-    }
-    fn set_scroll_x(&mut self, val: u8) {
-        self.scroll_x = val;
-    }
-
-    fn lcdc_y(&self) -> u8 {
-        self.lcdc_y
-    }
-    fn set_lcdc_y(&mut self, val: u8) {
-        self.lcdc_y = val;
-    }
-
-    fn lcdc_y_compare(&self) -> u8 {
-        self.lcdc_y_compare
-    }
-    fn set_lcdc_y_compare(&mut self, val: u8) {
-        self.lcdc_y_compare = val;
-    }
-
-    fn dma_addr(&self) -> u8 {
-        self.dma_addr
-    }
-    fn set_dma_addr(&mut self, val: u8) {
-        self.dma_addr = val;
-    }
-
-    fn bg_palette(&self) -> u8 {
-        self.bg_palette
-    }
-    fn set_bg_palette(&mut self, val: u8) {
-        self.bg_palette = val;
-    }
-
-    fn obj_palette(&self, i: usize) -> u8 {
-        self.obj_palette[i]
-    }
-
-    fn window_y(&self) -> u8 {
-        self.window_y
-    }
-    fn set_window_y(&mut self, val: u8) {
-        self.window_y = val;
-    }
-
-    fn window_x(&self) -> u8 {
-        self.window_x
-    }
-    fn set_window_x(&mut self, val: u8) {
-        self.window_x = val;
-    }
-}
-
-/// Context trait for providing access to IO registers.
-pub trait IoRegsContext {
-    type IoRegs: IoRegs;
-
-    /// Get read-only access to the IO registers.
-    fn ioregs(&self) -> &Self::IoRegs;
-
-    /// Get write access to the IO registers.
-    fn ioregs_mut(&mut self) -> &mut Self::IoRegs;
-}
-
-/// Trait for use with contexts to provide access to IO registers.
-pub trait IoRegs {
-    /// Get the current button control and status
-    fn buttons(&self) -> ButtonRegister;
-
-    /// Set the current button control and status
-    fn set_buttons(&mut self, val: ButtonRegister);
-
-    /// Get the current value of the serial data register.
-    fn serial_data(&self) -> u8;
-
-    /// Set the current value of the serial data register.
-    fn set_serial_data(&mut self, val: u8);
-
-    /// Get the current value of the serial control register.
-    fn serial_control(&self) -> u8;
-
-    /// Set the current value of the serial control register.
-    fn set_serial_control(&mut self, val: u8);
-
-    fn divider(&self) -> u16;
-    fn set_divider(&mut self, val: u16);
-    fn timer(&self) -> u8;
-    fn set_timer(&mut self, val: u8);
-    fn timer_mod(&self) -> u8;
-    fn set_timer_mod(&mut self, val: u8);
-    fn timer_control(&self) -> TimerControl;
-    fn set_timer_control(&mut self, val: TimerControl);
-
-    fn ch1(&self) -> &PulseChannel;
-    fn ch1_mut(&mut self) -> &mut PulseChannel;
-    fn ch2(&self) -> &PulseChannel;
-    fn ch2_mut(&mut self) -> &mut PulseChannel;
-    fn ch3(&self) -> &WavetableChannel;
-    fn ch3_mut(&mut self) -> &mut WavetableChannel;
-    fn ch4(&self) -> &NoiseChannel;
-    fn ch4_mut(&mut self) -> &mut NoiseChannel;
-
-    fn sound_volume(&self) -> SoundVolume;
-    fn sound_pan(&self) -> SoundPan;
-    fn sound_enable(&self) -> SoundEnable;
-    fn wavetable(&self) -> [u8; 16];
-
-    fn lcd_control(&self) -> LcdFlags;
-
-    fn lcd_stat(&self) -> LcdStat;
-    fn set_lcd_stat(&mut self, val: LcdStat);
-
-    fn scroll_y(&self) -> u8;
-    fn set_scroll_y(&mut self, val: u8);
-
-    fn scroll_x(&self) -> u8;
-    fn set_scroll_x(&mut self, val: u8);
-
-    fn lcdc_y(&self) -> u8;
-    fn set_lcdc_y(&mut self, val: u8);
-
-    fn lcdc_y_compare(&self) -> u8;
-    fn set_lcdc_y_compare(&mut self, val: u8);
-
-    fn dma_addr(&self) -> u8;
-    fn set_dma_addr(&mut self, val: u8);
-
-    fn bg_palette(&self) -> u8;
-    fn set_bg_palette(&mut self, val: u8);
-
-    fn obj_palette(&self, i: usize) -> u8;
-
-    fn window_y(&self) -> u8;
-    fn set_window_y(&mut self, val: u8);
-
-    fn window_x(&self) -> u8;
-    fn set_window_x(&mut self, val: u8);
-    // TODO: other IO registers.
 }
 
 pub type Vram = MaskableMem<MaskableMem<[u8; 0x2000]>>;
@@ -842,7 +532,7 @@ impl MemDevice for GbMmu {
         trace!("Read from MMU address {:#x}", addr.raw);
         // Address guaranteed to be in range since we cover the whole memory space.
         match addr.relative() {
-            0x0..=0xff if self.io.bios_enabled() => self.bios.read(addr),
+            0x0..=0xff if self.io.bios_enable.enabled() => self.bios.read(addr),
             0x0..=0x7fff => self.cart.read(addr),
             0x8000..=0x9fff => self.vram.read(addr.offset_by(0x8000)),
             // Cartridge ram starts right after cartridge Rom, so the offset used here is the
@@ -870,13 +560,16 @@ impl MemDevice for GbMmu {
         );
         // Address guaranteed to be in range since we cover the whole memory space.
         match addr.relative() {
-            0x0..=0xff if self.io.bios_enabled() => self.bios.write(addr, value),
+            0x0..=0xff if self.io.bios_enable.enabled() => self.bios.write(addr, value),
             0x0..=0x7fff => self.cart.write(addr, value),
             0x8000..=0x9fff => self.vram.write(addr.offset_by(0x8000), value),
-            // Cartridge ram starts right after cartridge Rom, so the offset used here is the
-            // size of vram, since we only want to shift the address by the ammount we skipped in
-            // order to splice in the vram.
-            0xa000..=0xbfff => self.cart.write(addr.offset_by(0x2000), value),
+            // Cartridge ram starts right after cartridge rom internally, so for this
+            // mapping we offset to the address where we are mapping cart ram, then skip
+            // over the cartridge rom to make sure that this mapping begins from the start
+            // of cartridge ram.
+            0xa000..=0xbfff => self
+                .cart
+                .write(addr.offset_by(0xa000).skip_over(0x8000), value),
             0xc000..=0xdfff => self.wram.write(addr.offset_by(0xc000), value),
             0xe000..=0xfdff => self.wram.write(addr.offset_by(0xe000), value),
             0xfe00..=0xfe9f => self.oam.write(addr.offset_by(0xfe00), value),
@@ -904,18 +597,6 @@ impl MemContext for GbMmu {
 
     fn mem_mut(&mut self) -> &mut Self::Mem {
         self
-    }
-}
-
-impl IoRegsContext for GbMmu {
-    type IoRegs = MemMappedIo;
-
-    fn ioregs(&self) -> &Self::IoRegs {
-        &self.io
-    }
-
-    fn ioregs_mut(&mut self) -> &mut Self::IoRegs {
-        &mut self.io
     }
 }
 

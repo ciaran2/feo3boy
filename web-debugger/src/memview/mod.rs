@@ -91,7 +91,7 @@ impl Component for Memview {
 
 impl Memview {
     fn view_bios(&self, ctx: &Context<Self>) -> Html {
-        let enabled = ctx.props().mem.io.bios_enabled;
+        let enabled = ctx.props().mem.io.bios_enable.enabled();
         let enabled_class = match enabled {
             false => "disabled",
             true => "enabled",
@@ -202,14 +202,14 @@ pub fn view_io(props: &ViewIoProps) -> Html {
         <div class="line">
             {addr(0xff01)}
             {named("Serial Data")}
-            <span class="byte">{hexbyte(props.io.serial_data)}</span>
-            <span class="byte charinterp">{interpret_as_char(props.io.serial_data)}</span>
-            <span class="byte">{format!("{:08b}", props.io.serial_data)}</span>
+            <span class="byte">{hexbyte(props.io.serial_regs.serial_data)}</span>
+            <span class="byte charinterp">{interpret_as_char(props.io.serial_regs.serial_data)}</span>
+            <span class="byte">{format!("{:08b}", props.io.serial_regs.serial_data)}</span>
         </div>
         <div class="line">
             {addr(0xff02)}
             {named("Serial Control")}
-            <span class="byte">{hexbyte(props.io.serial_control)}</span>
+            <span class="byte">{hexbyte(props.io.serial_regs.serial_control)}</span>
         </div>
         <div class="line bad">
             {addr(0xff03)}
@@ -218,22 +218,22 @@ pub fn view_io(props: &ViewIoProps) -> Html {
         <div class="line">
             {addr(0xff04)}
             {named("Divider")}
-            <span class="byte">{hex16(props.io.divider)}</span>
+            <span class="byte">{hex16(props.io.timer_regs.divider)}</span>
         </div>
         <div class="line">
             {addr(0xff05)}
             {named("Timer Accumulator")}
-            <span class="byte">{hexbyte(props.io.timer)}</span>
+            <span class="byte">{hexbyte(props.io.timer_regs.timer)}</span>
         </div>
         <div class="line">
             {addr(0xff06)}
             {named("Timer Modulo")}
-            <span class="byte">{hexbyte(props.io.timer_mod)}</span>
+            <span class="byte">{hexbyte(props.io.timer_regs.timer_mod)}</span>
         </div>
         <div class="line">
             {addr(0xff07)}
             {named("Timer Control")}
-            <span class="byte">{hexbyte(props.io.timer_control.bits())}</span>
+            <span class="byte">{hexbyte(props.io.timer_regs.timer_control.bits())}</span>
         </div>
         <div class="line bad">
             {addr_range(0xff08..=0xff0e)}
@@ -261,62 +261,62 @@ pub fn view_io(props: &ViewIoProps) -> Html {
         <div class="line">
             {addr(0xff40)}
             {named("LCD Control")}
-            <span class="byte">{hexbyte(props.io.lcd_control.bits())}</span>
+            <span class="byte">{hexbyte(props.io.ppu_regs.lcd_control.bits())}</span>
         </div>
         <div class="line">
             {addr(0xff41)}
             {named("LCD Status")}
-            <span class="byte">{hexbyte(props.io.lcd_status.bits())}</span>
+            <span class="byte">{hexbyte(props.io.ppu_regs.lcd_status.bits())}</span>
         </div>
         <div class="line">
             {addr(0xff42)}
             {named("SCX")}
-            <span class="byte">{hexbyte(props.io.scroll_x)}</span>
+            <span class="byte">{hexbyte(props.io.ppu_regs.scroll_x)}</span>
         </div>
         <div class="line">
             {addr(0xff43)}
             {named("SCY")}
-            <span class="byte">{hexbyte(props.io.scroll_y)}</span>
+            <span class="byte">{hexbyte(props.io.ppu_regs.scroll_y)}</span>
         </div>
         <div class="line">
             {addr(0xff44)}
             {named("LY")}
-            <span class="byte">{hexbyte(props.io.lcdc_y)}</span>
+            <span class="byte">{hexbyte(props.io.ppu_regs.lcdc_y)}</span>
         </div>
         <div class="line">
             {addr(0xff45)}
             {named("LYC")}
-            <span class="byte">{hexbyte(props.io.lcdc_y_compare)}</span>
+            <span class="byte">{hexbyte(props.io.ppu_regs.lcdc_y_compare)}</span>
         </div>
         <div class="line unimplemented">
             {addr(0xff46)}
             {named("DMA")}
-            <span class="byte">{hexbyte(props.io.dma_addr)}</span>
+            <span class="byte">{hexbyte(props.io.ppu_regs.dma_addr)}</span>
         </div>
         <div class="line">
             {addr(0xff47)}
             {named("BGP")}
-            <span class="byte">{hexbyte(props.io.bg_palette)}</span>
+            <span class="byte">{hexbyte(props.io.ppu_regs.bg_palette)}</span>
         </div>
         <div class="line">
             {addr(0xff48)}
             {named("OBP0")}
-            <span class="byte">{hexbyte(props.io.obj_palette[0])}</span>
+            <span class="byte">{hexbyte(props.io.ppu_regs.obj_palette[0])}</span>
         </div>
         <div class="line">
             {addr(0xff49)}
             {named("OBP1")}
-            <span class="byte">{hexbyte(props.io.obj_palette[1])}</span>
+            <span class="byte">{hexbyte(props.io.ppu_regs.obj_palette[1])}</span>
         </div>
         <div class="line">
             {addr(0xff4a)}
             {named("WY")}
-            <span class="byte">{hexbyte(props.io.window_y)}</span>
+            <span class="byte">{hexbyte(props.io.ppu_regs.window_y)}</span>
         </div>
         <div class="line">
             {addr(0xff4b)}
             {named("WX")}
-            <span class="byte">{hexbyte(props.io.window_x)}</span>
+            <span class="byte">{hexbyte(props.io.ppu_regs.window_x)}</span>
         </div>
         <div class="line bad">
             {addr_range(0xff4c..=0xff4f)}
@@ -325,7 +325,7 @@ pub fn view_io(props: &ViewIoProps) -> Html {
         <div class="line write-only">
             {addr(0xff50)}
             {named("BIOS Enabled")}
-            <span>{props.io.bios_enabled}</span>
+            <span>{props.io.bios_enable.enabled()}</span>
         </div>
         <div class="line bad">
             {addr_range(0xff51..=0xff7f)}

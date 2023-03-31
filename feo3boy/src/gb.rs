@@ -1,14 +1,14 @@
-use crate::apu::{self, ApuContext, ApuState};
+use crate::apu::{self, ApuContext, ApuRegs, ApuState};
 use crate::gbz80core::direct_executor::DirectExecutor;
 use crate::gbz80core::executor::Executor;
 use crate::gbz80core::microcode_executor::MicrocodeExecutor;
 use crate::gbz80core::{CpuContext, ExecutorContext, Gbz80State};
-use crate::input::{self, ButtonStates, InputContext};
+use crate::input::{self, ButtonRegister, ButtonStates, InputContext};
 use crate::interrupts::InterruptContext;
-use crate::memdev::{BiosRom, Cartridge, GbMmu, IoRegsContext, MemContext, Oam, Vram};
-use crate::ppu::{self, PpuContext, PpuState};
-use crate::serial::{self, SerialContext, SerialState};
-use crate::timer::{self, TimerContext, TimerState};
+use crate::memdev::{BiosRom, Cartridge, GbMmu, MemContext, Oam, Vram};
+use crate::ppu::{self, PpuContext, PpuRegs, PpuState};
+use crate::serial::{self, SerialContext, SerialRegs, SerialState};
+use crate::timer::{self, TimerContext, TimerRegs, TimerState};
 
 /// Represents a "real" gameboy, by explicitly using the GbMmu for memory.
 #[derive(Clone, Debug)]
@@ -151,20 +151,6 @@ impl<E: Executor> InterruptContext for Gb<E> {
     }
 }
 
-impl<E: Executor> IoRegsContext for Gb<E> {
-    type IoRegs = <GbMmu as IoRegsContext>::IoRegs;
-
-    #[inline]
-    fn ioregs(&self) -> &Self::IoRegs {
-        self.mmu.ioregs()
-    }
-
-    #[inline]
-    fn ioregs_mut(&mut self) -> &mut Self::IoRegs {
-        self.mmu.ioregs_mut()
-    }
-}
-
 impl<E: Executor> InputContext for Gb<E> {
     #[inline]
     fn button_states(&self) -> ButtonStates {
@@ -173,6 +159,14 @@ impl<E: Executor> InputContext for Gb<E> {
 
     fn set_button_states(&mut self, button_states: ButtonStates) {
         self.button_states = button_states;
+    }
+
+    fn button_reg(&self) -> ButtonRegister {
+        self.mmu.io.buttons
+    }
+
+    fn set_button_reg(&mut self, buttons: ButtonRegister) {
+        self.mmu.io.buttons = buttons;
     }
 }
 
@@ -185,6 +179,14 @@ impl<E: Executor> SerialContext for Gb<E> {
     fn serial_mut(&mut self) -> &mut SerialState {
         &mut self.serial
     }
+
+    fn serial_regs(&self) -> &SerialRegs {
+        &self.mmu.io.serial_regs
+    }
+
+    fn serial_regs_mut(&mut self) -> &mut SerialRegs {
+        &mut self.mmu.io.serial_regs
+    }
 }
 
 impl<E: Executor> TimerContext for Gb<E> {
@@ -195,6 +197,14 @@ impl<E: Executor> TimerContext for Gb<E> {
 
     fn timer_mut(&mut self) -> &mut TimerState {
         &mut self.timer
+    }
+
+    fn timer_regs(&self) -> &TimerRegs {
+        &self.mmu.io.timer_regs
+    }
+
+    fn timer_regs_mut(&mut self) -> &mut TimerRegs {
+        &mut self.mmu.io.timer_regs
     }
 }
 
@@ -207,6 +217,14 @@ impl<E: Executor> ApuContext for Gb<E> {
     fn apu_mut(&mut self) -> &mut ApuState {
         &mut self.apu
     }
+
+    fn apu_regs(&self) -> &ApuRegs {
+        &self.mmu.io.apu_regs
+    }
+
+    fn apu_regs_mut(&mut self) -> &mut ApuRegs {
+        &mut self.mmu.io.apu_regs
+    }
 }
 
 impl<E: Executor> PpuContext for Gb<E> {
@@ -217,6 +235,14 @@ impl<E: Executor> PpuContext for Gb<E> {
 
     fn ppu_mut(&mut self) -> &mut PpuState {
         &mut self.ppu
+    }
+
+    fn ppu_regs(&self) -> &PpuRegs {
+        &self.mmu.io.ppu_regs
+    }
+
+    fn ppu_regs_mut(&mut self) -> &mut PpuRegs {
+        &mut self.mmu.io.ppu_regs
     }
 
     fn vram(&self) -> &Vram {

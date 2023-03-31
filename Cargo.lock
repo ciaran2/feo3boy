@@ -740,6 +740,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c87e182de0887fd5361989c677c4e8f5000cd9491d6d563161a8f3a5519fc7f"
 
 [[package]]
+name = "derive-syn-parse"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e79116f119dd1dba1abf1f3405f03b9b0e79a27a3883864bfebded8a3dc768cd"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
 name = "dispatch"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -807,6 +818,7 @@ dependencies = [
  "bitflags 2.0.2",
  "criterion",
  "env_logger",
+ "feo3boy-memdev-derive",
  "feo3boy-opcodes",
  "log",
  "once_cell",
@@ -814,9 +826,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "feo3boy-memdev-derive"
+version = "0.1.0"
+dependencies = [
+ "derive-syn-parse",
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.11",
+]
+
+[[package]]
 name = "feo3boy-microcode-generator"
 version = "0.1.0"
 dependencies = [
+ "derive-syn-parse",
+ "proc-macro-crate",
  "proc-macro2",
  "quote",
  "syn 2.0.11",

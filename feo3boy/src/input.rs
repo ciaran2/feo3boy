@@ -1,7 +1,7 @@
 use bitflags::bitflags;
 
 use crate::interrupts::{InterruptContext, InterruptFlags, Interrupts};
-use crate::memdev::{IoRegs, IoRegsContext};
+use crate::memdev::MemDevice;
 
 bitflags! {
     /// Lcd control status flags
@@ -38,7 +38,8 @@ impl ButtonStates {
 bitflags! {
     /// Register for control and status of buttons
     /// Counterintuitively 0 is true because the buttons pull the circuit to ground
-    #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+    #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash, MemDevice)]
+    #[memdev(bitflags, writable = ButtonRegister::BUTTON_SELECTORS)]
     pub struct ButtonRegister: u8 {
         const NO_ACTIONS       = 0b100000;
         const NO_DIRECTIONS    = 0b010000;
@@ -51,26 +52,25 @@ bitflags! {
     }
 }
 
-impl ButtonRegister {
-    pub fn set_writable(&self, data: u8) -> ButtonRegister {
-        (*self & ButtonRegister::BUTTONS)
-            | (ButtonRegister::from_bits_truncate(data) & ButtonRegister::BUTTON_SELECTORS)
-    }
-}
-
 /// Context trait providing access to fields needed to service graphics.
-pub trait InputContext: IoRegsContext + InterruptContext {
+pub trait InputContext: InterruptContext {
     /// get the button state
     fn button_states(&self) -> ButtonStates;
 
     /// set the button state
     fn set_button_states(&mut self, button_states: ButtonStates);
+
+    /// Get the value of the button register.
+    fn button_reg(&self) -> ButtonRegister;
+
+    /// Set the value of the button register.
+    fn set_button_reg(&mut self, buttons: ButtonRegister);
 }
 
 /// "update" rather than "tick" here because the input is not on a clock like the
 /// other components and can theoretically be updated at any time
 pub fn update(ctx: &mut impl InputContext) {
-    let button_reg = ctx.ioregs().buttons();
+    let button_reg = ctx.button_reg();
 
     let no_directions = button_reg.contains(ButtonRegister::NO_DIRECTIONS);
     let no_actions = button_reg.contains(ButtonRegister::NO_ACTIONS);
@@ -86,6 +86,5 @@ pub fn update(ctx: &mut impl InputContext) {
         ctx.interrupts_mut().send(InterruptFlags::JOYPAD);
     }
 
-    ctx.ioregs_mut()
-        .set_buttons((button_reg & ButtonRegister::BUTTON_SELECTORS) | new_button_status);
+    ctx.set_button_reg((button_reg & ButtonRegister::BUTTON_SELECTORS) | new_button_status);
 }

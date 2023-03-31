@@ -1,10 +1,12 @@
+use derive_syn_parse::Parse;
 use proc_macro2::Ident;
-use syn::parse::{Error, Parse, ParseStream, Result};
+use syn::parse::{Parse, ParseStream, Result};
 use syn::punctuated::Punctuated;
 use syn::token::Bracket;
 use syn::{bracketed, Attribute, Token};
 
 /// The contents of the `allowed_types!` macro invocation.
+#[derive(Parse)]
 pub struct AllowedTypesMappings {
     pub name: AllowedTypesName,
     /// The comma token between the name and the types list.
@@ -15,35 +17,15 @@ pub struct AllowedTypesMappings {
     pub trailing_comma: Option<Token![,]>,
 }
 
-impl Parse for AllowedTypesMappings {
-    fn parse(input: ParseStream) -> Result<Self> {
-        Ok(AllowedTypesMappings {
-            name: input.parse()?,
-            comma: input.parse()?,
-            types: input.parse()?,
-            trailing_comma: input.parse()?,
-        })
-    }
-}
-
 /// Defines the mapping of the allowed-types name.
+#[derive(Parse)]
 pub struct AllowedTypesName {
     /// The literal token `name`.
-    pub name: Name,
+    pub name: kw::name,
     /// The assignment on the first line of the macro invocation.
     pub equals: Token![=],
     /// The identifier for the AllowedTypes generated type.
     pub ident: Ident,
-}
-
-impl Parse for AllowedTypesName {
-    fn parse(input: ParseStream) -> Result<Self> {
-        Ok(Self {
-            name: input.parse()?,
-            equals: input.parse()?,
-            ident: input.parse()?,
-        })
-    }
 }
 
 /// List of allowed types. Of the form:
@@ -56,7 +38,7 @@ impl Parse for AllowedTypesName {
 /// ```
 pub struct AllowedTypesList {
     /// The "types" token.
-    pub types: Types,
+    pub types: kw::types,
     /// The assignment between `types` and `[`
     pub equals: Token![=],
     /// The brackets for the type mappings.
@@ -100,34 +82,7 @@ impl Parse for AllowedTypesMapping {
     }
 }
 
-/// The literal ident "types"
-pub struct Types {
-    pub ident: Ident,
-}
-
-impl Parse for Types {
-    fn parse(input: ParseStream) -> Result<Self> {
-        let ident: Ident = input.parse()?;
-        if ident != "types" {
-            Err(Error::new(ident.span(), "Expected \"types\""))
-        } else {
-            Ok(Self { ident })
-        }
-    }
-}
-
-/// The literal ident "name"
-pub struct Name {
-    pub ident: Ident,
-}
-
-impl Parse for Name {
-    fn parse(input: ParseStream) -> Result<Self> {
-        let ident: Ident = input.parse()?;
-        if ident != "name" {
-            Err(Error::new(ident.span(), "Expected \"name\""))
-        } else {
-            Ok(Self { ident })
-        }
-    }
+mod kw {
+    syn::custom_keyword!(types);
+    syn::custom_keyword!(name);
 }
