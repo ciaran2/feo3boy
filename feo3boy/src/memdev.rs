@@ -371,14 +371,14 @@ impl MemMappedIo {
             divider: 0x0000,
             timer: 0x00,
             timer_mod: 0x00,
-            timer_control: TimerControl::empty(),
+            timer_control: TimerControl::default(),
             bios_enabled: true,
             // apu status and settings
             ch1: PulseChannel::default(),
             ch2: PulseChannel::default(),
             ch3: WavetableChannel::default(),
             ch4: NoiseChannel::default(),
-            sound_volume: SoundVolume::empty(),
+            sound_volume: SoundVolume::default(),
             sound_pan: SoundPan::empty(),
             sound_enable: SoundEnable::empty(),
             wavetable: [0; 16],
@@ -462,7 +462,7 @@ impl MemDevice for MemMappedIo {
             0x04 => self.divider = 0x0000,
             0x05 => self.timer = value,
             0x06 => self.timer_mod = value,
-            0x07 => self.timer_control = TimerControl::from_bits_truncate(value),
+            0x07 => self.timer_control = TimerControl::from_bits(value),
             0x08..=0x0e => {}
             0x0f => self.interrupt_flags = InterruptFlags::from_bits_truncate(value),
             0x10 => {}
@@ -488,7 +488,7 @@ impl MemDevice for MemMappedIo {
             0x24..=0x2f => {}
             0x30..=0x3f => self.ch3.set_samples(addr.offset_by(0x30).relative(), value),
             0x40 => self.lcd_control = LcdFlags::from_bits_truncate(value),
-            0x41 => self.lcd_status = self.lcd_status.set_writeable(value),
+            0x41 => self.lcd_status = self.lcd_status.with_writeable(value),
             0x42 => self.scroll_y = value,
             0x43 => self.scroll_x = value,
             0x44 => {}

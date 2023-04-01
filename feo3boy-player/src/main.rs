@@ -1,7 +1,8 @@
 use std::fs::File;
 use std::io::{self, Read, Write};
+use std::path::PathBuf;
 
-use clap::{App, Arg};
+use clap::Parser;
 use log::{debug, error, info};
 
 use pixels::{Pixels, PixelsBuilder, SurfaceTexture};
@@ -93,7 +94,7 @@ fn init_audio_stream(
 }
 
 fn pixels_render(pixels: &mut Pixels, screen_buffer: &[(u8, u8, u8)]) {
-    let frame = pixels.get_frame_mut();
+    let frame = pixels.frame_mut();
 
     for pixel_pair in screen_buffer.iter().zip(frame.chunks_mut(4)) {
         let (in_pixel, out_pixel) = pixel_pair;
@@ -120,37 +121,26 @@ fn gen_button_states(
     button_states
 }
 
+/// Feo3boy is a GameBoy emulator.
+#[derive(Parser, Debug)]
+struct Args {
+    /// File containing the BIOS dump.
+    #[arg(short, long)]
+    bios: Option<PathBuf>,
+    /// File containing the ROM dump.
+    #[arg(short, long)]
+    rom: Option<PathBuf>,
+    /// Mute the emulator (don't set up an audio stream).
+    #[arg(short, long)]
+    mute: bool,
+}
+
 fn main() {
     env_logger::init();
     info!("feo3boy");
+    let args = Args::parse();
 
-    let argparser = App::new("FEO3Boy")
-        .version("0.1.0")
-        .author("Ciaran Cain <ciaran2@umbc.edu>")
-        .arg(
-            Arg::with_name("bios")
-                .short("b")
-                .long("bios")
-                .takes_value(true)
-                .help("File containing BIOS dump"),
-        )
-        .arg(
-            Arg::with_name("rom")
-                .short("r")
-                .long("rom")
-                .takes_value(true)
-                .help("File containing ROM dump"),
-        )
-        .arg(
-            Arg::with_name("mute")
-                .short("m")
-                .long("mute")
-                .takes_value(false)
-                .help("Mute the emulator (don't set up an audio stream)"),
-        )
-        .get_matches();
-
-    let bios = match argparser.value_of("bios") {
+    let bios = match args.bios {
         Some(filename) => {
             let mut bios_file = File::open(filename).unwrap();
             let mut bios = Vec::with_capacity(0x100);
@@ -162,7 +152,7 @@ fn main() {
         None => BiosRom::default(),
     };
 
-    let cart = match argparser.value_of("rom") {
+    let cart = match args.rom {
         Some(filename) => {
             let cart_file = File::open(filename).unwrap();
             Cartridge::parse(cart_file).unwrap()
@@ -192,7 +182,7 @@ fn main() {
     let (mut sample_producer, sample_consumer) = rb.split();
     let audio_output_config = init_audio_stream(sample_consumer);
 
-    if !argparser.is_present("mute") {
+    if !args.mute {
         match audio_output_config {
             Some((ref stream, sample_rate)) => {
                 gb.set_sample_rate(sample_rate.0);

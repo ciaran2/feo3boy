@@ -427,5 +427,5 @@ fn get_value_from_input_event(e: InputEvent) -> String {
 
 fn main() {
     console_log::init_with_level(log::Level::Info).expect("Unable to init logger");
-    yew::start_app::<App>();
+    yew::Renderer::<App>::new().render();
 }

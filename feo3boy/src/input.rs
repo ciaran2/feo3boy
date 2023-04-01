@@ -5,7 +5,7 @@ use crate::memdev::{IoRegs, IoRegsContext};
 
 bitflags! {
     /// Lcd control status flags
-    #[derive(Default)]
+    #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
     pub struct ButtonStates: u8 {
         const A          = 0b00000001;
         const B          = 0b00000010;
@@ -38,7 +38,7 @@ impl ButtonStates {
 bitflags! {
     /// Register for control and status of buttons
     /// Counterintuitively 0 is true because the buttons pull the circuit to ground
-    #[derive(Default)]
+    #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
     pub struct ButtonRegister: u8 {
         const NO_ACTIONS       = 0b100000;
         const NO_DIRECTIONS    = 0b010000;

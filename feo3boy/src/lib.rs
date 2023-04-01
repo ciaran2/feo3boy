@@ -1,4 +1,5 @@
 pub mod apu;
+pub mod bits;
 pub mod gb;
 pub mod gbz80core;
 pub mod input;
