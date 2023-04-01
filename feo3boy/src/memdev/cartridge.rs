@@ -1,7 +1,7 @@
 //! Implementation of different cartridge types.
 
 use std::convert::TryFrom;
-use std::io::{self, ErrorKind, Read};
+use std::io::{self, ErrorKind, Read, Write};
 use std::num::NonZeroU8;
 use std::slice;
 
@@ -61,6 +61,13 @@ impl From<io::Error> for ParseCartridgeError {
             _ => ParseCartridgeError::IoError(err),
         }
     }
+}
+
+pub trait SaveData {
+    fn write_save_data(&self, writer: impl Write) -> Result<(), io::Error>;
+
+    fn load_save_data(&mut self, reader: impl Read) -> Result<(), io::Error>;
+    
 }
 
 /// Enum of different cartridge types.
@@ -317,6 +324,26 @@ impl MemDevice for Cartridge {
     }
 }
 
+impl SaveData for Cartridge {
+    fn write_save_data(&self, mut writer: impl Write) -> Result<(), io::Error> {
+        match self {
+            Cartridge::None => Ok(()),
+            Cartridge::RomOnly(ref cart) => cart.write_save_data(writer),
+            Cartridge::Mbc1(ref cart) => cart.write_save_data(writer),
+            Cartridge::Mbc3(ref cart) => cart.write_save_data(writer),
+        }
+    }
+
+    fn load_save_data(&mut self, mut reader: impl Read) -> Result<(), io::Error> {
+        match self {
+            Cartridge::None => Ok(()),
+            Cartridge::RomOnly(ref mut cart) => cart.load_save_data(reader),
+            Cartridge::Mbc1(ref mut cart) => cart.load_save_data(reader),
+            Cartridge::Mbc3(ref mut cart) => cart.load_save_data(reader),
+        }
+    }
+}
+
 /// Rom banks are 0x4000 = 16 KiB.
 const ROM_BANK_SIZE: usize = 0x4000;
 
@@ -374,6 +401,39 @@ impl MemDevice for RomOnly {
             },
             _ => panic!("Address {} out of range for Mbc1Rom", addr),
         }
+    }
+}
+
+impl SaveData for RomOnly {
+    fn write_save_data(&self, mut writer: impl Write) -> Result<(), io::Error> {
+        if self.save_ram {
+            match self.ram_bank {
+                Some(ref ram_bank) => match writer.write_all(ram_bank.as_ref()) {
+                    Ok(_) => Ok(()),
+                    Err(e) => return Err(e),
+                }
+                None => Ok(()),
+            }
+        }
+        else {
+            Ok(())
+        }
+    }
+
+    fn load_save_data(&mut self, mut reader: impl Read) -> Result<(), io::Error> {
+        if self.save_ram {
+            match self.ram_bank {
+                Some(ref mut ram_bank) => match reader.read_exact(ram_bank.as_mut()) {
+                    Ok(_) => Ok(()),
+                    Err(e) => return Err(e),
+                }
+                None => Ok(()),
+            }
+        }
+        else {
+            Ok(())
+        }
+        
     }
 }
 
@@ -593,7 +653,35 @@ impl MemDevice for Mbc1Rom {
     }
 }
 
+impl SaveData for Mbc1Rom {
+    fn write_save_data(&self, mut writer: impl Write) -> Result<(), io::Error> {
+        for ram_bank in &self.ram_banks {
+            match writer.write_all(ram_bank) {
+                Ok(_) => (),
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
+    }
+
+    fn load_save_data(&mut self, mut reader: impl Read) -> Result<(), io::Error> {
+        for ram_bank in &mut self.ram_banks {
+            reader.read_exact(ram_bank)?
+        }
+        Ok(())
+    }
+}
+
 /// Variant 3 of the system ROMs.
+
+/// Utility enum for MBC3 operation
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RamOrRtc<R, C> {
+    Ram(R),
+    Rtc(C),
+    None,
+}
+
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Mbc3Rom {
@@ -691,6 +779,12 @@ impl Mbc3Rom {
         self.bank_set
     }
 
+    /// Whether the RTC register values are latched for stable reading/writing
+    #[inline]
+    pub fn rtc_latch(&self) -> bool {
+        self.rtc_latch
+    }
+
     /// Get the index of the lower rom bank currently selected.
     #[inline]
     pub fn selected_lower_bank(&self) -> usize {
@@ -735,24 +829,47 @@ impl Mbc3Rom {
     }
 
     /// Gets the currently selected ram bank, if the rom has ram and ram is enabled.
-    pub fn ram_bank(&self) -> Option<&RamBank> {
-        if self.ram_banks.is_empty() || !self.ram_enable {
-            None
+    pub fn ram_rtc_bank(&self) -> RamOrRtc<&RamBank, &u8> {
+        if !self.ram_enable {
+            RamOrRtc::None
         } else {
-            let bank = self.selected_ram_bank();
-            Some(&self.ram_banks[bank])
+            match self.bank_set {
+                0x0..=0x3 => {
+                    if self.ram_banks.is_empty() {
+                        RamOrRtc::None
+                    }
+                    else {
+                        let bank = self.selected_ram_bank();
+                        RamOrRtc::Ram(&self.ram_banks[bank])
+                    }
+                }
+                0x8..=0xC => RamOrRtc::Rtc(&self.rtc_regs[self.bank_set as usize - 0x8]),
+                _ => RamOrRtc::None
+            }
         }
     }
 
     /// Gets the currently selected ram bank, if the rom has ram and ram is enabled.
-    fn ram_bank_mut(&mut self) -> Option<&mut RamBank> {
-        if self.ram_banks.is_empty() || !self.ram_enable {
-            None
+    fn ram_rtc_bank_mut(&mut self) -> RamOrRtc<&mut RamBank, &mut u8> {
+        if !self.ram_enable {
+            RamOrRtc::None
         } else {
-            let bank = self.selected_ram_bank();
-            Some(&mut self.ram_banks[bank])
+            match self.bank_set {
+                0x0..=0x3 => {
+                    if self.ram_banks.is_empty() {
+                        RamOrRtc::None
+                    }
+                    else {
+                        let bank = self.selected_ram_bank();
+                        RamOrRtc::Ram(&mut self.ram_banks[bank])
+                    }
+                }
+                0x8..=0xC => RamOrRtc::Rtc(&mut self.rtc_regs[self.bank_set as usize - 0x8]),
+                _ => RamOrRtc::None
+            }
         }
     }
+
 }
 
 impl MemDevice for Mbc3Rom {
@@ -760,9 +877,10 @@ impl MemDevice for Mbc3Rom {
         match addr.relative() {
             0..=0x3fff => self.lower_bank().read(addr),
             0x4000..=0x7fff => self.upper_bank().read(addr.offset_by(0x4000)),
-            0x8000..=0x9fff => match self.ram_bank() {
-                Some(bank) => bank.read(addr.offset_by(0x8000)),
-                None => 0,
+            0x8000..=0x9fff => match self.ram_rtc_bank() {
+                RamOrRtc::Ram(bank) => bank.read(addr.offset_by(0x8000)),
+                RamOrRtc::Rtc(reg) => *reg,
+                RamOrRtc::None => 0,
             },
             _ => panic!("Address {} out of range for Mbc3Rom", addr),
         }
@@ -779,11 +897,31 @@ impl MemDevice for Mbc3Rom {
             0x4000..=0x5fff => self.bank_set = value & 0x3,
             // Change between basic and advanced banking mode.
             0x6000..=0x7fff => self.rtc_latch = (value & 1) != 0,
-            0x8000..=0x9fff => match self.ram_bank_mut() {
-                Some(bank) => bank.write(addr.offset_by(0x8000), value),
-                None => {}
+            0x8000..=0x9fff => match self.ram_rtc_bank_mut() {
+                RamOrRtc::Ram(bank) => bank.write(addr.offset_by(0x8000), value),
+                RamOrRtc::Rtc(reg) => *reg = value,
+                RamOrRtc::None => {}
             },
             _ => panic!("Address {} out of range for Mbc3Rom", addr),
         }
+    }
+}
+
+impl SaveData for Mbc3Rom {
+    fn write_save_data(&self, mut writer: impl Write) -> Result<(), io::Error> {
+        for ram_bank in &self.ram_banks {
+            match writer.write_all(ram_bank) {
+                Ok(_) => (),
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
+    }
+
+    fn load_save_data(&mut self, mut reader: impl Read) -> Result<(), io::Error> {
+        for ram_bank in &mut self.ram_banks {
+            reader.read_exact(ram_bank)?
+        }
+        Ok(())
     }
 }
