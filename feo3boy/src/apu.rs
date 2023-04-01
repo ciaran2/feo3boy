@@ -2,7 +2,7 @@ use bitflags::bitflags;
 use log::{debug, info};
 
 use crate::bits::BitGroup;
-use crate::memdev::{Addr, MemDevice};
+use crate::memdev::{MemDevice, RelativeAddr};
 
 bitflags! {
     #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash, MemDevice)]
@@ -36,7 +36,7 @@ bitflags! {
 
 /// Represends sound and volume settings.
 #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash, MemDevice)]
-#[memdev(byte)]
+#[memdev(bits)]
 #[repr(transparent)]
 pub struct SoundVolume(u8);
 
@@ -97,7 +97,7 @@ impl SoundVolume {
 
 /// Represends sweep control settings.
 #[derive(Default, Debug, Clone, Eq, PartialEq, Hash, MemDevice)]
-#[memdev(byte, readable = SweepControl::RW_BITS, writable = SweepControl::RW_BITS)]
+#[memdev(bits, readable = SweepControl::RW_BITS, writable = SweepControl::RW_BITS)]
 #[repr(transparent)]
 pub struct SweepControl(u8);
 
@@ -197,7 +197,7 @@ impl Sweep {
 }
 
 #[derive(Default, Debug, Clone, Eq, PartialEq, Hash, MemDevice)]
-#[memdev(byte)]
+#[memdev(bits)]
 #[repr(transparent)]
 pub struct PulseTimer(u8);
 
@@ -243,7 +243,7 @@ impl PulseTimer {
 }
 
 #[derive(Default, Debug, Clone, Eq, PartialEq, Hash, MemDevice)]
-#[memdev(byte)]
+#[memdev(bits)]
 #[repr(transparent)]
 pub struct EnvelopeControl(u8);
 
@@ -338,7 +338,7 @@ impl Envelope {
 }
 
 #[derive(Default, Debug, Clone, Eq, PartialEq, Hash, MemDevice)]
-#[memdev(byte, readable = WavetableLevel::RW_BITS, writable = WavetableLevel::RW_BITS)]
+#[memdev(bits, readable = WavetableLevel::RW_BITS, writable = WavetableLevel::RW_BITS)]
 #[repr(transparent)]
 pub struct WavetableLevel(u8);
 
@@ -360,7 +360,7 @@ impl WavetableLevel {
 }
 
 #[derive(Default, Debug, Clone, Eq, PartialEq, Hash, MemDevice)]
-#[memdev(byte)]
+#[memdev(bits)]
 #[repr(transparent)]
 pub struct NoiseControl(u8);
 
@@ -650,20 +650,24 @@ impl Channel for PulseChannel {
 }
 
 impl MemDevice for PulseChannel {
-    fn read(&self, addr: Addr) -> u8 {
+    const LEN: usize = 5;
+
+    fn read_byte_relative(&self, addr: RelativeAddr) -> u8 {
         match addr.index() {
-            0x00 => self.sweep_control.read(addr),
-            0x01 => self.timer.read(addr.offset_by(0x01)),
-            0x02 => self.envelope_control.read(addr.offset_by(0x02)),
+            0x00 => self.sweep_control.read_byte_relative(addr),
+            0x01 => self.timer.read_byte_relative(addr.offset_by(0x01)),
+            0x02 => self
+                .envelope_control
+                .read_byte_relative(addr.offset_by(0x02)),
             0x03 => self.wavelength_low(),
             0x04 => self.read_control(),
             _ => panic!("Address {} out of range for PulseChannel", addr),
         }
     }
 
-    fn write(&mut self, addr: Addr, val: u8) {
+    fn write_byte_relative(&mut self, addr: RelativeAddr, val: u8) {
         match addr.index() {
-            0x00 => self.sweep_control.write(addr, val),
+            0x00 => self.sweep_control.write_byte_relative(addr, val),
             0x01 => self.set_length(val),
             0x02 => self.set_envelope(val),
             0x03 => self.set_wavelength_low(val),
@@ -671,6 +675,8 @@ impl MemDevice for PulseChannel {
             _ => panic!("Address {} out of range for PulseChannel", addr),
         }
     }
+
+    memdev_bytes_from_byte!(PulseChannel);
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -702,7 +708,7 @@ impl WavetableChannel {
 
     pub fn get_samples(&self, samples: usize) -> u8 {
         let base = samples * 2;
-        self.sample_table[base] << 4 + self.sample_table[base + 1]
+        (self.sample_table[base] << 4) + self.sample_table[base + 1]
     }
 
     pub fn set_enable(&mut self, value: u8) {
@@ -791,7 +797,9 @@ impl Channel for WavetableChannel {
 }
 
 impl MemDevice for WavetableChannel {
-    fn read(&self, addr: Addr) -> u8 {
+    const LEN: usize = 0x15;
+
+    fn read_byte_relative(&self, addr: RelativeAddr) -> u8 {
         match addr.relative() {
             // Channel settings block.
             0x00..=0x04 => 0xff,
@@ -802,7 +810,7 @@ impl MemDevice for WavetableChannel {
         }
     }
 
-    fn write(&mut self, addr: Addr, val: u8) {
+    fn write_byte_relative(&mut self, addr: RelativeAddr, val: u8) {
         match addr.relative() {
             // Channel settings block.
             0x00 => self.set_enable(val),
@@ -816,6 +824,8 @@ impl MemDevice for WavetableChannel {
             _ => panic!("Address {addr}  out of range for WavetableChannel"),
         }
     }
+
+    memdev_bytes_from_byte!(WavetableChannel);
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -926,14 +936,16 @@ impl Channel for NoiseChannel {
 }
 
 impl MemDevice for NoiseChannel {
-    fn read(&self, addr: Addr) -> u8 {
+    const LEN: usize = 4;
+
+    fn read_byte_relative(&self, addr: RelativeAddr) -> u8 {
         match addr.relative() {
             0x00..=0x03 => 0xff,
             _ => panic!("Address {addr} out of range for NoiseChannel"),
         }
     }
 
-    fn write(&mut self, addr: Addr, val: u8) {
+    fn write_byte_relative(&mut self, addr: RelativeAddr, val: u8) {
         match addr.relative() {
             0x00 => self.set_length(val),
             0x01 => self.set_envelope(val),
@@ -942,6 +954,8 @@ impl MemDevice for NoiseChannel {
             _ => panic!("Address {addr} out of range for NoiseChannel"),
         }
     }
+
+    memdev_bytes_from_byte!(NoiseChannel);
 }
 
 /// Memory-mapped IO registers used by the APU.
@@ -957,18 +971,16 @@ pub struct ApuRegs {
     pub wavetable: [u8; 16],
 }
 
-memdev_fields! {
-    ApuRegs {
-        0x00..=0x04 => ch1,
-        0x05 => 0xff,
-        0x06..=0x09 => { ch2, skip_over: 1 },
-        0x08..=0x0e => ch3,
-        0x0f => 0xff,
-        0x10..=0x13 => ch4,
-        0x14..=0x1f => 0xff,
-        0x20..=0x2f => { ch3, skip_over: 5 },
-    }
-}
+memdev_fields!(ApuRegs, len: 0x30, {
+    0x00..=0x04 => ch1,
+    0x05 => 0xff,
+    0x06..=0x09 => { ch2, skip_over: 1 },
+    0x08..=0x0e => ch3,
+    0x0f => 0xff,
+    0x10..=0x13 => ch4,
+    0x14..=0x1f => 0xff,
+    0x20..=0x2f => { ch3, skip_over: 5 },
+});
 
 pub trait ApuContext {
     fn apu(&self) -> &ApuState;

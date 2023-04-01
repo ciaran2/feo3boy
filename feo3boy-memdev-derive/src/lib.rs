@@ -6,6 +6,7 @@ use syn::{DeriveInput, Result};
 use crate::device_type::DeviceType;
 
 mod bitflags;
+mod bitswrapper;
 mod bytewrapper;
 mod device_type;
 mod passthrough;
@@ -41,8 +42,9 @@ fn build_memdev_derives(item: &DeriveInput) -> Result<TokenStream> {
     let device_type = DeviceType::extract_from(item)?;
 
     match device_type {
-        DeviceType::ByteWrapper(ref wrapper) => bytewrapper::build_byte_wrapper(item, wrapper),
+        DeviceType::BitsWrapper(ref wrapper) => bitswrapper::build_bits_wrapper(item, wrapper),
         DeviceType::BitFlags(ref flags) => bitflags::build_flags(item, flags),
+        DeviceType::ByteWrapper(ref wrapper) => bytewrapper::build_byte_wrapper(item, wrapper),
         DeviceType::Passthrough(_) => passthrough::build_passthrough(item),
     }
 }

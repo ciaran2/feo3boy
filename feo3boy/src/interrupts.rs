@@ -2,7 +2,7 @@ use std::mem;
 
 use bitflags::bitflags;
 
-use crate::memdev::MemDevice;
+use crate::memdev::{MemDevice, RootMemDevice};
 
 bitflags! {
     /// Available set of interrupt flags.
@@ -100,10 +100,10 @@ pub trait Interrupts {
 #[repr(transparent)]
 pub struct MemInterrupts<M>(M);
 
-impl<M: MemDevice> MemInterrupts<M> {
+impl<M: RootMemDevice> MemInterrupts<M> {
     /// Convert a reference to a memory device into a mem-interrupts accessor.
     #[inline]
-    pub fn wrap<'a>(device: &'a M) -> &'a MemInterrupts<M> {
+    pub fn wrap_ref<'a>(device: &'a M) -> &'a MemInterrupts<M> {
         // This is safe because MemInterrupts is repr(transparent) so the layout of
         // MemInterupts<M> is the same as M and because the returned reference has the
         // same lifetime as the passed reference, so memory safety rules for M are upheld.
@@ -120,20 +120,20 @@ impl<M: MemDevice> MemInterrupts<M> {
     }
 }
 
-impl<M: MemDevice> Interrupts for MemInterrupts<M> {
+impl<M: RootMemDevice> Interrupts for MemInterrupts<M> {
     fn queued(&self) -> InterruptFlags {
-        InterruptFlags::from_bits_truncate(self.0.read(0xff0f.into()))
+        InterruptFlags::from_bits_truncate(self.0.read_byte(0xff0f))
     }
 
     fn set_queued(&mut self, flags: InterruptFlags) {
-        self.0.write(0xff0f.into(), flags.bits());
+        self.0.write_byte(0xff0f, flags.bits());
     }
 
     fn enabled(&self) -> InterruptFlags {
-        InterruptFlags::from_bits_truncate(self.0.read(0xffff.into()))
+        InterruptFlags::from_bits_truncate(self.0.read_byte(0xffff))
     }
 
     fn set_enabled(&mut self, flags: InterruptFlags) {
-        self.0.write(0xffff.into(), flags.bits());
+        self.0.write_byte(0xffff, flags.bits());
     }
 }

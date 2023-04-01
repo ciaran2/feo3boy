@@ -79,12 +79,10 @@ pub struct SerialRegs {
     pub serial_control: u8,
 }
 
-memdev_fields! {
-    SerialRegs {
-        0x00 => serial_data,
-        0x01 => serial_control,
-    }
-}
+memdev_fields!(SerialRegs, len: 2, {
+    0x00 => serial_data,
+    0x01 => serial_control,
+});
 
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct SerialState {

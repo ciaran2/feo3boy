@@ -8,7 +8,12 @@ use std::slice;
 use log::warn;
 use thiserror::Error;
 
-use super::{Addr, MemDevice, NullRom, ReadOnly};
+use super::{MemDevice, NullRom, ReadOnly, RelativeAddr};
+
+/// Length of a cartridge in bytes, counting both ram and rom. This counts the number of
+/// bytes in ram/rom contiguously. The gap between ram and rom only exists in how the
+/// cartridge memory space is mapped into memory by the memory manager.
+const CART_MEMDEV_LEN: usize = 0xA000;
 
 /// Errors that can result from attempting to parse a cartridge dump.
 #[derive(Debug, Error)]
@@ -310,21 +315,41 @@ impl TryFrom<Vec<u8>> for Cartridge {
 }
 
 impl MemDevice for Cartridge {
-    fn read(&self, addr: Addr) -> u8 {
+    const LEN: usize = CART_MEMDEV_LEN;
+
+    fn read_byte_relative(&self, addr: RelativeAddr) -> u8 {
         match self {
-            Cartridge::None => NullRom::<0xA000>.read(addr),
-            Cartridge::RomOnly(ref cart) => cart.read(addr),
-            Cartridge::Mbc1(ref cart) => cart.read(addr),
-            Cartridge::Mbc3(ref cart) => cart.read(addr),
+            Cartridge::None => NullRom::<CART_MEMDEV_LEN>.read_byte_relative(addr),
+            Cartridge::RomOnly(ref cart) => cart.read_byte_relative(addr),
+            Cartridge::Mbc1(ref cart) => cart.read_byte_relative(addr),
+            Cartridge::Mbc3(ref cart) => cart.read_byte_relative(addr),
         }
     }
 
-    fn write(&mut self, addr: Addr, value: u8) {
+    fn read_bytes_relative(&self, addr: RelativeAddr, data: &mut [u8]) {
         match self {
-            Cartridge::None => NullRom::<0xA000>.write(addr, value),
-            Cartridge::RomOnly(ref mut cart) => cart.write(addr, value),
-            Cartridge::Mbc1(ref mut cart) => cart.write(addr, value),
-            Cartridge::Mbc3(ref mut cart) => cart.write(addr, value),
+            Cartridge::None => NullRom::<CART_MEMDEV_LEN>.read_bytes_relative(addr, data),
+            Cartridge::RomOnly(ref cart) => cart.read_bytes_relative(addr, data),
+            Cartridge::Mbc1(ref cart) => cart.read_bytes_relative(addr, data),
+            Cartridge::Mbc3(ref cart) => cart.read_bytes_relative(addr, data),
+        }
+    }
+
+    fn write_byte_relative(&mut self, addr: RelativeAddr, value: u8) {
+        match self {
+            Cartridge::None => NullRom::<CART_MEMDEV_LEN>.write_byte_relative(addr, value),
+            Cartridge::RomOnly(ref mut cart) => cart.write_byte_relative(addr, value),
+            Cartridge::Mbc1(ref mut cart) => cart.write_byte_relative(addr, value),
+            Cartridge::Mbc3(ref mut cart) => cart.write_byte_relative(addr, value),
+        }
+    }
+
+    fn write_bytes_relative(&mut self, addr: RelativeAddr, data: &[u8]) {
+        match self {
+            Cartridge::None => NullRom::<CART_MEMDEV_LEN>.write_bytes_relative(addr, data),
+            Cartridge::RomOnly(ref mut cart) => cart.write_bytes_relative(addr, data),
+            Cartridge::Mbc1(ref mut cart) => cart.write_bytes_relative(addr, data),
+            Cartridge::Mbc3(ref mut cart) => cart.write_bytes_relative(addr, data),
         }
     }
 }
@@ -382,8 +407,20 @@ pub struct RomOnly {
 }
 
 impl RomOnly {
+    pub fn new(
+        rom_banks: Box<[RomBank; 2]>,
+        ram_bank: Option<Box<RamBank>>,
+        save_ram: bool,
+    ) -> Self {
+        Self {
+            rom_banks,
+            ram_bank,
+            save_ram,
+        }
+    }
+
     /// Constructs a new `RomOnly` with empty (all 0) rom banks and no ram bank.
-    fn empty() -> Self {
+    pub fn empty() -> Self {
         Self {
             rom_banks: Box::new([ReadOnly([0u8; ROM_BANK_SIZE]); 2]),
             ram_bank: None,
@@ -393,28 +430,50 @@ impl RomOnly {
 }
 
 impl MemDevice for RomOnly {
-    fn read(&self, addr: Addr) -> u8 {
-        match addr.relative() {
-            0..=0x3fff => self.rom_banks[0].read(addr),
-            0x4000..=0x7fff => self.rom_banks[1].read(addr.offset_by(0x4000)),
+    const LEN: usize = CART_MEMDEV_LEN;
+
+    fn read_byte_relative(&self, addr: RelativeAddr) -> u8 {
+        dispatch_memdev_byte!(RomOnly, addr, |addr| {
+            0..=0x3fff => self.rom_banks[0].read_byte_relative(addr),
+            0x4000..=0x7fff => self.rom_banks[1].read_byte_relative(addr),
             0x8000..=0x9fff => match self.ram_bank {
-                Some(ref ram) => ram.read(addr.offset_by(0x8000)),
-                None => 0,
+                Some(ref ram) => ram.read_byte_relative(addr),
+                None => 0xff,
             },
-            _ => panic!("Address {} out of range for Mbc1Rom", addr),
-        }
+        })
     }
 
-    fn write(&mut self, addr: Addr, value: u8) {
-        match addr.relative() {
-            0..=0x3fff => self.rom_banks[0].write(addr, value),
-            0x4000..=0x7fff => self.rom_banks[1].write(addr.offset_by(0x4000), value),
+    fn read_bytes_relative(&self, addr: RelativeAddr, data: &mut [u8]) {
+        dispatch_memdev_bytes!(RomOnly, addr, data, |addr, mut data| {
+            0..=0x3fff => self.rom_banks[0].read_bytes_relative(addr, data),
+            0x4000..=0x7fff => self.rom_banks[1].read_bytes_relative(addr, data),
             0x8000..=0x9fff => match self.ram_bank {
-                Some(ref mut ram) => ram.write(addr.offset_by(0x8000), value),
+                Some(ref ram) => ram.read_bytes_relative(addr, data),
+                None => data.fill(0xff),
+            },
+        })
+    }
+
+    fn write_byte_relative(&mut self, addr: RelativeAddr, value: u8) {
+        dispatch_memdev_byte!(RomOnly, addr, |addr| {
+            0..=0x3fff => self.rom_banks[0].write_byte_relative(addr, value),
+            0x4000..=0x7fff => self.rom_banks[1].write_byte_relative(addr, value),
+            0x8000..=0x9fff => match self.ram_bank {
+                Some(ref mut ram) => ram.write_byte_relative(addr, value),
                 None => {}
             },
-            _ => panic!("Address {} out of range for Mbc1Rom", addr),
-        }
+        })
+    }
+
+    fn write_bytes_relative(&mut self, addr: RelativeAddr, data: &[u8]) {
+        dispatch_memdev_bytes!(RomOnly, addr, data, |addr, ref data| {
+            0..=0x3fff => self.rom_banks[0].write_bytes_relative(addr, data),
+            0x4000..=0x7fff => self.rom_banks[1].write_bytes_relative(addr, data),
+            0x8000..=0x9fff => match self.ram_bank {
+                Some(ref mut ram) => ram.write_bytes_relative(addr, data),
+                None => {},
+            },
+        })
     }
 }
 
@@ -636,20 +695,32 @@ impl Mbc1Rom {
 }
 
 impl MemDevice for Mbc1Rom {
-    fn read(&self, addr: Addr) -> u8 {
-        match addr.relative() {
-            0..=0x3fff => self.lower_bank().read(addr),
-            0x4000..=0x7fff => self.upper_bank().read(addr.offset_by(0x4000)),
+    const LEN: usize = CART_MEMDEV_LEN;
+
+    fn read_byte_relative(&self, addr: RelativeAddr) -> u8 {
+        dispatch_memdev_byte!(Mbc1Rom, addr, |addr| {
+            0..=0x3fff => self.lower_bank().read_byte_relative(addr),
+            0x4000..=0x7fff => self.upper_bank().read_byte_relative(addr),
             0x8000..=0x9fff => match self.ram_bank() {
-                Some(bank) => bank.read(addr.offset_by(0x8000)),
-                None => 0,
+                Some(bank) => bank.read_byte_relative(addr),
+                None => 0xff,
             },
-            _ => panic!("Address {} out of range for Mbc1Rom", addr),
-        }
+        })
     }
 
-    fn write(&mut self, addr: Addr, value: u8) {
-        match addr.relative() {
+    fn read_bytes_relative(&self, addr: RelativeAddr, data: &mut [u8]) {
+        dispatch_memdev_bytes!(Mbc1Rom, addr, data, |addr, mut data| {
+            0..=0x3fff => self.lower_bank().read_bytes_relative(addr, data),
+            0x4000..=0x7fff => self.upper_bank().read_bytes_relative(addr, data),
+            0x8000..=0x9fff => match self.ram_bank() {
+                Some(bank) => bank.read_bytes_relative(addr, data),
+                None => data.fill(0xff),
+            },
+        })
+    }
+
+    fn write_byte_relative(&mut self, addr: RelativeAddr, value: u8) {
+        dispatch_memdev_byte!(Mbc1Rom, addr, |addr| {
             0x0000..=0x1fff => self.ram_enable = (value & 0xF) == 0xA,
             // Set the low-order bits of the rom-bank selection from the lower 5 bits of the
             // provided value. If 0 is provided, raise the value to 1.
@@ -660,11 +731,47 @@ impl MemDevice for Mbc1Rom {
             // Change between basic and advanced banking mode.
             0x6000..=0x7fff => self.advanced_banking_mode = (value & 1) != 0,
             0x8000..=0x9fff => match self.ram_bank_mut() {
-                Some(bank) => bank.write(addr.offset_by(0x8000), value),
+                Some(bank) => bank.write_byte_relative(addr, value),
                 None => {}
             },
-            _ => panic!("Address {} out of range for Mbc1Rom", addr),
-        }
+        })
+    }
+
+    fn write_bytes_relative(&mut self, addr: RelativeAddr, data: &[u8]) {
+        // Writes to the control registers are applied as if all the bytes in the range
+        // were written in order, so only the last byte in each control register range
+        // counts.
+        dispatch_memdev_bytes!(Mbc1Rom, addr, data, |addr, ref data| {
+            0x0000..=0x1fff => {
+                let value = data.last()
+                    .expect("dispatch_range should never provide an empty range");
+                self.ram_enable = (value & 0xF) == 0xA;
+            },
+            // Set the low-order bits of the rom-bank selection from the lower 5 bits of the
+            // provided value. If 0 is provided, raise the value to 1.
+            0x2000..=0x3fff => {
+                let value = data.last()
+                    .expect("dispatch_range should never provide an empty range");
+                self.rom_bank = NonZeroU8::new((value & 0x1f).max(1)).unwrap();
+            },
+            // Take the 3 bottom bits as the bank set. These will be applied based on whether the
+            // mode is ram mode or rom mode when used.
+            0x4000..=0x5fff => {
+                let value = data.last()
+                    .expect("dispatch_range should never provide an empty range");
+                self.bank_set = value & 0x3;
+            },
+            // Change between basic and advanced banking mode.
+            0x6000..=0x7fff => {
+                let value = data.last()
+                    .expect("dispatch_range should never provide an empty range");
+                self.advanced_banking_mode = (value & 1) != 0;
+            },
+            0x8000..=0x9fff => match self.ram_bank_mut() {
+                Some(bank) => bank.write_bytes_relative(addr, data),
+                None => {}
+            },
+        })
     }
 }
 
@@ -888,21 +995,34 @@ impl Mbc3Rom {
 }
 
 impl MemDevice for Mbc3Rom {
-    fn read(&self, addr: Addr) -> u8 {
-        match addr.relative() {
-            0..=0x3fff => self.lower_bank().read(addr),
-            0x4000..=0x7fff => self.upper_bank().read(addr.offset_by(0x4000)),
+    const LEN: usize = CART_MEMDEV_LEN;
+
+    fn read_byte_relative(&self, addr: RelativeAddr) -> u8 {
+        dispatch_memdev_byte!(Mbc3Rom, addr, |addr| {
+            0..=0x3fff => self.lower_bank().read_byte_relative(addr),
+            0x4000..=0x7fff => self.upper_bank().read_byte_relative(addr),
             0x8000..=0x9fff => match self.ram_rtc_bank() {
-                RamOrRtc::Ram(bank) => bank.read(addr.offset_by(0x8000)),
+                RamOrRtc::Ram(bank) => bank.read_byte_relative(addr),
                 RamOrRtc::Rtc(reg) => *reg,
-                RamOrRtc::None => 0,
+                RamOrRtc::None => 0xff,
             },
-            _ => panic!("Address {} out of range for Mbc3Rom", addr),
-        }
+        })
     }
 
-    fn write(&mut self, addr: Addr, value: u8) {
-        match addr.relative() {
+    fn read_bytes_relative(&self, addr: RelativeAddr, data: &mut [u8]) {
+        dispatch_memdev_bytes!(Mbc3Rom, addr, data, |addr, mut data| {
+            0..=0x3fff => self.lower_bank().read_bytes_relative(addr, data),
+            0x4000..=0x7fff => self.upper_bank().read_bytes_relative(addr, data),
+            0x8000..=0x9fff => match self.ram_rtc_bank() {
+                RamOrRtc::Ram(bank) => bank.read_bytes_relative(addr, data),
+                RamOrRtc::Rtc(reg) => data.fill(*reg),
+                RamOrRtc::None => data.fill(0xff),
+            },
+        })
+    }
+
+    fn write_byte_relative(&mut self, addr: RelativeAddr, value: u8) {
+        dispatch_memdev_byte!(Mbc3Rom, addr, |addr| {
             0x0000..=0x1fff => self.ram_enable = (value & 0xF) == 0xA,
             // Set the low-order bits of the rom-bank selection from the lower 5 bits of the
             // provided value. If 0 is provided, raise the value to 1.
@@ -913,12 +1033,50 @@ impl MemDevice for Mbc3Rom {
             // Change between basic and advanced banking mode.
             0x6000..=0x7fff => self.rtc_latch = (value & 1) != 0,
             0x8000..=0x9fff => match self.ram_rtc_bank_mut() {
-                RamOrRtc::Ram(bank) => bank.write(addr.offset_by(0x8000), value),
+                RamOrRtc::Ram(bank) => bank.write_byte_relative(addr, value),
                 RamOrRtc::Rtc(reg) => *reg = value,
                 RamOrRtc::None => {}
             },
-            _ => panic!("Address {} out of range for Mbc3Rom", addr),
-        }
+        })
+    }
+
+    fn write_bytes_relative(&mut self, addr: RelativeAddr, data: &[u8]) {
+        dispatch_memdev_bytes!(Mbc3Rom, addr, data, |addr, ref data| {
+            0x0000..=0x1fff => {
+                let value = data.last()
+                    .expect("dispatch_range should never provide an empty range");
+                self.ram_enable = (value & 0xF) == 0xA
+            },
+            // Set the low-order bits of the rom-bank selection from the lower 5 bits of the
+            // provided value. If 0 is provided, raise the value to 1.
+            0x2000..=0x3fff => {
+                let value = data.last()
+                    .expect("dispatch_range should never provide an empty range");
+                self.rom_bank = value & 0x7f
+            },
+            // Take the 3 bottom bits as the bank set. These will be applied based on whether the
+            // mode is ram mode or rom mode when used.
+            0x4000..=0x5fff => {
+                let value = data.last()
+                    .expect("dispatch_range should never provide an empty range");
+                self.bank_set = value & 0x3
+            },
+            // Change between basic and advanced banking mode.
+            0x6000..=0x7fff => {
+                let value = data.last()
+                    .expect("dispatch_range should never provide an empty range");
+                self.rtc_latch = (value & 1) != 0
+            },
+            0x8000..=0x9fff => match self.ram_rtc_bank_mut() {
+                RamOrRtc::Ram(bank) => bank.write_bytes_relative(addr, data),
+                RamOrRtc::Rtc(reg) => {
+                    let value = data.last()
+                        .expect("dispatch_range should never provide an empty range");
+                    *reg = *value
+                },
+                RamOrRtc::None => {}
+            },
+        })
     }
 }
 
@@ -942,5 +1100,202 @@ impl SaveData for Mbc3Rom {
 
     fn has_save_data(&self) -> bool {
         self.save_ram
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::mem;
+
+    use super::*;
+
+    use rand::distributions::Uniform;
+    use rand::{Rng, SeedableRng};
+    use rand_pcg::Pcg64Mcg;
+
+    fn init() {
+        let _ = env_logger::builder().is_test(true).try_init();
+    }
+
+    #[test]
+    fn romonly_range_readwrite() {
+        init();
+
+        let mut rom_banks = Box::new([ReadOnly([0u8; ROM_BANK_SIZE]); 2]);
+        let mut ram_bank = Box::new([0u8; RAM_BANK_SIZE]);
+
+        // Pre-fill memory with unique values.
+        let mut nextval = 0u32;
+        for bank in rom_banks.iter_mut() {
+            for chunk in bank.0.chunks_exact_mut(mem::size_of_val(&nextval)) {
+                chunk.copy_from_slice(nextval.to_le_bytes().as_ref());
+                nextval += 1;
+            }
+        }
+        for chunk in ram_bank.chunks_exact_mut(mem::size_of_val(&nextval)) {
+            chunk.copy_from_slice(nextval.to_le_bytes().as_ref());
+            nextval += 1;
+        }
+
+        let mut cart_individual = RomOnly::new(rom_banks, Some(ram_bank), false);
+        let mut cart_slice = cart_individual.clone();
+
+        let mut input_buf = vec![];
+        let mut output_buf_individual = vec![];
+        let mut output_buf_slice = vec![];
+        let mut rng =
+            Pcg64Mcg::from_seed([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0xA, 0xB, 0xC, 0xD, 0xE, 0xF]);
+
+        let len_dist = Uniform::new_inclusive(1, 0x400);
+
+        assert_eq!(cart_individual, cart_slice);
+
+        for _ in 0..0x80000 {
+            let len = rng.sample(&len_dist);
+
+            let addr_dist = Uniform::new(0, CART_MEMDEV_LEN - len);
+            let addr: RelativeAddr = (rng.sample(&addr_dist) as u16).into();
+            input_buf.resize(len, 0u8);
+            rng.fill(&mut input_buf[..]);
+
+            for (i, &val) in input_buf.iter().enumerate() {
+                cart_individual.write_byte_relative(addr.move_forward_by(i as u16), val);
+            }
+            cart_slice.write_bytes_relative(addr, &input_buf);
+
+            output_buf_individual.resize(len, 0u8);
+            for (i, res) in output_buf_individual.iter_mut().enumerate() {
+                *res = cart_individual.read_byte_relative(addr.move_forward_by(i as u16));
+            }
+            output_buf_slice.resize(len, 0u8);
+            cart_slice.read_bytes_relative(addr, &mut output_buf_slice);
+
+            assert_eq!(output_buf_individual, output_buf_slice);
+        }
+
+        // To reduce the test runtime, only compare the final result.
+        assert_eq!(cart_individual, cart_slice);
+    }
+
+    #[test]
+    fn mbc1_range_readwrite() {
+        init();
+
+        let mut cart = Mbc1Rom::new(vec![ReadOnly([0u8; ROM_BANK_SIZE]); 128], 4, false);
+
+        // Pre-fill memory with unique values.
+        let mut nextval = 0u32;
+        for bank in cart.rom_banks.iter_mut() {
+            for chunk in bank.0.chunks_exact_mut(mem::size_of_val(&nextval)) {
+                chunk.copy_from_slice(nextval.to_le_bytes().as_ref());
+                nextval += 1;
+            }
+        }
+        for bank in cart.ram_banks.iter_mut() {
+            for chunk in bank.chunks_exact_mut(mem::size_of_val(&nextval)) {
+                chunk.copy_from_slice(nextval.to_le_bytes().as_ref());
+                nextval += 1;
+            }
+        }
+
+        let mut cart_individual = cart.clone();
+        let mut cart_slice = cart;
+
+        let mut input_buf = vec![];
+        let mut output_buf_individual = vec![];
+        let mut output_buf_slice = vec![];
+        let mut rng =
+            Pcg64Mcg::from_seed([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0xA, 0xB, 0xC, 0xD, 0xE, 0xF]);
+
+        let len_dist = Uniform::new_inclusive(1, 0x400);
+
+        assert_eq!(cart_individual, cart_slice);
+
+        for _ in 0..0x80000 {
+            let len = rng.sample(&len_dist);
+
+            let addr_dist = Uniform::new(0, CART_MEMDEV_LEN - len);
+            let addr: RelativeAddr = (rng.sample(&addr_dist) as u16).into();
+            input_buf.resize(len, 0u8);
+            rng.fill(&mut input_buf[..]);
+
+            for (i, &val) in input_buf.iter().enumerate() {
+                cart_individual.write_byte_relative(addr.move_forward_by(i as u16), val);
+            }
+            cart_slice.write_bytes_relative(addr, &input_buf);
+
+            output_buf_individual.resize(len, 0u8);
+            for (i, res) in output_buf_individual.iter_mut().enumerate() {
+                *res = cart_individual.read_byte_relative(addr.move_forward_by(i as u16));
+            }
+            output_buf_slice.resize(len, 0u8);
+            cart_slice.read_bytes_relative(addr, &mut output_buf_slice);
+
+            assert_eq!(output_buf_individual, output_buf_slice);
+        }
+
+        // To reduce the test runtime, only compare the final result.
+        assert_eq!(cart_individual, cart_slice);
+    }
+
+    #[test]
+    fn mbc3_range_readwrite() {
+        init();
+
+        let mut cart = Mbc3Rom::new(vec![ReadOnly([0u8; ROM_BANK_SIZE]); 128], 4, false);
+
+        // Pre-fill memory with unique values.
+        let mut nextval = 0u32;
+        for bank in cart.rom_banks.iter_mut() {
+            for chunk in bank.0.chunks_exact_mut(mem::size_of_val(&nextval)) {
+                chunk.copy_from_slice(nextval.to_le_bytes().as_ref());
+                nextval += 1;
+            }
+        }
+        for bank in cart.ram_banks.iter_mut() {
+            for chunk in bank.chunks_exact_mut(mem::size_of_val(&nextval)) {
+                chunk.copy_from_slice(nextval.to_le_bytes().as_ref());
+                nextval += 1;
+            }
+        }
+
+        let mut cart_individual = cart.clone();
+        let mut cart_slice = cart;
+
+        let mut input_buf = vec![];
+        let mut output_buf_individual = vec![];
+        let mut output_buf_slice = vec![];
+        let mut rng =
+            Pcg64Mcg::from_seed([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0xA, 0xB, 0xC, 0xD, 0xE, 0xF]);
+
+        let len_dist = Uniform::new_inclusive(1, 0x400);
+
+        assert_eq!(cart_individual, cart_slice);
+
+        for _ in 0..0x80000 {
+            let len = rng.sample(&len_dist);
+
+            let addr_dist = Uniform::new(0, CART_MEMDEV_LEN - len);
+            let addr: RelativeAddr = (rng.sample(&addr_dist) as u16).into();
+            input_buf.resize(len, 0u8);
+            rng.fill(&mut input_buf[..]);
+
+            for (i, &val) in input_buf.iter().enumerate() {
+                cart_individual.write_byte_relative(addr.move_forward_by(i as u16), val);
+            }
+            cart_slice.write_bytes_relative(addr, &input_buf);
+
+            output_buf_individual.resize(len, 0u8);
+            for (i, res) in output_buf_individual.iter_mut().enumerate() {
+                *res = cart_individual.read_byte_relative(addr.move_forward_by(i as u16));
+            }
+            output_buf_slice.resize(len, 0u8);
+            cart_slice.read_bytes_relative(addr, &mut output_buf_slice);
+
+            assert_eq!(output_buf_individual, output_buf_slice);
+        }
+
+        // To reduce the test runtime, only compare the final result.
+        assert_eq!(cart_individual, cart_slice);
     }
 }

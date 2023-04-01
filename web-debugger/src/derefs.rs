@@ -1,5 +1,5 @@
 use feo3boy::gb::Gb;
-use feo3boy::memdev::MemDevice;
+use feo3boy::memdev::RootMemDevice;
 use yew::prelude::*;
 
 use crate::instrs::{Instr, InstrInfo};
@@ -23,14 +23,11 @@ pub struct ComputedDerefs {
 impl From<&Gb> for ComputedDerefs {
     fn from(gb: &Gb) -> Self {
         Self {
-            pbc: gb.mmu.read(gb.cpustate.regs.bc().into()),
-            pde: gb.mmu.read(gb.cpustate.regs.de().into()),
-            phl: gb.mmu.read(gb.cpustate.regs.hl().into()),
-            pffc: gb.mmu.read((0xff00 + gb.cpustate.regs.c as u16).into()),
-            psp: u16::from_le_bytes([
-                gb.mmu.read(gb.cpustate.regs.sp.into()),
-                gb.mmu.read(gb.cpustate.regs.sp.wrapping_add(1).into()),
-            ]),
+            pbc: gb.mmu.read(gb.cpustate.regs.bc()),
+            pde: gb.mmu.read(gb.cpustate.regs.de()),
+            phl: gb.mmu.read(gb.cpustate.regs.hl()),
+            pffc: gb.mmu.read(0xff00 + gb.cpustate.regs.c as u16),
+            psp: gb.mmu.read(gb.cpustate.regs.sp),
             ppc: InstrInfo::fetch_at(&gb.mmu, gb.cpustate.regs.pc),
         }
     }

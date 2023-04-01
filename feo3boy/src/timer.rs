@@ -1,11 +1,11 @@
 use crate::apu::{self, ApuContext};
 use crate::bits::BitGroup;
 use crate::interrupts::{InterruptContext, InterruptFlags, Interrupts};
-use crate::memdev::{Addr, MemDevice};
+use crate::memdev::{MemDevice, RelativeAddr};
 
 /// Represends sound and volume settings.
 #[derive(Default, Debug, Clone, Eq, PartialEq, Hash, MemDevice)]
-#[memdev(byte, readable = TimerControl::RW_BITS, writable = TimerControl::RW_BITS)]
+#[memdev(bits, readable = TimerControl::RW_BITS, writable = TimerControl::RW_BITS)]
 #[repr(transparent)]
 pub struct TimerControl(u8);
 
@@ -67,25 +67,31 @@ pub struct TimerRegs {
 }
 
 impl MemDevice for TimerRegs {
-    fn read(&self, addr: Addr) -> u8 {
+    const LEN: usize = 4;
+
+    fn read_byte_relative(&self, addr: RelativeAddr) -> u8 {
         match addr.relative() {
             0x00 => (self.divider / 0x100) as u8,
             0x01 => self.timer,
             0x02 => self.timer_mod,
-            0x03 => self.timer_control.read(addr.offset_by(0x03)),
+            0x03 => self.timer_control.read_byte_relative(addr.offset_by(0x03)),
             _ => panic!("Address {} out of range for TimerRegs", addr),
         }
     }
 
-    fn write(&mut self, addr: Addr, val: u8) {
+    fn write_byte_relative(&mut self, addr: RelativeAddr, val: u8) {
         match addr.relative() {
             0x00 => self.divider = 0,
             0x01 => self.timer = val,
             0x02 => self.timer_mod = val,
-            0x03 => self.timer_control.write(addr.offset_by(0x03), val),
+            0x03 => self
+                .timer_control
+                .write_byte_relative(addr.offset_by(0x03), val),
             _ => panic!("Address {} out of range for TimerRegs", addr),
         }
     }
+
+    memdev_bytes_from_byte!(TimerRegs);
 }
 
 /// Context trait providing access to fields needed to service graphics.
