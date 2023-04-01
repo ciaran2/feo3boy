@@ -13,7 +13,7 @@ use crate::interrupts::{InterruptContext, InterruptEnable, InterruptFlags, Inter
 use crate::ppu::{LcdFlags, LcdStat};
 use crate::timer::TimerControl;
 
-pub use cartridge::{Cartridge, Mbc1Rom, ParseCartridgeError, RamBank, RomBank, RomOnly};
+pub use cartridge::{Cartridge, SaveData, Mbc1Rom, Mbc3Rom, ParseCartridgeError, RamBank, RomBank, RomOnly};
 
 mod cartridge;
 
