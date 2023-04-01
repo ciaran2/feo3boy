@@ -377,7 +377,7 @@ impl Component for Mbc3RomRomSection {
         </>}
     }
 
-    fn changed(&mut self, ctx: &Context<Self>) -> bool {
+    fn changed(&mut self, ctx: &Context<Self>, _old_props: &Self::Properties) -> bool {
         let rom = &ctx.props().rom;
         if let Some(view) = self.viewed_lower {
             if view >= rom.rom_banks().len() {
