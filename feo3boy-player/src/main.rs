@@ -160,7 +160,7 @@ fn main() {
             let mut cart = Cartridge::parse(cart_file).unwrap();
 
             match File::open(save_filename.as_path()) {
-                Ok(save_file) => { cart.load_save_data(save_file); },
+                Ok(save_file) => { cart.load_save_data(save_file).unwrap(); },
                 _ => (),
             }
 

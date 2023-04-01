@@ -325,7 +325,7 @@ impl MemDevice for Cartridge {
 }
 
 impl SaveData for Cartridge {
-    fn write_save_data(&self, mut writer: impl Write) -> Result<(), io::Error> {
+    fn write_save_data(&self, writer: impl Write) -> Result<(), io::Error> {
         match self {
             Cartridge::None => Ok(()),
             Cartridge::RomOnly(ref cart) => cart.write_save_data(writer),
@@ -334,7 +334,7 @@ impl SaveData for Cartridge {
         }
     }
 
-    fn load_save_data(&mut self, mut reader: impl Read) -> Result<(), io::Error> {
+    fn load_save_data(&mut self, reader: impl Read) -> Result<(), io::Error> {
         match self {
             Cartridge::None => Ok(()),
             Cartridge::RomOnly(ref mut cart) => cart.load_save_data(reader),
