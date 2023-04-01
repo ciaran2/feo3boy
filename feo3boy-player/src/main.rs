@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use feo3boy::gb::Gb;
 use feo3boy::input::{ButtonStates, InputContext};
-use feo3boy::memdev::{BiosRom, Cartridge};
+use feo3boy::memdev::{BiosRom, Cartridge, SaveData};
 
 fn init_audio_stream(
     mut sample_consumer: Consumer<(i16, i16), Arc<HeapRb<(i16, i16)>>>,
@@ -152,12 +152,21 @@ fn main() {
         None => BiosRom::default(),
     };
 
-    let cart = match args.rom {
-        Some(filename) => {
+    let (cart, save_filename) = match args.rom { 
+        Some(ref filename) => {
             let cart_file = File::open(filename).unwrap();
-            Cartridge::parse(cart_file).unwrap()
+            let mut save_filename = PathBuf::from(filename);
+            save_filename.set_extension("sav");
+            let mut cart = Cartridge::parse(cart_file).unwrap();
+
+            match File::open(save_filename.as_path()) {
+                Ok(save_file) => { cart.load_save_data(save_file); },
+                _ => (),
+            }
+
+            (cart, Some(save_filename))
         }
-        None => Cartridge::None,
+        None => (Cartridge::None, None),
     };
 
     // Box to keep it off the stack.
@@ -166,7 +175,7 @@ fn main() {
     let mut stdout = io::stdout();
 
     let event_loop = EventLoop::new();
-    let window = WindowBuilder::new().build(&event_loop).unwrap();
+    let window = WindowBuilder::new().with_title("feo3boy-player").build(&event_loop).unwrap();
     let mut input_helper = WinitInputHelper::new();
 
     let mut pixels = {
