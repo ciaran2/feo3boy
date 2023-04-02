@@ -14,7 +14,9 @@ use crate::ppu::PpuRegs;
 use crate::serial::SerialRegs;
 use crate::timer::TimerRegs;
 
-pub use cartridge::{Cartridge, Mbc1Rom, ParseCartridgeError, RamBank, RomBank, RomOnly};
+pub use cartridge::{
+    Cartridge, Mbc1Rom, Mbc3Rom, ParseCartridgeError, RamBank, RomBank, RomOnly, SaveData,
+};
 
 mod cartridge;
 

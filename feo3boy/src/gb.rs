@@ -1,3 +1,6 @@
+
+use std::io::{self, Read, Write};
+
 use crate::apu::{self, ApuContext, ApuRegs, ApuState};
 use crate::gbz80core::direct_executor::DirectExecutor;
 use crate::gbz80core::executor::Executor;
@@ -5,7 +8,7 @@ use crate::gbz80core::microcode_executor::MicrocodeExecutor;
 use crate::gbz80core::{CpuContext, ExecutorContext, Gbz80State};
 use crate::input::{self, ButtonRegister, ButtonStates, InputContext};
 use crate::interrupts::InterruptContext;
-use crate::memdev::{BiosRom, Cartridge, GbMmu, MemContext, Oam, Vram};
+use crate::memdev::{BiosRom, Cartridge, GbMmu, MemContext, Oam, SaveData, Vram};
 use crate::ppu::{self, PpuContext, PpuRegs, PpuState};
 use crate::serial::{self, SerialContext, SerialRegs, SerialState};
 use crate::timer::{self, TimerContext, TimerRegs, TimerState};
@@ -82,6 +85,20 @@ impl<E: Executor> Gb<E> {
 
     pub fn set_sample_rate(&mut self, sample_rate: u32) {
         self.apu.set_output_sample_rate(sample_rate);
+    }
+}
+
+impl<E: Executor> SaveData for Gb<E> {
+    fn write_save_data(&self, writer: impl Write) -> Result<(), io::Error> {
+        self.mmu.cart.write_save_data(writer)
+    }
+
+    fn load_save_data(&mut self, reader: impl Read) -> Result<(), io::Error> {
+        self.mmu.cart.load_save_data(reader)
+    }
+
+    fn has_save_data(&self) -> bool {
+        self.mmu.cart.has_save_data()
     }
 }
 

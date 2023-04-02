@@ -26,7 +26,7 @@ impl ButtonStates {
         (if no_directions {
             0xf
         } else {
-            !(self.bits() >> 4)
+            !(self.bits() >> 4) & 0xf
         }) & (if no_actions {
             0xf
         } else {
