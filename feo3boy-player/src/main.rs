@@ -1,8 +1,8 @@
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
-use std::time::Duration;
 use std::thread::sleep;
+use std::time::Duration;
 
 use clap::Parser;
 use log::{debug, error, info, warn};

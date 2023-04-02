@@ -173,7 +173,7 @@ pub fn tick(ctx: &mut impl TimerContext, tcycles: u64) {
 
     // Update APU at ~512 Hz
     // period will have to be dynamic to support GBC double speed
-    let period = 0x200;
+    let period = 0x2000;
     // falling edge case when divider has been reset
     if (ctx.timer().old_divider & (period >> 1)) != 0 && (divider & (period >> 1)) == 0 {
         apu::apu_tick(ctx);

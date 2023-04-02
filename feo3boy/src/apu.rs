@@ -604,15 +604,15 @@ impl Channel for PulseChannel {
 
     fn check_trigger(&mut self) {
         if self.triggered {
-            info!(
-                "Pulse channel triggered at frequency {}",
-                CLOCK_SPEED / self.period
-            );
-
             self.active = true;
             self.triggered = false;
             self.envelope = self.envelope_control.new_envelope();
             self.sweep = self.sweep_control.new_sweep();
+
+            info!(
+                "Pulse channel triggered at frequency {} with envelope {:?}, length_enable {}, length_acc {}",
+                CLOCK_SPEED / self.period, self.envelope, self.length_enable, self.length_acc
+            );
         }
     }
 
