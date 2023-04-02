@@ -1,3 +1,6 @@
+#[macro_use]
+mod macros;
+
 pub mod apu;
 pub mod bits;
 pub mod gb;

@@ -1,7 +1,9 @@
 //! This crate provides the `#[define_microcode]` attribute macro which automatically
 //! generates the `Microcode` type from a module containing the microcode's operations as
 //! pure functions.
-use proc_macro2::Ident;
+use proc_macro2::{Ident, Span, TokenStream};
+use proc_macro_crate::FoundCrate;
+use quote::quote;
 use syn::{parse_macro_input, ItemMod};
 
 use crate::extractor::extract_defs;
@@ -51,4 +53,19 @@ pub fn define_microcode(
         return e.into_compile_error().into();
     }
     generate_microcode_type(&defs).into()
+}
+
+/// Get a representation of either `crate` or `::<name>` to use for the specified crate.
+fn get_crate(name: &str) -> TokenStream {
+    match proc_macro_crate::crate_name(name) {
+        Ok(FoundCrate::Itself) => quote! { crate },
+        Ok(FoundCrate::Name(name)) => {
+            let name = Ident::new(&name, Span::call_site());
+            quote! { ::#name }
+        }
+        Err(e) => panic!(
+            "Unable to find the {} crate: {}, required by this macro.",
+            name, e
+        ),
+    }
 }

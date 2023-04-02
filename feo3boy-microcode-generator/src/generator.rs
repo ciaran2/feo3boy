@@ -232,6 +232,8 @@ fn generate_descriptor_def(
 ) -> TokenStream {
     let doc = format!("Provides descriptive informaton about an instruction from the microcode.");
 
+    let feo3boy_opcodes = crate::get_crate("feo3boy-opcodes");
+
     quote! {
         #[doc = #doc]
         #[derive(Debug, Clone)]
@@ -240,12 +242,12 @@ fn generate_descriptor_def(
             pub name: String,
             /// Arguments to this operator. Stack arguments are in the order they should
             /// be popped off the stack. Field arguments are provided as literals.
-            pub args: Vec<Arg<#allowed_types_name>>,
+            pub args: Vec<#feo3boy_opcodes::compiler::args::Arg<#allowed_types_name>>,
             /// Values returned from this operator. All of them go on the stack. Provided
             /// in the order they should be pushed onto the stack.
             pub returns: Vec<#allowed_types_name>,
             /// Which type of operation this is (an extern or a pure function).
-            pub optype: OperationType<#externs_name>,
+            pub optype: #feo3boy_opcodes::compiler::OperationType<#externs_name>,
         }
     }
 }

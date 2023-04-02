@@ -221,6 +221,10 @@ impl Cartridge {
                         0
                     }
                     (2 | 3, Err(e)) => return Err(e),
+                    (2 | 3, Ok(0)) => {
+                        warn!("MBC1 + RAM cartridge had 0 ram banks");
+                        0
+                    }
                     (2 | 3, Ok(size @ (1 | 4))) => size,
                     (2 | 3, Ok(ram_size)) => {
                         return Err(ParseCartridgeError::UnsupportedRamSize { rom_type, ram_size })

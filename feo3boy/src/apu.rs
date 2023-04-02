@@ -2,10 +2,11 @@ use bitflags::bitflags;
 use log::{debug, info};
 
 use crate::bits::BitGroup;
-use crate::memdev::{IoRegs, IoRegsContext};
+use crate::memdev::{Addr, MemDevice};
 
 bitflags! {
-    #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+    #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash, MemDevice)]
+    #[memdev(bitflags, writable = SoundEnable::WRITABLE)]
     #[repr(transparent)]
     pub struct SoundEnable : u8 {
         const ALL = 0b10000000;
@@ -13,12 +14,13 @@ bitflags! {
         const CH3 = 0b00000100;
         const CH2 = 0b00000010;
         const CH1 = 0b00000001;
-        const WRITEABLE = 0b10000000;
+        const WRITABLE = 0b10000000;
     }
 }
 
 bitflags! {
-    #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+    #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash, MemDevice)]
+    #[memdev(bitflags)]
     #[repr(transparent)]
     pub struct SoundPan : u8 {
         const CH4_LEFT  = 0b10000000;
@@ -33,7 +35,8 @@ bitflags! {
 }
 
 /// Represends sound and volume settings.
-#[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash, MemDevice)]
+#[memdev(byte)]
 #[repr(transparent)]
 pub struct SoundVolume(u8);
 
@@ -42,18 +45,6 @@ impl SoundVolume {
     const VOL_LEFT: BitGroup = BitGroup(0b0111_0000);
     const VIN_RIGHT: BitGroup = BitGroup(0b0000_1000);
     const VOL_RIGHT: BitGroup = BitGroup(0b0000_0111);
-
-    /// Get the bit representation of this value.
-    #[inline]
-    pub fn bits(self) -> u8 {
-        self.0
-    }
-
-    /// Set all the values at once from a u8.
-    #[inline]
-    pub fn set_bits(&mut self, val: u8) {
-        self.0 = val;
-    }
 
     /// Get the vin_left
     #[inline]
@@ -105,31 +96,20 @@ impl SoundVolume {
 }
 
 /// Represends sweep control settings.
-#[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Default, Debug, Clone, Eq, PartialEq, Hash, MemDevice)]
+#[memdev(byte, readable = SweepControl::RW_BITS, writable = SweepControl::RW_BITS)]
 #[repr(transparent)]
 pub struct SweepControl(u8);
 
 impl SweepControl {
-    const PACE: BitGroup = BitGroup(0b1000_0000);
-    const SLOPE_DIR: BitGroup = BitGroup(0b0111_0000);
-    const SLOPE_CTRL: BitGroup = BitGroup(0b0000_1000);
-    const ALL: BitGroup = BitGroup(0b0111_1111);
-
-    /// Get the bit representation of this value.
-    #[inline]
-    pub fn bits(self) -> u8 {
-        self.0
-    }
-
-    /// Set all the values at once from a u8.
-    #[inline]
-    pub fn set_bits(&mut self, val: u8) {
-        Self::ALL.apply(&mut self.0, val);
-    }
+    const PACE: BitGroup = BitGroup(0b0111_0000);
+    const SLOPE_DIR: BitGroup = BitGroup(0b0000_1000);
+    const SLOPE_CTRL: BitGroup = BitGroup(0b0000_0111);
+    const RW_BITS: u8 = 0b0111_1111;
 
     /// Get the pace.
     #[inline]
-    pub fn pace(self) -> u8 {
+    pub fn pace(&self) -> u8 {
         Self::PACE.extract(self.0)
     }
 
@@ -141,13 +121,13 @@ impl SweepControl {
 
     /// Get whether the slope is negative.
     #[inline]
-    pub fn slope_negative(self) -> bool {
+    pub fn slope_negative(&self) -> bool {
         Self::SLOPE_DIR.extract_bool(self.0)
     }
 
     /// Get an i16 indicating the slope direction; -1 for negative, +1 for positive.
     #[inline]
-    pub fn slope_dir(self) -> i16 {
+    pub fn slope_dir(&self) -> i16 {
         if self.slope_negative() {
             -1
         } else {
@@ -163,7 +143,7 @@ impl SweepControl {
 
     /// Get the slope control.
     #[inline]
-    pub fn slope_ctrl(self) -> u8 {
+    pub fn slope_ctrl(&self) -> u8 {
         Self::SLOPE_CTRL.extract(self.0)
     }
 
@@ -216,7 +196,8 @@ impl Sweep {
     }
 }
 
-#[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Default, Debug, Clone, Eq, PartialEq, Hash, MemDevice)]
+#[memdev(byte)]
 #[repr(transparent)]
 pub struct PulseTimer(u8);
 
@@ -224,33 +205,21 @@ impl PulseTimer {
     const DUTY_CYCLE: BitGroup = BitGroup(0b1100_0000);
     const INIT_TIMER: BitGroup = BitGroup(0b0011_1111);
 
-    /// Create a [`PulseTimer`] from the given bit value.
+    /// Update the value in-place.
     #[inline]
-    pub fn from_bits(val: u8) -> Self {
-        Self(val)
-    }
-
-    /// Get the bit representation of this value.
-    #[inline]
-    pub fn bits(self) -> u8 {
-        self.0
-    }
-
-    /// Set all the values at once from a u8.
-    #[inline]
-    pub fn set_bits(&mut self, val: u8) {
+    fn set(&mut self, val: u8) {
         self.0 = val;
     }
 
     /// Get the duty cycle.
     #[inline]
-    pub fn duty_cycle(self) -> u8 {
+    pub fn duty_cycle(&self) -> u8 {
         Self::DUTY_CYCLE.extract(self.0)
     }
 
     /// Gets the duty cycle as a usize index.
     #[inline]
-    pub fn duty(self) -> usize {
+    pub fn duty(&self) -> usize {
         self.duty_cycle() as usize
     }
 
@@ -262,7 +231,7 @@ impl PulseTimer {
 
     /// Get the init timer
     #[inline]
-    pub fn init_timer(self) -> u8 {
+    pub fn init_timer(&self) -> u8 {
         Self::INIT_TIMER.extract(self.0)
     }
 
@@ -273,7 +242,8 @@ impl PulseTimer {
     }
 }
 
-#[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Default, Debug, Clone, Eq, PartialEq, Hash, MemDevice)]
+#[memdev(byte)]
 #[repr(transparent)]
 pub struct EnvelopeControl(u8);
 
@@ -282,27 +252,14 @@ impl EnvelopeControl {
     const DIRECTION: BitGroup = BitGroup(0b0000_1000);
     const PACE: BitGroup = BitGroup(0b0000_0111);
 
-    /// Create an [`EnvelopeControl`] from the given bit value.
     #[inline]
-    pub fn from_bits(val: u8) -> Self {
-        Self(val)
-    }
-
-    /// Get the bit representation of this value.
-    #[inline]
-    pub fn bits(self) -> u8 {
-        self.0
-    }
-
-    /// Set all the values at once from a u8.
-    #[inline]
-    pub fn set_bits(&mut self, val: u8) {
+    fn set(&mut self, val: u8) {
         self.0 = val;
     }
 
     /// Get the init vol
     #[inline]
-    pub fn init_vol(self) -> i8 {
+    pub fn init_vol(&self) -> i8 {
         Self::INIT_VOL.extract_signed(self.0)
     }
 
@@ -314,13 +271,13 @@ impl EnvelopeControl {
 
     /// Get whether the direction is negative.
     #[inline]
-    pub fn direction_negative(self) -> bool {
+    pub fn direction_negative(&self) -> bool {
         Self::DIRECTION.extract_bool(self.0)
     }
 
     /// Get a signed value indicating the direction, either `-1` or `1`.
     #[inline]
-    pub fn direction(self) -> i8 {
+    pub fn direction(&self) -> i8 {
         if self.direction_negative() {
             -1
         } else {
@@ -336,7 +293,7 @@ impl EnvelopeControl {
 
     /// Get the pace.
     #[inline]
-    pub fn pace(self) -> u8 {
+    pub fn pace(&self) -> u8 {
         Self::PACE.extract(self.0)
     }
 
@@ -380,25 +337,14 @@ impl Envelope {
     }
 }
 
-#[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Default, Debug, Clone, Eq, PartialEq, Hash, MemDevice)]
+#[memdev(byte, readable = WavetableLevel::RW_BITS, writable = WavetableLevel::RW_BITS)]
 #[repr(transparent)]
 pub struct WavetableLevel(u8);
 
 impl WavetableLevel {
     const LEVEL: BitGroup = BitGroup(0b0110_0000);
-    const ALL: BitGroup = BitGroup(0b0110_1000);
-
-    /// Get the bit representation of this value.
-    #[inline]
-    pub fn bits(self) -> u8 {
-        self.0
-    }
-
-    /// Set all the values at once from a u8.
-    #[inline]
-    pub fn set_bits(&mut self, val: u8) {
-        Self::ALL.apply(&mut self.0, val);
-    }
+    const RW_BITS: u8 = 0b0110_1000;
 
     /// Get the level.
     #[inline]
@@ -413,7 +359,8 @@ impl WavetableLevel {
     }
 }
 
-#[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Default, Debug, Clone, Eq, PartialEq, Hash, MemDevice)]
+#[memdev(byte)]
 #[repr(transparent)]
 pub struct NoiseControl(u8);
 
@@ -422,26 +369,13 @@ impl NoiseControl {
     const LFSR_WIDTH: BitGroup = BitGroup(0b0000_1000);
     const CLOCK_DIV: BitGroup = BitGroup(0b0000_0111);
 
-    /// Create a NoiseControl from the full set of bits of the value.
-    pub fn from_bits(val: u8) -> Self {
-        Self(val)
-    }
-
-    /// Get the bit representation of this value.
-    #[inline]
-    pub fn bits(self) -> u8 {
-        self.0
-    }
-
-    /// Set all the values at once from a u8.
-    #[inline]
-    pub fn set_bits(&mut self, val: u8) {
+    fn set(&mut self, val: u8) {
         self.0 = val;
     }
 
     /// Get the clock shift.
     #[inline]
-    pub fn clock_shift(self) -> u8 {
+    pub fn clock_shift(&self) -> u8 {
         Self::CLOCK_SHIFT.extract(self.0)
     }
 
@@ -453,12 +387,12 @@ impl NoiseControl {
 
     /// Get the LFSR width bit.
     #[inline]
-    pub fn lfsr_width(self) -> bool {
+    pub fn lfsr_width(&self) -> bool {
         Self::LFSR_WIDTH.extract_bool(self.0)
     }
 
     /// Get the LFSR mask based on whether the LFSR bit is set.
-    fn lfsr_mask(self) -> u16 {
+    fn lfsr_mask(&self) -> u16 {
         if self.lfsr_width() {
             0x8080
         } else {
@@ -474,7 +408,7 @@ impl NoiseControl {
 
     /// Get the clock div.
     #[inline]
-    pub fn clock_div(self) -> u8 {
+    pub fn clock_div(&self) -> u8 {
         Self::CLOCK_DIV.extract(self.0)
     }
 
@@ -499,7 +433,8 @@ impl NoiseControl {
 }
 
 bitflags! {
-    #[derive(Default, Debug, Copy, Clone, Eq, PartialEq)]
+    #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, MemDevice)]
+    #[memdev(bitflags, readable = ChannelControl::READABLE)]
     pub struct ChannelControl : u8 {
         const TRIGGER            = 0b1000_0000;
         const LENGTH_ENABLE      = 0b0100_0000;
@@ -612,7 +547,7 @@ impl PulseChannel {
     }
 
     pub fn set_envelope(&mut self, value: u8) {
-        self.envelope_control = EnvelopeControl::from_bits(value);
+        self.envelope_control.set(value);
         //set an envelope phase offset?
         //needs retrigger to take
     }
@@ -663,7 +598,7 @@ impl Channel for PulseChannel {
     }
 
     fn set_length(&mut self, value: u8) {
-        self.timer = PulseTimer::from_bits(value);
+        self.timer.set(value);
         self.length_acc = self.timer.init_timer();
     }
 
@@ -714,6 +649,30 @@ impl Channel for PulseChannel {
     }
 }
 
+impl MemDevice for PulseChannel {
+    fn read(&self, addr: Addr) -> u8 {
+        match addr.index() {
+            0x00 => self.sweep_control.read(addr),
+            0x01 => self.timer.read(addr.offset_by(0x01)),
+            0x02 => self.envelope_control.read(addr.offset_by(0x02)),
+            0x03 => self.wavelength_low(),
+            0x04 => self.read_control(),
+            _ => panic!("Address {} out of range for PulseChannel", addr),
+        }
+    }
+
+    fn write(&mut self, addr: Addr, val: u8) {
+        match addr.index() {
+            0x00 => self.sweep_control.write(addr, val),
+            0x01 => self.set_length(val),
+            0x02 => self.set_envelope(val),
+            0x03 => self.set_wavelength_low(val),
+            0x04 => self.set_control(val),
+            _ => panic!("Address {} out of range for PulseChannel", addr),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WavetableChannel {
     period: u32,
@@ -726,6 +685,8 @@ pub struct WavetableChannel {
     length_enable: bool,
     length_acc: u8,
     length_aticks: u8,
+    /// Contains sample values which have been split in half to allow nybbles to be
+    /// efficiently indexed when sampling.
     sample_table: [u8; 32],
 }
 
@@ -739,7 +700,7 @@ impl WavetableChannel {
         self.generate_period();
     }
 
-    pub fn get_samples(&mut self, samples: usize) -> u8 {
+    pub fn get_samples(&self, samples: usize) -> u8 {
         let base = samples * 2;
         self.sample_table[base] << 4 + self.sample_table[base + 1]
     }
@@ -748,8 +709,8 @@ impl WavetableChannel {
         self.enabled = (value & 0x80) != 0;
     }
 
-    pub fn set_samples(&mut self, samples: u16, value: u8) {
-        let base = (samples * 2) as usize;
+    pub fn set_samples(&mut self, samples: usize, value: u8) {
+        let base = samples * 2;
         self.sample_table[base] = (value & 0xf0) >> 4;
         self.sample_table[base + 1] = value & 0xf;
     }
@@ -829,6 +790,34 @@ impl Channel for WavetableChannel {
     }
 }
 
+impl MemDevice for WavetableChannel {
+    fn read(&self, addr: Addr) -> u8 {
+        match addr.relative() {
+            // Channel settings block.
+            0x00..=0x04 => 0xff,
+            // Channel "samples" block. ApuRegs will remap this portion to the correct
+            // offset.
+            0x05..=0x14 => self.get_samples(addr.offset_by(0x05).index()),
+            _ => panic!("Address {addr}  out of range for WavetableChannel"),
+        }
+    }
+
+    fn write(&mut self, addr: Addr, val: u8) {
+        match addr.relative() {
+            // Channel settings block.
+            0x00 => self.set_enable(val),
+            0x01 => self.set_length(val),
+            0x02 => self.set_level(val),
+            0x03 => self.set_wavelength_low(val),
+            0x04 => self.set_control(val),
+            // Channel "samples" block. ApuRegs will remap this portion to the correct
+            // offset.
+            0x05..=0x14 => self.set_samples(addr.offset_by(0x05).index(), val),
+            _ => panic!("Address {addr}  out of range for WavetableChannel"),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NoiseChannel {
     phase_offset: u32,
@@ -848,11 +837,11 @@ pub struct NoiseChannel {
 
 impl NoiseChannel {
     pub fn set_noise_control(&mut self, value: u8) {
-        self.noise_control = NoiseControl::from_bits(value);
+        self.noise_control.set(value);
     }
 
     pub fn set_envelope(&mut self, value: u8) {
-        self.envelope_control = EnvelopeControl::from_bits(value);
+        self.envelope_control.set(value);
         //set an envelope phase offset?
         //needs retrigger to take
     }
@@ -936,37 +925,85 @@ impl Channel for NoiseChannel {
     }
 }
 
-pub trait ApuContext: IoRegsContext {
+impl MemDevice for NoiseChannel {
+    fn read(&self, addr: Addr) -> u8 {
+        match addr.relative() {
+            0x00..=0x03 => 0xff,
+            _ => panic!("Address {addr} out of range for NoiseChannel"),
+        }
+    }
+
+    fn write(&mut self, addr: Addr, val: u8) {
+        match addr.relative() {
+            0x00 => self.set_length(val),
+            0x01 => self.set_envelope(val),
+            0x02 => self.set_noise_control(val),
+            0x03 => self.set_control(val),
+            _ => panic!("Address {addr} out of range for NoiseChannel"),
+        }
+    }
+}
+
+/// Memory-mapped IO registers used by the APU.
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
+pub struct ApuRegs {
+    pub ch1: PulseChannel,
+    pub ch2: PulseChannel,
+    pub ch3: WavetableChannel,
+    pub ch4: NoiseChannel,
+    pub sound_volume: SoundVolume,
+    pub sound_pan: SoundPan,
+    pub sound_enable: SoundEnable,
+    pub wavetable: [u8; 16],
+}
+
+memdev_fields! {
+    ApuRegs {
+        0x00..=0x04 => ch1,
+        0x05 => 0xff,
+        0x06..=0x09 => { ch2, skip_over: 1 },
+        0x08..=0x0e => ch3,
+        0x0f => 0xff,
+        0x10..=0x13 => ch4,
+        0x14..=0x1f => 0xff,
+        0x20..=0x2f => { ch3, skip_over: 5 },
+    }
+}
+
+pub trait ApuContext {
     fn apu(&self) -> &ApuState;
     fn apu_mut(&mut self) -> &mut ApuState;
+
+    fn apu_regs(&self) -> &ApuRegs;
+    fn apu_regs_mut(&mut self) -> &mut ApuRegs;
 }
 
 /// to be called on divider bit 4 (5 double speed) falling edge
 pub fn apu_tick(ctx: &mut impl ApuContext) {
-    ctx.ioregs_mut().ch1_mut().apu_tick();
-    ctx.ioregs_mut().ch2_mut().apu_tick();
-    ctx.ioregs_mut().ch3_mut().apu_tick();
-    ctx.ioregs_mut().ch4_mut().apu_tick();
+    ctx.apu_regs_mut().ch1.apu_tick();
+    ctx.apu_regs_mut().ch2.apu_tick();
+    ctx.apu_regs_mut().ch3.apu_tick();
+    ctx.apu_regs_mut().ch4.apu_tick();
 }
 
 pub fn tick(ctx: &mut impl ApuContext, tcycles: u64) {
     let mut sample_cursor = ctx.apu().sample_cursor;
 
-    ctx.ioregs_mut().ch4_mut().tick(tcycles as u32);
+    ctx.apu_regs_mut().ch4.tick(tcycles as u32);
 
-    ctx.ioregs_mut().ch1_mut().check_trigger();
-    ctx.ioregs_mut().ch2_mut().check_trigger();
-    ctx.ioregs_mut().ch3_mut().check_trigger();
-    ctx.ioregs_mut().ch4_mut().check_trigger();
+    ctx.apu_regs_mut().ch1.check_trigger();
+    ctx.apu_regs_mut().ch2.check_trigger();
+    ctx.apu_regs_mut().ch3.check_trigger();
+    ctx.apu_regs_mut().ch4.check_trigger();
 
     if ctx.apu().output_period > 0.0 {
         let next_sample = sample_cursor % ctx.apu().output_period;
         if tcycles as f32 > next_sample.into() {
             sample_cursor += next_sample;
-            let mono_sample = ctx.ioregs().ch1().get_sample(sample_cursor)
-                + ctx.ioregs().ch2().get_sample(sample_cursor)
-                + ctx.ioregs().ch3().get_sample(sample_cursor)
-                + ctx.ioregs().ch4().get_sample(sample_cursor);
+            let mono_sample = ctx.apu_regs().ch1.get_sample(sample_cursor)
+                + ctx.apu_regs().ch2.get_sample(sample_cursor)
+                + ctx.apu_regs().ch3.get_sample(sample_cursor)
+                + ctx.apu_regs().ch4.get_sample(sample_cursor);
             debug!("Mono sample: {}", mono_sample);
             //let mono_sample_signed = -(mono_sample as i16 - 32);
             //ctx.apu_mut().output_buffer.push_back((mono_sample_signed, mono_sample_signed));

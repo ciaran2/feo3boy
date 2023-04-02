@@ -1,45 +1,33 @@
 use crate::apu::{self, ApuContext};
 use crate::bits::BitGroup;
 use crate::interrupts::{InterruptContext, InterruptFlags, Interrupts};
-use crate::memdev::{IoRegs, IoRegsContext};
+use crate::memdev::{Addr, MemDevice};
 
 /// Represends sound and volume settings.
-#[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Default, Debug, Clone, Eq, PartialEq, Hash, MemDevice)]
+#[memdev(byte, readable = TimerControl::RW_BITS, writable = TimerControl::RW_BITS)]
 #[repr(transparent)]
 pub struct TimerControl(u8);
 
 impl TimerControl {
     const TIMER_PERIOD: BitGroup = BitGroup(0b0000_0011);
     const TIMER_ENABLE: BitGroup = BitGroup(0b0000_0100);
-    const ALL: BitGroup = BitGroup(0b0000_0111);
+    const RW_BITS: u8 = 0b0000_0111;
 
-    #[inline]
-    pub fn from_bits(val: u8) -> Self {
-        Self(Self::ALL.filter(val))
-    }
-
-    /// Get the bit representation of this value.
-    #[inline]
-    pub fn bits(self) -> u8 {
+    pub fn bits(&self) -> u8 {
         self.0
-    }
-
-    /// Set all the values at once from a u8.
-    #[inline]
-    pub fn set_bits(&mut self, val: u8) {
-        Self::ALL.apply(&mut self.0, val);
     }
 
     /// Get the timer period selecton number, this is *not* the actual period value
     /// selected.
     #[inline]
-    pub fn period_idx(self) -> u8 {
+    pub fn period_idx(&self) -> u8 {
         Self::TIMER_PERIOD.extract(self.0)
     }
 
     /// Get the actual period selected.
     #[inline]
-    pub fn period(self) -> u16 {
+    pub fn period(&self) -> u16 {
         match self.period_idx() {
             0 => 1024,
             1 => 16,
@@ -58,7 +46,7 @@ impl TimerControl {
 
     /// Get the timer enable
     #[inline]
-    pub fn timer_enable(self) -> bool {
+    pub fn timer_enable(&self) -> bool {
         Self::TIMER_ENABLE.extract_bool(self.0)
     }
 
@@ -69,13 +57,47 @@ impl TimerControl {
     }
 }
 
+/// Memory-mapped IO registers used by the Timer.
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
+pub struct TimerRegs {
+    pub divider: u16,
+    pub timer: u8,
+    pub timer_mod: u8,
+    pub timer_control: TimerControl,
+}
+
+impl MemDevice for TimerRegs {
+    fn read(&self, addr: Addr) -> u8 {
+        match addr.relative() {
+            0x00 => (self.divider / 0x100) as u8,
+            0x01 => self.timer,
+            0x02 => self.timer_mod,
+            0x03 => self.timer_control.read(addr.offset_by(0x03)),
+            _ => panic!("Address {} out of range for TimerRegs", addr),
+        }
+    }
+
+    fn write(&mut self, addr: Addr, val: u8) {
+        match addr.relative() {
+            0x00 => self.divider = 0,
+            0x01 => self.timer = val,
+            0x02 => self.timer_mod = val,
+            0x03 => self.timer_control.write(addr.offset_by(0x03), val),
+            _ => panic!("Address {} out of range for TimerRegs", addr),
+        }
+    }
+}
+
 /// Context trait providing access to fields needed to service graphics.
-pub trait TimerContext: IoRegsContext + InterruptContext + ApuContext {
+pub trait TimerContext: InterruptContext + ApuContext {
     /// Get the timer state.
     fn timer(&self) -> &TimerState;
 
     /// Get mutable access to the timer state.
     fn timer_mut(&mut self) -> &mut TimerState;
+
+    fn timer_regs(&self) -> &TimerRegs;
+    fn timer_regs_mut(&mut self) -> &mut TimerRegs;
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
@@ -98,22 +120,22 @@ impl TimerState {
 }
 
 fn increment_timer(ctx: &mut impl TimerContext) {
-    let (timer, overflow) = ctx.ioregs().timer().overflowing_add(1);
+    let (timer, overflow) = ctx.timer_regs().timer.overflowing_add(1);
 
     if overflow {
         ctx.timer_mut().queue_interrupt();
     }
 
-    ctx.ioregs_mut().set_timer(timer)
+    ctx.timer_regs_mut().timer = timer;
 }
 
 fn check_interrupt(ctx: &mut impl TimerContext, tcycles: u64) {
     // an intervening write to the timer will discard the interrupt
-    if ctx.timer().interrupt_queued && ctx.ioregs().timer() == 0 {
+    if ctx.timer().interrupt_queued && ctx.timer_regs().timer == 0 {
         if tcycles >= ctx.timer().interrupt_delay as u64 {
             ctx.timer_mut().interrupt_queued = false;
-            let timer_mod = ctx.ioregs_mut().timer_mod();
-            ctx.ioregs_mut().set_timer(timer_mod);
+            let timer_mod = ctx.timer_regs().timer_mod;
+            ctx.timer_regs_mut().timer = timer_mod;
             ctx.interrupts_mut().send(InterruptFlags::TIMER);
         } else {
             ctx.timer_mut().interrupt_delay -= tcycles;
@@ -124,12 +146,12 @@ fn check_interrupt(ctx: &mut impl TimerContext, tcycles: u64) {
 }
 
 pub fn tick(ctx: &mut impl TimerContext, tcycles: u64) {
-    let mut divider = ctx.ioregs().divider();
+    let mut divider = ctx.timer_regs().divider;
 
     check_interrupt(ctx, tcycles);
 
-    if ctx.ioregs().timer_control().timer_enable() {
-        let period = ctx.ioregs().timer_control().period();
+    if ctx.timer_regs().timer_control.timer_enable() {
+        let period = ctx.timer_regs().timer_control.period();
 
         // falling edge case when divider has been reset
         if (ctx.timer().old_divider & (period >> 1)) != 0 && (divider & (period >> 1)) == 0 {
@@ -158,6 +180,6 @@ pub fn tick(ctx: &mut impl TimerContext, tcycles: u64) {
     }
 
     divider = divider.wrapping_add(tcycles as u16);
-    ctx.timer_mut().old_divider = ctx.ioregs().divider();
-    ctx.ioregs_mut().set_divider(divider);
+    ctx.timer_mut().old_divider = ctx.timer_regs().divider;
+    ctx.timer_regs_mut().divider = divider;
 }

@@ -1,5 +1,4 @@
 use crate::interrupts::{InterruptContext, InterruptFlags, Interrupts};
-use crate::memdev::{IoRegs, IoRegsContext};
 
 use log::{debug, trace};
 use std::collections::VecDeque;
@@ -57,17 +56,35 @@ impl SerialStream {
 }
 
 /// Context trait providing access to fields needed to service Serial.
-pub trait SerialContext: IoRegsContext + InterruptContext {
+pub trait SerialContext: InterruptContext {
     /// Get the serial state.
     fn serial(&self) -> &SerialState;
 
     /// Get mutable access to the serial state.
     fn serial_mut(&mut self) -> &mut SerialState;
+
+    fn serial_regs(&self) -> &SerialRegs;
+
+    fn serial_regs_mut(&mut self) -> &mut SerialRegs;
 }
 
 const SLOW_TPERIOD: u64 = 512;
 #[allow(unused)]
 const FAST_TPERIOD: u64 = 16;
+
+/// Memory-mapped IO registers used by Serial connections.
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
+pub struct SerialRegs {
+    pub serial_data: u8,
+    pub serial_control: u8,
+}
+
+memdev_fields! {
+    SerialRegs {
+        0x00 => serial_data,
+        0x01 => serial_control,
+    }
+}
 
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct SerialState {
@@ -89,10 +106,10 @@ impl SerialState {
 pub fn tick(ctx: &mut impl SerialContext, tcycles: u64) {
     trace!(
         "Serial tick. Serial control field: {:#6x}, Serial data:{:#6x}",
-        ctx.ioregs().serial_control(),
-        ctx.ioregs().serial_data(),
+        ctx.serial_regs().serial_control,
+        ctx.serial_regs().serial_data,
     );
-    if ctx.ioregs().serial_control() == 0x81 {
+    if ctx.serial_regs().serial_control == 0x81 {
         debug!(
             "Serial transfer active. Progress: {} cycles",
             ctx.serial().t_progress
@@ -110,15 +127,15 @@ pub fn tick(ctx: &mut impl SerialContext, tcycles: u64) {
 
             // rotate local and remote serial bytes about each other
             let [new_local_byte, new_remote_byte] =
-                u16::from_ne_bytes([ctx.ioregs().serial_data(), ctx.serial().remote_byte])
+                u16::from_ne_bytes([ctx.serial_regs().serial_data, ctx.serial().remote_byte])
                     .rotate_left(1)
                     .to_ne_bytes();
 
-            ctx.ioregs_mut().set_serial_data(new_local_byte);
+            ctx.serial_regs_mut().serial_data = new_local_byte;
             ctx.serial_mut().remote_byte = new_remote_byte;
 
             if ctx.serial().bit_progress == 8 {
-                ctx.ioregs_mut().set_serial_control(0x01); //clear transfer start flag
+                ctx.serial_regs_mut().serial_control = 0x01; //clear transfer start flag
                 ctx.interrupts_mut().send(InterruptFlags::SERIAL);
 
                 let serial = ctx.serial_mut();

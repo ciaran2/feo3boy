@@ -3,6 +3,7 @@ members = [
   "feo3boy",
   "feo3boy-player",
   "feo3boy-opcodes",
+  "feo3boy-memdev-derive",
   "feo3boy-microcode-generator",
   "web-debugger",
 ]

@@ -9,6 +9,7 @@ test-roms = []
 
 [dependencies]
 feo3boy-opcodes = { path = "../feo3boy-opcodes" }
+feo3boy-memdev-derive = { path = "../feo3boy-memdev-derive" }
 bitflags = "2"
 log = "0.4"
 once_cell = "1"
