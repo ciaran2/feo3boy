@@ -68,6 +68,7 @@ pub trait SaveData {
 
     fn load_save_data(&mut self, reader: impl Read) -> Result<(), io::Error>;
     
+    fn has_save_data(&self) -> bool;
 }
 
 /// Enum of different cartridge types.
@@ -342,6 +343,15 @@ impl SaveData for Cartridge {
             Cartridge::Mbc3(ref mut cart) => cart.load_save_data(reader),
         }
     }
+
+    fn has_save_data(&self) -> bool {
+        match self {
+            Cartridge::None => false,
+            Cartridge::RomOnly(ref cart) => cart.has_save_data(),
+            Cartridge::Mbc1(ref cart) => cart.has_save_data(),
+            Cartridge::Mbc3(ref cart) => cart.has_save_data(),
+        }
+    }
 }
 
 /// Rom banks are 0x4000 = 16 KiB.
@@ -434,6 +444,10 @@ impl SaveData for RomOnly {
             Ok(())
         }
         
+    }
+
+    fn has_save_data(&self) -> bool {
+        self.save_ram
     }
 }
 
@@ -669,6 +683,10 @@ impl SaveData for Mbc1Rom {
             reader.read_exact(ram_bank)?
         }
         Ok(())
+    }
+
+    fn has_save_data(&self) -> bool {
+        self.save_ram
     }
 }
 
@@ -923,5 +941,9 @@ impl SaveData for Mbc3Rom {
             reader.read_exact(ram_bank)?
         }
         Ok(())
+    }
+
+    fn has_save_data(&self) -> bool {
+        self.save_ram
     }
 }

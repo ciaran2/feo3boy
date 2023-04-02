@@ -223,6 +223,15 @@ fn main() {
 
         if input_helper.update(&event) {
             if input_helper.close_requested() {
+                if gb.has_save_data() {
+                    match File::create(save_filename.as_ref().expect("No known path for save file").as_path()) {
+                        Ok(save_file) => match gb.write_save_data(save_file) {
+                            Ok(_) => (),
+                            Err(err) => error!("Error writing to save file: {}", err),
+                        }
+                        Err(err) => error!("Error opening save file: {}", err),
+                    }
+                }
                 control_flow.set_exit();
             }
 
