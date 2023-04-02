@@ -1,5 +1,5 @@
 use bitflags::bitflags;
-use log::{debug, info};
+use log::{debug, info, trace};
 
 use crate::bits::BitGroup;
 use crate::memdev::{MemDevice, RelativeAddr};
@@ -260,7 +260,7 @@ impl EnvelopeControl {
     /// Get the init vol
     #[inline]
     pub fn init_vol(&self) -> i8 {
-        Self::INIT_VOL.extract_signed(self.0)
+        Self::INIT_VOL.extract(self.0) as i8
     }
 
     /// Set the init vol.
@@ -272,7 +272,7 @@ impl EnvelopeControl {
     /// Get whether the direction is negative.
     #[inline]
     pub fn direction_negative(&self) -> bool {
-        Self::DIRECTION.extract_bool(self.0)
+        !Self::DIRECTION.extract_bool(self.0)
     }
 
     /// Get a signed value indicating the direction, either `-1` or `1`.
@@ -394,9 +394,9 @@ impl NoiseControl {
     /// Get the LFSR mask based on whether the LFSR bit is set.
     fn lfsr_mask(&self) -> u16 {
         if self.lfsr_width() {
-            0x8080
+            0x4080
         } else {
-            0x8000
+            0x4000
         }
     }
 
@@ -422,7 +422,7 @@ impl NoiseControl {
         let r = self.clock_div() as u32;
         let s = self.clock_shift() as u32;
 
-        debug!("r: {}, s: {}", r, s);
+        trace!("r: {}, s: {}", r, s);
 
         if r == 0 {
             1 << (s + 3)
@@ -865,13 +865,13 @@ impl NoiseChannel {
             self.lfsr_ticks -= self.noise_control.period();
 
             let feedback_bits = if (self.lfsr & 0x1) ^ ((self.lfsr >> 1) & 0x1) == 0 {
-                0x8080
+                0x4080
             } else {
                 0x0
             };
 
             let lfsr_mask = self.noise_control.lfsr_mask();
-            self.lfsr = (self.lfsr & !lfsr_mask) | (feedback_bits & lfsr_mask);
+            self.lfsr = ((self.lfsr & !lfsr_mask) | (feedback_bits & lfsr_mask)) >> 1;
         }
     }
 }
@@ -908,11 +908,14 @@ impl Channel for NoiseChannel {
 
     fn check_trigger(&mut self) {
         if self.triggered {
-            info!("Noise channel triggered");
-
             self.active = true;
             self.triggered = false;
+            self.lfsr = 0;
             self.envelope = self.envelope_control.new_envelope();
+            info!(
+                "Noise channel triggered with envelope {:?}, length_enable {}, length_acc {}",
+                self.envelope, self.length_enable, self.length_acc
+            );
         }
     }
 
@@ -1013,7 +1016,8 @@ pub fn tick(ctx: &mut impl ApuContext, tcycles: u64) {
         let next_sample = sample_cursor % ctx.apu().output_period;
         if tcycles as f32 > next_sample.into() {
             sample_cursor += next_sample;
-            let mono_sample = ctx.apu_regs().ch1.get_sample(sample_cursor)
+            let mono_sample = 0
+                + ctx.apu_regs().ch1.get_sample(sample_cursor)
                 + ctx.apu_regs().ch2.get_sample(sample_cursor)
                 + ctx.apu_regs().ch3.get_sample(sample_cursor)
                 + ctx.apu_regs().ch4.get_sample(sample_cursor);
