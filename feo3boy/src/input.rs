@@ -81,7 +81,6 @@ pub fn update(ctx: &mut impl InputContext) {
             .select_buttons(no_directions, no_actions),
     );
 
-
     // trigger interrupt on falling edge
     if !(!new_button_status & old_button_status).is_empty() {
         ctx.interrupts_mut().send(InterruptFlags::JOYPAD);

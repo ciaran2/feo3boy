@@ -7,7 +7,7 @@ use crate::gbz80core::microcode_executor::MicrocodeExecutor;
 use crate::gbz80core::{CpuContext, ExecutorContext, Gbz80State};
 use crate::input::{self, ButtonStates, InputContext};
 use crate::interrupts::InterruptContext;
-use crate::memdev::{BiosRom, Cartridge, SaveData, GbMmu, IoRegsContext, MemContext, Oam, Vram};
+use crate::memdev::{BiosRom, Cartridge, GbMmu, IoRegsContext, MemContext, Oam, SaveData, Vram};
 use crate::ppu::{self, PpuContext, PpuState};
 use crate::serial::{self, SerialContext, SerialState};
 use crate::timer::{self, TimerContext, TimerState};
@@ -95,12 +95,11 @@ impl<E: Executor> SaveData for Gb<E> {
     fn load_save_data(&mut self, reader: impl Read) -> Result<(), io::Error> {
         self.mmu.cart.load_save_data(reader)
     }
-    
+
     fn has_save_data(&self) -> bool {
         self.mmu.cart.has_save_data()
     }
 }
-
 
 impl<E: Executor> ExecutorContext for Gb<E> {
     type State = E::State;

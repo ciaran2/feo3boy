@@ -67,7 +67,7 @@ pub trait SaveData {
     fn write_save_data(&self, writer: impl Write) -> Result<(), io::Error>;
 
     fn load_save_data(&mut self, reader: impl Read) -> Result<(), io::Error>;
-    
+
     fn has_save_data(&self) -> bool;
 }
 
@@ -421,11 +421,10 @@ impl SaveData for RomOnly {
                 Some(ref ram_bank) => match writer.write_all(ram_bank.as_ref()) {
                     Ok(_) => Ok(()),
                     Err(e) => return Err(e),
-                }
+                },
                 None => Ok(()),
             }
-        }
-        else {
+        } else {
             Ok(())
         }
     }
@@ -436,14 +435,12 @@ impl SaveData for RomOnly {
                 Some(ref mut ram_bank) => match reader.read_exact(ram_bank.as_mut()) {
                     Ok(_) => Ok(()),
                     Err(e) => return Err(e),
-                }
+                },
                 None => Ok(()),
             }
-        }
-        else {
+        } else {
             Ok(())
         }
-        
     }
 
     fn has_save_data(&self) -> bool {
@@ -700,7 +697,6 @@ pub enum RamOrRtc<R, C> {
     None,
 }
 
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Mbc3Rom {
     /// Set of rom banks loaded from the cartridge.
@@ -708,7 +704,7 @@ pub struct Mbc3Rom {
     /// Set of ram banks on this Mbc3Rom, if any. If none, this will be an empty vector.
     ram_banks: Vec<RamBank>,
     /// RTC registers. Mapped as RAM banks 8-12
-    rtc_regs: [u8;5],
+    rtc_regs: [u8; 5],
 
     /// Whether ram is saved when the device is powered off. (Does the ram have a battery?)
     save_ram: bool,
@@ -765,7 +761,7 @@ impl Mbc3Rom {
         Mbc3Rom {
             rom_banks,
             ram_banks: vec![[0u8; RAM_BANK_SIZE]; num_ram_banks],
-            rtc_regs: [0u8;5],
+            rtc_regs: [0u8; 5],
             save_ram,
             ram_enable: false,
             rom_bank: 0,
@@ -855,14 +851,13 @@ impl Mbc3Rom {
                 0x0..=0x3 => {
                     if self.ram_banks.is_empty() {
                         RamOrRtc::None
-                    }
-                    else {
+                    } else {
                         let bank = self.selected_ram_bank();
                         RamOrRtc::Ram(&self.ram_banks[bank])
                     }
                 }
                 0x8..=0xC => RamOrRtc::Rtc(&self.rtc_regs[self.bank_set as usize - 0x8]),
-                _ => RamOrRtc::None
+                _ => RamOrRtc::None,
             }
         }
     }
@@ -876,18 +871,16 @@ impl Mbc3Rom {
                 0x0..=0x3 => {
                     if self.ram_banks.is_empty() {
                         RamOrRtc::None
-                    }
-                    else {
+                    } else {
                         let bank = self.selected_ram_bank();
                         RamOrRtc::Ram(&mut self.ram_banks[bank])
                     }
                 }
                 0x8..=0xC => RamOrRtc::Rtc(&mut self.rtc_regs[self.bank_set as usize - 0x8]),
-                _ => RamOrRtc::None
+                _ => RamOrRtc::None,
             }
         }
     }
-
 }
 
 impl MemDevice for Mbc3Rom {

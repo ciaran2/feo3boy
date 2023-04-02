@@ -152,7 +152,7 @@ fn main() {
         None => BiosRom::default(),
     };
 
-    let (cart, save_filename) = match args.rom { 
+    let (cart, save_filename) = match args.rom {
         Some(ref filename) => {
             let cart_file = File::open(filename).unwrap();
             let mut save_filename = PathBuf::from(filename);
@@ -160,7 +160,9 @@ fn main() {
             let mut cart = Cartridge::parse(cart_file).unwrap();
 
             match File::open(save_filename.as_path()) {
-                Ok(save_file) => { cart.load_save_data(save_file).unwrap(); },
+                Ok(save_file) => {
+                    cart.load_save_data(save_file).unwrap();
+                }
                 _ => (),
             }
 
@@ -175,7 +177,10 @@ fn main() {
     let mut stdout = io::stdout();
 
     let event_loop = EventLoop::new();
-    let window = WindowBuilder::new().with_title("feo3boy-player").build(&event_loop).unwrap();
+    let window = WindowBuilder::new()
+        .with_title("feo3boy-player")
+        .build(&event_loop)
+        .unwrap();
     let mut input_helper = WinitInputHelper::new();
 
     let mut pixels = {
@@ -224,11 +229,16 @@ fn main() {
         if input_helper.update(&event) {
             if input_helper.close_requested() {
                 if gb.has_save_data() {
-                    match File::create(save_filename.as_ref().expect("No known path for save file").as_path()) {
+                    match File::create(
+                        save_filename
+                            .as_ref()
+                            .expect("No known path for save file")
+                            .as_path(),
+                    ) {
                         Ok(save_file) => match gb.write_save_data(save_file) {
                             Ok(_) => (),
                             Err(err) => error!("Error writing to save file: {}", err),
-                        }
+                        },
                         Err(err) => error!("Error opening save file: {}", err),
                     }
                 }
