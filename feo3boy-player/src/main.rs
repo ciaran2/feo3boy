@@ -1,9 +1,11 @@
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
+use std::time::Duration;
+use std::thread::sleep;
 
 use clap::Parser;
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 
 use pixels::{Pixels, PixelsBuilder, SurfaceTexture};
 use winit::event::VirtualKeyCode;
@@ -59,14 +61,14 @@ fn init_audio_stream(
                     let sample_pair = match sample_consumer.pop() {
                         Some((left, right)) => {
                             let sample_pair = (left as f32 / 255.0, right as f32 / 255.0);
-                            info!(
+                            debug!(
                                 "Writing ({},{}) to audio buffer",
                                 sample_pair.0, sample_pair.1
                             );
                             sample_pair
                         }
                         None => {
-                            //warn!("Sample FIFO empty");
+                            warn!("Sample FIFO empty");
                             last_sample
                         }
                     };

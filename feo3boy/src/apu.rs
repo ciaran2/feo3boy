@@ -422,7 +422,7 @@ impl NoiseControl {
         let r = self.clock_div() as u32;
         let s = self.clock_shift() as u32;
 
-        info!("r: {}, s: {}", r, s);
+        debug!("r: {}, s: {}", r, s);
 
         if r == 0 {
             1 << (s + 3)
@@ -775,6 +775,7 @@ impl Channel for WavetableChannel {
                 "Wavetable channel triggered at frequency {}",
                 CLOCK_SPEED / self.period
             );
+            info!("  Sample table: {:?}", self.sample_table);
 
             self.active = true;
             self.triggered = false;
