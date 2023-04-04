@@ -472,7 +472,7 @@ const MAX_PERIOD: u32 = 131072;
 #[derive(Clone, Debug)]
 pub struct ApuState {
     //pub output_buffer: VecDeque<(i16, i16)>,
-    output_sample: Option<(i16, i16)>,
+    output_sample: Option<(f32, f32)>,
     output_period: f32,
     sample_cursor: f32,
 }
@@ -491,7 +491,7 @@ impl ApuState {
         self.output_period = CLOCK_SPEED as f32 / sample_rate as f32;
     }
 
-    pub fn consume_output_sample(&mut self) -> Option<(i16, i16)> {
+    pub fn consume_output_sample(&mut self) -> Option<(f32, f32)> {
         let output_sample = self.output_sample;
 
         //if let Some(sample) = output_sample {
@@ -504,7 +504,7 @@ impl ApuState {
 }
 
 pub trait Channel {
-    fn get_sample(&self, sample_cursor: f32) -> i16;
+    fn get_sample(&self, sample_cursor: f32) -> f32;
 
     fn read_control(&self) -> u8;
     fn set_control(&mut self, value: u8);
@@ -563,7 +563,7 @@ impl PulseChannel {
 }
 
 impl Channel for PulseChannel {
-    fn get_sample(&self, sample_cursor: f32) -> i16 {
+    fn get_sample(&self, sample_cursor: f32) -> f32 {
         if self.active {
             let pulse_step = (((sample_cursor as u32 + self.phase_offset) % self.period)
                 / (self.period / 8)) as usize;
@@ -573,9 +573,9 @@ impl Channel for PulseChannel {
                 self.timer.duty()
             );
             let dac_input = PULSE_TABLE[self.timer.duty()][pulse_step] * self.envelope.level();
-            -(dac_input as i16 - 8)
+            1.0 - (dac_input as f32 / 15.0 * 2.0)
         } else {
-            0
+            0.0
         }
     }
 
@@ -732,7 +732,7 @@ impl WavetableChannel {
 }
 
 impl Channel for WavetableChannel {
-    fn get_sample(&self, sample_cursor: f32) -> i16 {
+    fn get_sample(&self, sample_cursor: f32) -> f32 {
         if self.active {
             let wavetable_step = (((sample_cursor as u32 + self.phase_offset) % self.period)
                 / (self.period / 32)) as usize;
@@ -741,9 +741,9 @@ impl Channel for WavetableChannel {
                 wavetable_step
             );
             let dac_input = (self.sample_table[wavetable_step] as u16) >> self.level_shift;
-            -(dac_input as i16 - 8)
+            1.0 - (dac_input as f32 / 15.0 * 2.0)
         } else {
-            0
+            0.0
         }
     }
 
@@ -775,7 +775,7 @@ impl Channel for WavetableChannel {
                 "Wavetable channel triggered at frequency {}",
                 CLOCK_SPEED / self.period
             );
-            info!("  Sample table: {:?}", self.sample_table);
+            info!("  Wavetable sample table: {:?}", self.sample_table);
 
             self.active = true;
             self.triggered = false;
@@ -877,12 +877,12 @@ impl NoiseChannel {
 }
 
 impl Channel for NoiseChannel {
-    fn get_sample(&self, _sample_cursor: f32) -> i16 {
+    fn get_sample(&self, _sample_cursor: f32) -> f32 {
         if self.active {
             let dac_input = (self.lfsr & 0x1) * self.envelope.level();
-            -(dac_input as i16 - 8)
+            1.0 - (dac_input as f32 / 15.0 * 2.0)
         } else {
-            0
+            0.0
         }
     }
 
@@ -1016,11 +1016,12 @@ pub fn tick(ctx: &mut impl ApuContext, tcycles: u64) {
         let next_sample = sample_cursor % ctx.apu().output_period;
         if tcycles as f32 > next_sample.into() {
             sample_cursor += next_sample;
-            let mono_sample = 0
-                + ctx.apu_regs().ch1.get_sample(sample_cursor)
-                + ctx.apu_regs().ch2.get_sample(sample_cursor)
-                + ctx.apu_regs().ch3.get_sample(sample_cursor)
-                + ctx.apu_regs().ch4.get_sample(sample_cursor);
+            let mono_sample = 0.0
+                + 0.25 * ctx.apu_regs().ch1.get_sample(sample_cursor)
+                + 0.25 * ctx.apu_regs().ch2.get_sample(sample_cursor)
+                + 0.25 * ctx.apu_regs().ch3.get_sample(sample_cursor)
+                + 0.25 * ctx.apu_regs().ch4.get_sample(sample_cursor)
+                ;
             debug!("Mono sample: {}", mono_sample);
             //let mono_sample_signed = -(mono_sample as i16 - 32);
             //ctx.apu_mut().output_buffer.push_back((mono_sample_signed, mono_sample_signed));

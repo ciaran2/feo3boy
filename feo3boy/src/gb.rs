@@ -84,7 +84,7 @@ impl<E: Executor> Gb<E> {
 
     /// Tick forward by one instruction, executing background and graphics processing
     /// operations as needed.
-    pub fn tick(&mut self) -> (Option<&[(u8, u8, u8)]>, Option<(i16, i16)>) {
+    pub fn tick(&mut self) -> (Option<&[(u8, u8, u8)]>, Option<(f32, f32)>) {
         E::run_single_instruction(self);
 
         if self.display_ready {

@@ -23,7 +23,7 @@ use feo3boy::input::{ButtonStates, InputContext};
 use feo3boy::memdev::{BiosRom, Cartridge, SaveData};
 
 fn init_audio_stream(
-    mut sample_consumer: Consumer<(i16, i16), Arc<HeapRb<(i16, i16)>>>,
+    mut sample_consumer: Consumer<(f32, f32), Arc<HeapRb<(f32, f32)>>>,
 ) -> Option<(Stream, SampleRate)> {
     if let Some(device) = cpal::default_host().default_output_device() {
         let supported_config = {
@@ -60,12 +60,11 @@ fn init_audio_stream(
                 for stereo_sample in data.chunks_mut(2) {
                     let sample_pair = match sample_consumer.pop() {
                         Some((left, right)) => {
-                            let sample_pair = (left as f32 / 255.0, right as f32 / 255.0);
                             debug!(
                                 "Writing ({},{}) to audio buffer",
-                                sample_pair.0, sample_pair.1
+                                left, right
                             );
-                            sample_pair
+                            ( 0.25 * left, 0.25 * right)
                         }
                         None => {
                             warn!("Sample FIFO empty");
@@ -260,9 +259,9 @@ fn main() {
                 }
                 let (display, audio_sample) = gb.tick();
                 if let Some(sample) = audio_sample {
-                    debug!("Sending ({},{}) to sample FIFO", sample.0, sample.1);
+                    info!("Sending ({},{}) to sample FIFO", sample.0, sample.1);
                     if let Err(sample) = sample_producer.push(sample) {
-                        debug!("Error sending {} {} to sample FIFO", sample.0, sample.1);
+                        warn!("Error sending ({},{}) to sample FIFO", sample.0, sample.1);
                     }
                 }
                 match display {
