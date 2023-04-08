@@ -229,6 +229,8 @@ fn main() {
         (VirtualKeyCode::Period, ButtonStates::B),
     ];
 
+    let fast_forward_binding = VirtualKeyCode::Tab;
+
     let mut avg_sample_interval: f64 = 0.0;
     let mut num_sample_intervals: f64 = 0.0;
     let mut sample_instant = Instant::now();
@@ -260,6 +262,9 @@ fn main() {
             }
 
             gb.set_button_states(gen_button_states(&input_helper, &bindings));
+
+            let fast_forward = input_helper.key_held(fast_forward_binding);
+
             for _i in 0..100 {
                 {
                     let bytes = gb.serial.stream.receive_bytes();
@@ -282,8 +287,15 @@ fn main() {
                     sample_instant = Instant::now();
 
                     debug!("Sending ({},{}) to sample FIFO", sample.0, sample.1);
-                    while let Err(sample) = sample_producer.push(sample) {
-                        debug!("Error sending ({},{}) to sample FIFO", sample.0, sample.1);
+
+                    if !fast_forward {
+                        while let Err(sample) = sample_producer.push(sample) {
+                            debug!("Error sending ({},{}) to sample FIFO", sample.0, sample.1);
+                        }
+                    } else {
+                        if let Err(sample) = sample_producer.push(sample) {
+                            debug!("Error sending ({},{}) to sample FIFO", sample.0, sample.1);
+                        }
                     }
                 }
                 match display {
