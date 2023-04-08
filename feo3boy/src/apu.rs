@@ -19,6 +19,17 @@ bitflags! {
 }
 
 bitflags! {
+    #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+    #[repr(transparent)]
+    pub struct ChannelMix : u8 {
+        const CH4 = 0b00001000;
+        const CH3 = 0b00000100;
+        const CH2 = 0b00000010;
+        const CH1 = 0b00000001;
+    }
+}
+
+bitflags! {
     #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash, MemDevice)]
     #[memdev(bitflags)]
     #[repr(transparent)]
@@ -34,7 +45,15 @@ bitflags! {
     }
 }
 
-/// Represends sound and volume settings.
+impl SoundPan {
+    fn channel_mix(&self, right: bool) -> ChannelMix {
+        let shift = if right { 0 } else { 4 };
+
+        ChannelMix::from_bits_truncate(self.bits() >> shift)
+    }
+}
+
+/// Represents sound and volume settings.
 #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash, MemDevice)]
 #[memdev(bits)]
 #[repr(transparent)]
@@ -92,6 +111,13 @@ impl SoundVolume {
     #[inline]
     pub fn set_vol_right(&mut self, val: u8) {
         Self::VOL_RIGHT.apply(&mut self.0, val);
+    }
+
+    fn vol_multiplier(&self, right: bool) -> f32 {
+        let shift = if right { 0 } else { 4 };
+        let vol_digital = (self.0 >> shift) & 0x7;
+
+        (0.125 * (vol_digital as f32 + 1.0)).max(1.0)
     }
 }
 
@@ -989,12 +1015,15 @@ memdev_fields!(ApuRegs, len: 0x30, {
     0x00..=0x04 => ch1,
     0x05 => 0xff,
     0x06..=0x09 => { ch2, skip_over: 1 },
-    0x08..=0x0e => ch3,
+    0x0a..=0x0e => ch3,
     0x0f => 0xff,
     0x10..=0x13 => ch4,
-    0x14..=0x1f => 0xff,
+    0x14 => sound_volume,
+    0x15 => sound_pan,
+    0x16..=0x1f => 0xff,
     0x20..=0x2f => { ch3, skip_over: 5 },
 });
+
 
 pub trait ApuContext {
     fn apu(&self) -> &ApuState;
@@ -1002,6 +1031,29 @@ pub trait ApuContext {
 
     fn apu_regs(&self) -> &ApuRegs;
     fn apu_regs_mut(&mut self) -> &mut ApuRegs;
+}
+
+fn get_stereo_sample(ctx: &impl ApuContext, sample_cursor: f32, right: bool) -> f32 {
+    let channel_mix = ctx.apu_regs().sound_pan.channel_mix(right);
+
+    ctx.apu_regs().sound_volume.vol_multiplier(right)
+        * (if channel_mix.contains(ChannelMix::CH1) {
+            0.25 * ctx.apu_regs().ch1.get_sample(sample_cursor)
+        } else {
+            0.0
+        } + if channel_mix.contains(ChannelMix::CH2) {
+            0.25 * ctx.apu_regs().ch2.get_sample(sample_cursor)
+        } else {
+            0.0
+        } + if channel_mix.contains(ChannelMix::CH3) {
+            0.25 * ctx.apu_regs().ch3.get_sample(sample_cursor)
+        } else {
+            0.0
+        } + if channel_mix.contains(ChannelMix::CH4) {
+            0.25 * ctx.apu_regs().ch4.get_sample(sample_cursor)
+        } else {
+            0.0
+        })
 }
 
 /// to be called on divider bit 4 (5 double speed) falling edge
@@ -1026,15 +1078,10 @@ pub fn tick(ctx: &mut impl ApuContext, tcycles: u64) {
         let next_sample = sample_cursor % ctx.apu().output_period;
         if tcycles as f32 > next_sample.into() {
             sample_cursor += next_sample;
-            let mono_sample = 0.0
-                + 0.25 * ctx.apu_regs().ch1.get_sample(sample_cursor)
-                + 0.25 * ctx.apu_regs().ch2.get_sample(sample_cursor)
-                + 0.25 * ctx.apu_regs().ch3.get_sample(sample_cursor)
-                + 0.25 * ctx.apu_regs().ch4.get_sample(sample_cursor);
-            debug!("Mono sample: {}", mono_sample);
-            //let mono_sample_signed = -(mono_sample as i16 - 32);
-            //ctx.apu_mut().output_buffer.push_back((mono_sample_signed, mono_sample_signed));
-            ctx.apu_mut().output_sample = Some((mono_sample, mono_sample));
+
+            let left_sample = get_stereo_sample(ctx, sample_cursor, false);
+            let right_sample = get_stereo_sample(ctx, sample_cursor, true);
+            ctx.apu_mut().output_sample = Some((left_sample, right_sample));
         }
     }
 
