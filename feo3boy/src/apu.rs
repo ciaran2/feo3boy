@@ -303,6 +303,10 @@ impl EnvelopeControl {
         Self::PACE.apply(&mut self.0, val);
     }
 
+    pub fn dac_enabled(&self) -> bool {
+        (self.0 & 0xf8) != 0
+    }
+
     fn new_envelope(&self) -> Envelope {
         Envelope {
             level: self.init_vol(),
@@ -565,7 +569,7 @@ impl PulseChannel {
 
 impl Channel for PulseChannel {
     fn get_sample(&self, sample_cursor: f32) -> f32 {
-        if self.active {
+        if self.envelope_control.dac_enabled() && self.active {
             let pulse_step = (((sample_cursor as u32 + self.phase_offset) % self.period)
                 / (self.period / 8)) as usize;
             debug!(
@@ -739,7 +743,7 @@ impl WavetableChannel {
 
 impl Channel for WavetableChannel {
     fn get_sample(&self, sample_cursor: f32) -> f32 {
-        if self.active {
+        if self.enabled && self.active {
             let wavetable_step = (((sample_cursor as u32 + self.phase_offset) % self.period)
                 / (self.period / 32)) as usize;
             debug!(
@@ -884,7 +888,7 @@ impl NoiseChannel {
 
 impl Channel for NoiseChannel {
     fn get_sample(&self, _sample_cursor: f32) -> f32 {
-        if self.active {
+        if self.envelope_control.dac_enabled() && self.active {
             let dac_input = (self.lfsr & 0x1) * self.envelope.level();
             1.0 - (dac_input as f32 / 15.0 * 2.0)
         } else {
