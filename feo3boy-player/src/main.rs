@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::thread::sleep;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use clap::Parser;
 use log::{debug, error, info, warn};
@@ -53,24 +53,26 @@ fn init_audio_stream(
         if let Some(supported_config) = supported_config {
             let err_handler = |err| error!("Error in output audio stream: {}", err);
             let sample_rate = supported_config.sample_rate();
+            info!(
+                "Using supported config with supported buffer size {:?}",
+                supported_config.buffer_size()
+            );
 
+            let mut last_sample = (0.0, 0.0);
             let callback = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                info!("Running f32 audio callback");
-                let mut last_sample = (0.0, 0.0);
+                debug!("Running f32 audio callback");
                 for stereo_sample in data.chunks_mut(2) {
                     let sample_pair = match sample_consumer.pop() {
                         Some((left, right)) => {
-                            debug!(
-                                "Writing ({},{}) to audio buffer",
-                                left, right
-                            );
-                            ( 0.25 * left, 0.25 * right)
+                            debug!("Writing ({},{}) to audio buffer", left, right);
+                            (0.25 * left, 0.25 * right)
                         }
                         None => {
                             warn!("Sample FIFO empty");
                             last_sample
                         }
                     };
+
                     stereo_sample[0] = sample_pair.0;
                     stereo_sample[1] = sample_pair.1;
                     last_sample = sample_pair;
@@ -193,13 +195,16 @@ fn main() {
             .unwrap()
     };
 
-    let rb = HeapRb::new(200);
+    // TODO: make this dynamic to the actual sample rate
+    // exceeding 48K in the output should be pretty rare though
+    let rb = HeapRb::new(48000 / 60 * 2);
     let (mut sample_producer, sample_consumer) = rb.split();
     let audio_output_config = init_audio_stream(sample_consumer);
 
     if !args.mute {
         match audio_output_config {
             Some((ref stream, sample_rate)) => {
+                info!("Setting output sample rate: {}", sample_rate.0);
                 gb.set_sample_rate(sample_rate.0);
                 if let Err(err) = stream.play() {
                     error!("Error playing audio stream: {}", err);
@@ -224,6 +229,10 @@ fn main() {
         (VirtualKeyCode::Period, ButtonStates::B),
     ];
 
+    let mut avg_sample_interval: f64 = 0.0;
+    let mut num_sample_intervals: f64 = 0.0;
+    let mut sample_instant = Instant::now();
+
     event_loop.run(move |event, _, control_flow| {
         control_flow.set_poll();
 
@@ -243,6 +252,10 @@ fn main() {
                         Err(err) => error!("Error opening save file: {}", err),
                     }
                 }
+                error!(
+                    "Average interval between samples: {} microseconds",
+                    avg_sample_interval
+                );
                 control_flow.set_exit();
             }
 
@@ -259,9 +272,18 @@ fn main() {
                 }
                 let (display, audio_sample) = gb.tick();
                 if let Some(sample) = audio_sample {
-                    info!("Sending ({},{}) to sample FIFO", sample.0, sample.1);
-                    if let Err(sample) = sample_producer.push(sample) {
-                        warn!("Error sending ({},{}) to sample FIFO", sample.0, sample.1);
+                    avg_sample_interval = if num_sample_intervals == 0.0 {
+                        sample_instant.elapsed().as_micros() as f64
+                    } else {
+                        avg_sample_interval * (num_sample_intervals - 1.0) / num_sample_intervals
+                            + sample_instant.elapsed().as_micros() as f64 / num_sample_intervals
+                    };
+                    num_sample_intervals += 1.0;
+                    sample_instant = Instant::now();
+
+                    debug!("Sending ({},{}) to sample FIFO", sample.0, sample.1);
+                    while let Err(sample) = sample_producer.push(sample) {
+                        debug!("Error sending ({},{}) to sample FIFO", sample.0, sample.1);
                     }
                 }
                 match display {
