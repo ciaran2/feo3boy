@@ -188,9 +188,19 @@ impl MicrocodeStack {
 /// you should probably only allow save-states between instructions, that way you don't
 /// have to worry about how to serialize this in the Gbz80State and how to deal with if
 /// the instructions change between emulator versions.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone)]
 #[repr(transparent)]
 pub struct Instr(&'static InstrDef);
+
+impl PartialEq for Instr {
+    fn eq(&self, other: &Self) -> bool {
+        // Since we use &'static definitions, we can compare Instrs using pointer
+        // equality.
+        self.0 as *const _ == other.0 as *const _
+    }
+}
+
+impl Eq for Instr {}
 
 impl Instr {
     /// Get the number of microcode instructions in this Instr.

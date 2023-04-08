@@ -1,13 +1,15 @@
 //! Provides the [`InstrBuilder`] for building [`InstrDef`s][InstrDef] as well as helpers
 //! treating values as multiple microcde steps.
 
+use crate::compiler::instr::flow::{Branch, Element};
 use crate::compiler::instr::{InstrDef, InstrId};
 use crate::microcode::Microcode;
 
 /// Builder for microcode.
-#[derive(Default, Debug, Clone, PartialEq, Eq)]
+#[derive(Default, Debug, Clone)]
 pub struct InstrBuilder {
-    microcode: Vec<Microcode>,
+    /// Code-flow being built.
+    flow: Element,
 }
 
 impl InstrBuilder {
@@ -33,46 +35,11 @@ impl InstrBuilder {
         code_if_true: impl Into<InstrBuilder>,
         code_if_false: impl Into<InstrBuilder>,
     ) -> Self {
-        // We will build code that is:
-        // SkipIf { steps: false_branch.len() + 1 }
-        // false_branch
-        // Skip { steps: true_branch.len() }
-        // true_branch
-        //
-        // Because SkipIf runs on a true condition, we put the false branch first.
-        // We only add the extra unconditional skip if the true_branch is non-empty.
-
-        let code_if_true = code_if_true.into();
-        let code_if_false = code_if_false.into();
-
-        // Both branches are empty, so the condition is irrelevant, just discard it. We
-        // still need to pop the condition off the stack though for consistency.
-        if code_if_true.microcode.is_empty() && code_if_false.microcode.is_empty() {
-            Microcode::Discard8.into()
-        } else if code_if_true.microcode.is_empty() {
-            // The true-case is empty, so just skip the false case if the value is true.
-            InstrBuilder::first(Microcode::SkipIf {
-                steps: code_if_false.len(),
-            })
-            .then(code_if_false)
-        } else if code_if_false.microcode.is_empty() {
-            // The false-case is empty, so just skip the true case if the value is false.
-            InstrBuilder::first(Microcode::Not)
-                .then(Microcode::SkipIf {
-                    steps: code_if_true.len(),
-                })
-                .then(code_if_true)
-        } else {
-            // Both true and false cases are non-empty. Modify code_if_false by adding a
-            // step to skip the length of code_if_true.
-            let code_if_false = code_if_false.then(Microcode::Skip {
-                steps: code_if_true.len(),
-            });
-            InstrBuilder::first(Microcode::SkipIf {
-                steps: code_if_false.len(),
-            })
-            .then(code_if_false)
-            .then(code_if_true)
+        Self {
+            flow: Element::Branch(Branch {
+                code_if_true: Box::new(code_if_true.into().flow),
+                code_if_false: Box::new(code_if_false.into().flow),
+            }),
         }
     }
 
@@ -119,14 +86,13 @@ impl InstrBuilder {
     /// Add the given instruction or instructions to the end of this microcode.
     pub fn then(mut self, code: impl Into<InstrBuilder>) -> Self {
         let other = code.into();
-        self.microcode.extend(other.microcode);
+        self.flow.extend_block(other.flow);
         self
     }
 
     /// Add a yield to the end of the builder.
-    pub fn then_yield(mut self) -> Self {
-        self.microcode.push(Microcode::Yield);
-        self
+    pub fn then_yield(self) -> Self {
+        self.then(Microcode::Yield)
     }
 
     /// Add a read to the end of the builder.
@@ -139,16 +105,12 @@ impl InstrBuilder {
         self.then(to.to_write())
     }
 
-    /// Gest the number of steps currently in this microcode builder.
-    pub fn len(&self) -> usize {
-        self.microcode.len()
-    }
-
     /// Build an instruction from this microcode, adding the id for the instruction.
     pub fn build(self, id: InstrId) -> InstrDef {
         InstrDef {
             id,
-            microcode: self.microcode,
+            microcode: self.flow.flatten(),
+            flow: self.flow,
         }
     }
 }
@@ -161,8 +123,12 @@ impl<T: Into<InstrBuilder>> From<Option<T>> for InstrBuilder {
 
 impl From<Microcode> for InstrBuilder {
     fn from(value: Microcode) -> Self {
+        if let Microcode::Skip { .. } | Microcode::SkipIf { .. } = value {
+            panic!("InstrBuilder does not permit explicit skips. Use `cond`.");
+        }
+
         Self {
-            microcode: vec![value],
+            flow: Element::Microcode(value),
         }
     }
 }

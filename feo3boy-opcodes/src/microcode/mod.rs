@@ -28,7 +28,7 @@ pub mod defs {
     use crate::gbz80types::Flags;
 
     allowed_types! {
-        name = ValTypes,
+        name = ValType,
         types = [
             /// Specifies a stack argument of type `u8`.
             u8 => U8,
