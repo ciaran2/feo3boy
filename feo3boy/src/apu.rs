@@ -1,5 +1,5 @@
 use bitflags::bitflags;
-use log::{debug, info, trace};
+use log::{debug, error, info, trace};
 
 use crate::bits::BitGroup;
 use crate::memdev::{MemDevice, RelativeAddr};
@@ -489,6 +489,7 @@ impl ApuState {
 
     pub fn set_output_sample_rate(&mut self, sample_rate: u32) {
         self.output_period = CLOCK_SPEED as f32 / sample_rate as f32;
+        info!("Setting output period {}", self.output_period);
     }
 
     pub fn consume_output_sample(&mut self) -> Option<(f32, f32)> {
@@ -610,8 +611,8 @@ impl Channel for PulseChannel {
             self.sweep = self.sweep_control.new_sweep();
 
             info!(
-                "Pulse channel triggered at frequency {} with envelope {:?}, length_enable {}, length_acc {}",
-                CLOCK_SPEED / self.period, self.envelope, self.length_enable, self.length_acc
+                "Pulse channel triggered at frequency {} with envelope {:?}, sweep control: {:x}, sweep {:?}, length_enable {}, length_acc {}",
+                CLOCK_SPEED / self.period, self.envelope, self.sweep_control.0, self.sweep, self.length_enable, self.length_acc
             );
         }
     }
@@ -620,6 +621,10 @@ impl Channel for PulseChannel {
         self.length_aticks += 1;
         self.envelope_aticks += 1;
         self.sweep_aticks += 1;
+
+        if self.sweep.pace == 0 {
+            self.sweep.pace = self.sweep_control.pace();
+        }
 
         if self.length_aticks == 2 {
             self.length_aticks = 0;
@@ -634,11 +639,12 @@ impl Channel for PulseChannel {
             self.sweep_aticks = 0;
             if self.sweep.tick() {
                 let wavelength = self.sweep.apply(self.wavelength);
-                if self.wavelength > 0x7ff {
+                if wavelength > 0x7ff {
                     self.wavelength = 0;
                     self.active = false;
                 } else {
                     self.wavelength = wavelength;
+                    self.generate_period();
                 }
             }
         }
@@ -1020,8 +1026,7 @@ pub fn tick(ctx: &mut impl ApuContext, tcycles: u64) {
                 + 0.25 * ctx.apu_regs().ch1.get_sample(sample_cursor)
                 + 0.25 * ctx.apu_regs().ch2.get_sample(sample_cursor)
                 + 0.25 * ctx.apu_regs().ch3.get_sample(sample_cursor)
-                + 0.25 * ctx.apu_regs().ch4.get_sample(sample_cursor)
-                ;
+                + 0.25 * ctx.apu_regs().ch4.get_sample(sample_cursor);
             debug!("Mono sample: {}", mono_sample);
             //let mono_sample_signed = -(mono_sample as i16 - 32);
             //ctx.apu_mut().output_buffer.push_back((mono_sample_signed, mono_sample_signed));
