@@ -254,7 +254,7 @@ fn main() {
                         Err(err) => error!("Error opening save file: {}", err),
                     }
                 }
-                error!(
+                info!(
                     "Average interval between samples: {} microseconds",
                     avg_sample_interval
                 );
