@@ -12,6 +12,16 @@ use crate::microcode::args::{Reg16, Reg8};
 pub mod args;
 pub mod combocodes;
 
+impl ValType {
+    /// Size in bytes of values of this type.
+    pub fn bytes(self) -> usize {
+        match self {
+            ValType::U8 | ValType::Bool | ValType::Flags => 1,
+            ValType::U16 => 2,
+        }
+    }
+}
+
 /// [`Microcode`] is a set of simple instructions designed specifically for implementing
 /// the opcodes on the gbz80 processor used on the gameboy. These instructions operate on
 /// a stack of bytes called the microcode stack, which is separate from the gameboy's

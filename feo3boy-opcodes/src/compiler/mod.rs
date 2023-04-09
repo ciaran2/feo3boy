@@ -4,6 +4,7 @@
 use proc_macro2::TokenStream;
 
 pub mod args;
+pub mod direct_executor_generation;
 pub mod instr;
 
 /// Which type of microcode operation this is.
