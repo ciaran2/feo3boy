@@ -2,9 +2,13 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use quote::{format_ident, ToTokens};
+
 use crate::compiler::args::Arg;
 use crate::compiler::instr::flow::{Block, Branch, Element};
 use crate::microcode::{Microcode, ValType};
+
+use super::instr::InstrDef;
 
 /// [`Element`] with variable assignments and type conversions computed.
 #[derive(Debug)]
@@ -18,6 +22,18 @@ pub enum FuncElement {
 }
 
 impl FuncElement {
+    /// Construct a root Funcelement from an InstrDef.
+    pub fn new(instr: InstrDef) -> Self {
+        let assigner = VarAssigner::default();
+        let mut stack = StackTracker::new_root(&assigner);
+        let assigned = FuncElement::build_assignment(instr.flow(), &mut stack);
+        assert!(
+            stack.total_bytes() == 0,
+            "Stack was not empty at the end of instruction execution."
+        );
+        assigned
+    }
+
     /// Assign variables for this FuncElement.
     pub fn build_assignment(elem: &Element, parent_stack: &mut StackTracker) -> Self {
         match elem {
@@ -75,6 +91,13 @@ impl VarAssigner {
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 /// ID of a variable.
 pub struct VarId(usize);
+
+/// Generate a variable name from this id.
+impl ToTokens for VarId {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        format_ident!("val{}", self.0).to_tokens(tokens)
+    }
+}
 
 /// Tracks the stack of assignments.
 #[derive(Clone)]
@@ -292,9 +315,9 @@ impl<'a> StackTracker<'a> {
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub struct VarAssignment {
     /// ID of the variable that is assigned.
-    var: VarId,
+    pub var: VarId,
     /// Type of the value assigned to that variable ID.
-    val: ValType,
+    pub val: ValType,
 }
 
 #[derive(Debug)]
@@ -488,31 +511,16 @@ impl AssignedBranch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compiler::instr::InstrDef;
     use crate::opcode::{CBOpcode, InternalFetch, Opcode};
 
     #[test]
     fn assign_all_instrs() {
-        {
-            let instr: InstrDef = InternalFetch.into();
-            let assigner = VarAssigner::default();
-            let mut stack = StackTracker::new_root(&assigner);
-            FuncElement::build_assignment(instr.flow(), &mut stack);
-            assert_eq!(stack.total_bytes(), 0);
-        }
+        FuncElement::new(InternalFetch.into());
         for opcode in 0..=0xffu8 {
-            let instr: InstrDef = Opcode::decode(opcode).into();
-            let assigner = VarAssigner::default();
-            let mut stack = StackTracker::new_root(&assigner);
-            FuncElement::build_assignment(instr.flow(), &mut stack);
-            assert_eq!(stack.total_bytes(), 0);
+            FuncElement::new(Opcode::decode(opcode).into());
         }
         for cbopcode in 0..=0xffu8 {
-            let instr: InstrDef = CBOpcode::decode(cbopcode).into();
-            let assigner = VarAssigner::default();
-            let mut stack = StackTracker::new_root(&assigner);
-            FuncElement::build_assignment(instr.flow(), &mut stack);
-            assert_eq!(stack.total_bytes(), 0);
+            FuncElement::new(CBOpcode::decode(cbopcode).into());
         }
     }
 }

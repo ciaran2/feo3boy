@@ -1,5 +1,6 @@
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use feo3boy::gbz80core::direct_executor::DirectExecutor;
+use feo3boy::gbz80core::direct_executor_v2::DirectExecutorV2;
 use feo3boy::gbz80core::executor::Executor;
 use feo3boy::gbz80core::microcode_executor::{MicrocodeExecutor, MicrocodeState};
 use feo3boy::gbz80core::Gbz80State;
@@ -39,6 +40,16 @@ fn opcodes_benchmark(c: &mut Criterion) {
                 (Gbz80State::default(), mem, MicrocodeState::default())
             },
             |gb| run_until_halted::<MicrocodeExecutor>(gb),
+            BatchSize::LargeInput,
+        )
+    });
+    c.bench_function("fibonacci-direct-v2", |b| {
+        b.iter_batched_ref(
+            || {
+                let mem = AllRam::from(fib);
+                (Gbz80State::default(), mem, ())
+            },
+            |gb| run_until_halted::<DirectExecutorV2>(gb),
             BatchSize::LargeInput,
         )
     });
@@ -125,6 +136,13 @@ Passed all tests";
                     Vec::new(),
                 )
             },
+            |(gb, output)| run_cpu_instrs(&mut **gb, output),
+            BatchSize::LargeInput,
+        );
+    });
+    group.bench_function("cpu_instrs-direct-v2", |b| {
+        b.iter_batched_ref(
+            || (Box::new(Gb::new_v2(bios.clone(), cart.clone())), Vec::new()),
             |(gb, output)| run_cpu_instrs(&mut **gb, output),
             BatchSize::LargeInput,
         );

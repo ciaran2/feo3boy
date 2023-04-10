@@ -9,15 +9,13 @@ pub mod instr;
 
 /// Which type of microcode operation this is.
 #[derive(Debug, Clone)]
-pub enum OperationType<N> {
+pub enum OperationType {
     /// Microcode operation is a pure function.
     Function {
-        /// Path to the function that defines the microcode operation.
+        /// Path to the function that defines the microcode operation, relative to the
+        /// module that the Microcode type is defined in.
         path: TokenStream,
     },
     /// Microcode operation is externally defined.
-    Extern {
-        /// Identifies which extern this is.
-        name: N,
-    },
+    Extern,
 }

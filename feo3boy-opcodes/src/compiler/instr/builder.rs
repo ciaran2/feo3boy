@@ -106,12 +106,93 @@ impl InstrBuilder {
     }
 
     /// Build an instruction from this microcode, adding the id for the instruction.
-    pub fn build(self, id: InstrId) -> InstrDef {
+    pub fn build(mut self, id: InstrId) -> InstrDef {
+        add_fetch_next_to_end(&mut self.flow);
         InstrDef {
             id,
             microcode: self.flow.flatten(),
             flow: self.flow,
         }
+    }
+}
+
+/// Add a fetch-next to every tail of the instruction.
+fn add_fetch_next_to_end(elem: &mut Element) {
+    match elem {
+        Element::Microcode(microcode) => {
+            match microcode {
+                // If the code is a terminal op, no need to add a fetch.
+                Microcode::FetchNextInstruction
+                | Microcode::ParseOpcode
+                | Microcode::ParseCBOpcode => {}
+                // Add a FetchNextInstruction after all other operations.
+                _ => elem.extend_block(Element::Microcode(Microcode::FetchNextInstruction)),
+            }
+        }
+        Element::Block(block) => match block.elements.last_mut() {
+            Some(last) => {
+                if let Element::Microcode(microcode) = last {
+                    // Avoid creating a nested block.
+                    match microcode {
+                        // If the code is a terminal op, no need to add a fetch.
+                        Microcode::FetchNextInstruction
+                        | Microcode::ParseOpcode
+                        | Microcode::ParseCBOpcode => {}
+                        // Add a FetchNextInstruction after all other operations.
+                        _ => block
+                            .elements
+                            .push(Element::Microcode(Microcode::FetchNextInstruction)),
+                    }
+                } else {
+                    add_fetch_next_to_end(last)
+                }
+            }
+            None => {
+                // If the block is empty, replace it with just the fetch instruction.
+                *elem = Element::Microcode(Microcode::FetchNextInstruction)
+            }
+        },
+        Element::Branch(Branch {
+            code_if_true,
+            code_if_false,
+        }) => {
+            let true_end_terminal = ends_with_terminal(code_if_true);
+            let false_end_terminal = ends_with_terminal(code_if_false);
+            if !true_end_terminal && !false_end_terminal {
+                // neither branch ends in a terminal, so just append the terminal after
+                // this branch.
+                elem.extend_block(Element::Microcode(Microcode::FetchNextInstruction));
+            } else if !true_end_terminal {
+                // Only true branch lacks a terminal, so put the fetch next there.
+                add_fetch_next_to_end(code_if_true);
+            } else if !false_end_terminal {
+                // Only false branch lacks a terminal, so put the fetch next there.
+                add_fetch_next_to_end(code_if_false);
+            }
+            // Both branches already had a terminal, no need to add a fetch.
+        }
+    }
+}
+
+/// Return true if the given element ends with FetchNextInstruction, ParseOpcode, or
+/// ParseCBOpcode. For Branches, only returns true if all branches end with one of those
+/// opcodes.
+fn ends_with_terminal(elem: &Element) -> bool {
+    match elem {
+        Element::Microcode(microcode) => match microcode {
+            Microcode::FetchNextInstruction | Microcode::ParseOpcode | Microcode::ParseCBOpcode => {
+                true
+            }
+            _ => false,
+        },
+        Element::Block(block) => match block.elements.last() {
+            Some(last) => ends_with_terminal(last),
+            None => false,
+        },
+        Element::Branch(Branch {
+            code_if_true,
+            code_if_false,
+        }) => ends_with_terminal(&code_if_true) && ends_with_terminal(&code_if_false),
     }
 }
 

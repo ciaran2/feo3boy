@@ -48,13 +48,11 @@ impl MicrocodeState {
         // is_fetch_start is set by executing the FetchNextInstruction and cleared
         // when retrieveing the first microcode of the new instruction being fetched.
         self.is_fetch_start = false;
-        if self.pc < self.instruction.len() {
-            let ucode = self.instruction[self.pc];
-            self.pc += 1;
-            ucode
-        } else {
-            Microcode::FetchNextInstruction
-        }
+        // Builder always inserts FetchNextInstruction on the end, so we don't have to
+        // worry about passing the end of the instr.
+        let ucode = self.instruction[self.pc];
+        self.pc += 1;
+        ucode
     }
 }
 
@@ -509,12 +507,15 @@ fn pop_halt_bug(ctx: &mut impl Ctx) {
 /// microcode stack and clears that interrupt. Panics if no interrupts are active!.
 fn pop_interrupt(ctx: &mut impl Ctx) {
     match ctx.interrupts().active().iter().next() {
-            Some(interrupt) => {
-                ctx.interrupts_mut().clear(interrupt);
-                ctx.executor_mut().stack.pushu16(interrupt.handler_addr());
-            }
-            None => panic!("Must not use the PopInterrupt microcode instruction if there are no active interrupts."),
+        Some(interrupt) => {
+            ctx.interrupts_mut().clear(interrupt);
+            ctx.executor_mut().stack.pushu16(interrupt.handler_addr());
         }
+        None => panic!(
+            "Must not use the PopInterrupt microcode instruction if there \
+            are no active interrupts."
+        ),
+    }
 }
 
 /// Enables IME ticking on the next `FetchNextInstruction`.

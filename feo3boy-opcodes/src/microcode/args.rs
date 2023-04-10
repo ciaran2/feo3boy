@@ -1,8 +1,8 @@
 //! Types which are used as arguments to the [`Microcode`][crate::microcode::Microcode].
-use proc_macro2::{Ident, Span};
+use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 
-use crate::compiler::args::{AsLiteral, Literal};
+use crate::compiler::args::{CrateFetcher, Literal};
 use crate::compiler::instr::builder::{InstrBuilder, MicrocodeReadable, MicrocodeWritable};
 use crate::microcode::Microcode;
 
@@ -30,8 +30,9 @@ impl MicrocodeWritable for Reg8 {
     }
 }
 
-impl AsLiteral for Reg8 {
-    fn as_literal(&self) -> Literal {
+impl Literal for Reg8 {
+    fn constant_value(&self, crates: CrateFetcher) -> TokenStream {
+        let feo3boy_opcodes = crates("feo3boy-opcodes");
         let val = match self {
             Self::Acc => "Acc",
             Self::B => "B",
@@ -42,7 +43,7 @@ impl AsLiteral for Reg8 {
             Self::L => "L",
         };
         let val = Ident::new(val, Span::call_site());
-        quote! { Reg8::#val }.into()
+        quote! { #feo3boy_opcodes::microcode::args::Reg8::#val }
     }
 }
 
@@ -69,8 +70,9 @@ impl MicrocodeWritable for Reg16 {
     }
 }
 
-impl AsLiteral for Reg16 {
-    fn as_literal(&self) -> Literal {
+impl Literal for Reg16 {
+    fn constant_value(&self, crates: CrateFetcher) -> TokenStream {
+        let feo3boy_opcodes = crates("feo3boy-opcodes");
         let val = match self {
             Self::AF => "AF",
             Self::BC => "BC",
@@ -80,6 +82,6 @@ impl AsLiteral for Reg16 {
             Self::Pc => "Pc",
         };
         let val = Ident::new(val, Span::call_site());
-        quote! { Reg16::#val }.into()
+        quote! { #feo3boy_opcodes::microcode::args::Reg16::#val }.into()
     }
 }

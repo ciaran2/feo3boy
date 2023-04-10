@@ -4,8 +4,6 @@ use quote::quote;
 
 use feo3boy_microcode_generator::define_microcode;
 
-use crate::compiler::args::{Arg, AsLiteral};
-use crate::compiler::OperationType;
 use crate::gbz80types::Flags;
 use crate::microcode::args::{Reg16, Reg8};
 

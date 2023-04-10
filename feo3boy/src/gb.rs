@@ -2,6 +2,7 @@ use std::io::{self, Read, Write};
 
 use crate::apu::{self, ApuContext, ApuRegs, ApuState};
 use crate::gbz80core::direct_executor::DirectExecutor;
+use crate::gbz80core::direct_executor_v2::DirectExecutorV2;
 use crate::gbz80core::executor::Executor;
 use crate::gbz80core::microcode_executor::MicrocodeExecutor;
 use crate::gbz80core::{CpuContext, ExecutorContext, Gbz80State};
@@ -45,6 +46,13 @@ impl Gb {
 impl Gb<MicrocodeExecutor> {
     /// Create a `Gb` with the given bios and cartridge, using the microcode executor
     pub fn new_microcode(bios: BiosRom, cart: Cartridge) -> Self {
+        Self::for_executor(bios, cart)
+    }
+}
+
+impl Gb<DirectExecutorV2> {
+    /// Create a `Gb` with the given bios and cartridge, using the V2 direct executor.
+    pub fn new_v2(bios: BiosRom, cart: Cartridge) -> Self {
         Self::for_executor(bios, cart)
     }
 }
