@@ -2,8 +2,13 @@
 //! instruction code flow than directly using Skip/SkipIf.
 
 use std::mem;
+use std::ops::{Index, IndexMut};
 
 use crate::microcode::Microcode;
+
+pub use path::{ElementIndex, ElementPath, ElementPathBuf, ElementSelector};
+
+mod path;
 
 /// Defines elements that make up the code flow of an instruction.
 #[derive(Debug, Clone)]
@@ -92,12 +97,61 @@ impl Element {
             }) => code_if_true.ends_with_terminal() && code_if_false.ends_with_terminal(),
         }
     }
+
+    /// Get an element by index relative to self.
+    pub fn get<I>(&self, index: I) -> Option<&Element>
+    where
+        I: ElementIndex,
+    {
+        let mut elem = self;
+        for selector in index.path_selectors() {
+            match elem {
+                Element::Microcode(_) => panic!("Cannot index into Microcode elements"),
+                Element::Block(block) => elem = block.get(selector)?,
+                Element::Branch(branch) => elem = branch.get(selector),
+            }
+        }
+        Some(elem)
+    }
+
+    /// Get an element by index relative to self.
+    pub fn get_mut<I>(&mut self, index: I) -> Option<&mut Element>
+    where
+        I: ElementIndex,
+    {
+        let mut elem = self;
+        for selector in index.path_selectors() {
+            match elem {
+                Element::Microcode(_) => panic!("Cannot index into Microcode elements"),
+                Element::Block(block) => elem = block.get_mut(selector)?,
+                Element::Branch(branch) => elem = branch.get_mut(selector),
+            }
+        }
+        Some(elem)
+    }
 }
 
 impl Default for Element {
     /// Default Element is an empty block.
+    #[inline]
     fn default() -> Self {
         Self::Block(Default::default())
+    }
+}
+
+impl<I: ElementIndex> Index<I> for Element {
+    type Output = Element;
+
+    #[inline]
+    fn index(&self, index: I) -> &Self::Output {
+        self.get(index).expect("Index out of Bounds")
+    }
+}
+
+impl<I: ElementIndex> IndexMut<I> for Element {
+    #[inline]
+    fn index_mut(&mut self, index: I) -> &mut Self::Output {
+        self.get_mut(index).expect("Index out of Bounds")
     }
 }
 
@@ -115,6 +169,24 @@ impl Block {
             .iter()
             .flat_map(|elem| elem.flatten().into_iter())
             .collect()
+    }
+
+    /// Get the child [`Element`] matching the given selector, or None if the index is out
+    /// of bounds. Panics if given a `Branch` selector.
+    pub fn get(&self, selector: ElementSelector) -> Option<&Element> {
+        match selector {
+            ElementSelector::Block(idx) => self.elements.get(idx),
+            ElementSelector::Branch(_) => panic!("Cannot index a Block with a Branch selector"),
+        }
+    }
+
+    /// Get the child [`Element`] matching the given selector, or None if the index is out
+    /// of bounds. Panics if given a `Branch` selector.
+    pub fn get_mut(&mut self, selector: ElementSelector) -> Option<&mut Element> {
+        match selector {
+            ElementSelector::Block(idx) => self.elements.get_mut(idx),
+            ElementSelector::Branch(_) => panic!("Cannot index a Block with a Branch selector"),
+        }
     }
 }
 
@@ -158,6 +230,25 @@ impl Branch {
             res.push(Microcode::Skip { steps: true_steps });
             res.extend_from_slice(&code_if_true);
             res
+        }
+    }
+
+    /// Get the child [`Element`] matching the given selector. Panics if given a `Block` selector.
+    pub fn get(&self, selector: ElementSelector) -> &Element {
+        match selector {
+            ElementSelector::Block(_) => panic!("Cannot index a Branch with a Block selector"),
+            ElementSelector::Branch(true) => &self.code_if_true,
+            ElementSelector::Branch(false) => &self.code_if_false,
+        }
+    }
+
+    /// Get the child [`Element`] matching the given selector, or None if the index is out
+    /// of bounds. Panics if given a `Branch` selector.
+    pub fn get_mut(&mut self, selector: ElementSelector) -> &mut Element {
+        match selector {
+            ElementSelector::Block(_) => panic!("Cannot index a Branch with a Block selector"),
+            ElementSelector::Branch(true) => &mut self.code_if_true,
+            ElementSelector::Branch(false) => &mut self.code_if_false,
         }
     }
 }
