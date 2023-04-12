@@ -156,8 +156,8 @@ fn add_fetch_next_to_end(elem: &mut Element) {
             code_if_true,
             code_if_false,
         }) => {
-            let true_end_terminal = ends_with_terminal(code_if_true);
-            let false_end_terminal = ends_with_terminal(code_if_false);
+            let true_end_terminal = code_if_true.ends_with_terminal();
+            let false_end_terminal = code_if_false.ends_with_terminal();
             if !true_end_terminal && !false_end_terminal {
                 // neither branch ends in a terminal, so just append the terminal after
                 // this branch.
@@ -171,28 +171,6 @@ fn add_fetch_next_to_end(elem: &mut Element) {
             }
             // Both branches already had a terminal, no need to add a fetch.
         }
-    }
-}
-
-/// Return true if the given element ends with FetchNextInstruction, ParseOpcode, or
-/// ParseCBOpcode. For Branches, only returns true if all branches end with one of those
-/// opcodes.
-fn ends_with_terminal(elem: &Element) -> bool {
-    match elem {
-        Element::Microcode(microcode) => match microcode {
-            Microcode::FetchNextInstruction | Microcode::ParseOpcode | Microcode::ParseCBOpcode => {
-                true
-            }
-            _ => false,
-        },
-        Element::Block(block) => match block.elements.last() {
-            Some(last) => ends_with_terminal(last),
-            None => false,
-        },
-        Element::Branch(Branch {
-            code_if_true,
-            code_if_false,
-        }) => ends_with_terminal(&code_if_true) && ends_with_terminal(&code_if_false),
     }
 }
 

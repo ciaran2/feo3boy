@@ -4,6 +4,7 @@
 use feo3boy_opcodes::gbz80types::Flags;
 
 use crate::gbz80core::Gbz80State;
+use crate::memdev::RootMemDevice;
 
 use super::*;
 

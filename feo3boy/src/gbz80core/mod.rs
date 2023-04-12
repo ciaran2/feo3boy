@@ -7,8 +7,8 @@ use crate::memdev::{MemContext, MemDevice, RootExtend};
 pub mod direct_executor;
 pub mod direct_executor_v2;
 pub mod executor;
+mod externdefs;
 pub mod microcode_executor;
-mod oputils;
 
 /// CPU registers on the GB Z80 processor.
 ///

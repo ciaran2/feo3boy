@@ -2,54 +2,46 @@ use std::collections::HashMap;
 
 use feo3boy_opcodes::compiler::args::{Arg, Literal};
 use feo3boy_opcodes::compiler::direct_executor_generation::{
-    AssignedBlock, AssignedBranch, AssignedMicrocode, Conversion, FuncElement, VarAssignment,
+    AssignedBlock, AssignedBranch, AssignedMicrocode, FuncElement,
 };
+use feo3boy_opcodes::compiler::variables::{Conversion, VarAssignment};
 use feo3boy_opcodes::compiler::OperationType;
 use feo3boy_opcodes::microcode::{Microcode, ValType};
 use feo3boy_opcodes::opcode::{CBOpcode, InternalFetch, Opcode};
 use proc_macro2::{Ident, TokenStream};
 use quote::quote;
-use syn::{parse_quote, Attribute, Error, Item, ItemMod, Meta, Path, Result, Visibility};
+use syn::{Attribute, Path, Result, Visibility};
 
 use crate::get_crate;
+use crate::parsing::ExecutorDef;
 
 /// Code generator for the DirectExecutor.
 pub struct DirectExecutor {
-    /// Identifier for the executor.
-    name: Ident,
-    /// Docs for the executor.
-    docs: Vec<Attribute>,
+    /// Attributes for the executor.
+    attrs: Vec<Attribute>,
     /// Visibility of the resulting executor.
     vis: Visibility,
-    /// Module that defines the function-externs.
-    externs: ItemMod,
+    /// Identifier for the executor.
+    name: Ident,
     /// Mappings from microcode extern instruction names to the paths of functions that
     /// implement them, relative to the module the direct executor is defined in.
-    extern_funcs: HashMap<String, Path>,
+    externs: HashMap<String, Path>,
 }
 
 impl DirectExecutor {
-    pub fn extract(name: Ident, mut externs: ItemMod) -> Result<Self> {
-        let docs = extract_docs(&externs.attrs);
-        let vis = externs.vis.clone();
-
-        let extern_funcs = match externs.content {
-            Some(ref mut content) => extract_extern_funcs(&externs.ident, &mut content.1)?,
-            None => {
-                return Err(Error::new(
-                    externs.ident.span(),
-                    "define_microcode must be used on an inline module, not one defined \
-                    externally",
-                ));
-            }
-        };
+    pub fn extract(executor: ExecutorDef) -> Result<Self> {
+        let externs = executor
+            .externs
+            .content
+            .into_iter()
+            .map(|ext| (ext.name.to_string(), ext.path))
+            .collect();
 
         Ok(Self {
-            name,
-            docs,
-            vis,
+            attrs: executor.attrs,
+            name: executor.name,
+            vis: executor.vis,
             externs,
-            extern_funcs,
         })
     }
 
@@ -59,9 +51,8 @@ impl DirectExecutor {
         let log = get_crate("log");
 
         let name = &self.name;
-        let docs = &self.docs;
+        let attrs = &self.attrs;
         let vis = &self.vis;
-        let module = &self.externs;
 
         let ctx_ty = quote! { &mut impl #feo3boy::gbz80core::ExecutorContext<State = ()> };
         let prev_ime_ty = quote! { Option<#feo3boy::gbz80core::InterruptMasterState> };
@@ -97,12 +88,11 @@ impl DirectExecutor {
         });
 
         quote! {
-            #(#docs)*
+            #(#attrs)*
             #vis struct #name;
 
             impl #name {
                 /// Execute a single Opcode.
-                #[allow(unreachable_code)]
                 fn run_opcode(ctx: #ctx_ty, mut prev_ime: #prev_ime_ty, opcode: u8) {
                     match opcode {
                         #(#opcode)*
@@ -110,7 +100,6 @@ impl DirectExecutor {
                 }
 
                 /// Execute a single CBOpcode.
-                #[allow(unreachable_code)]
                 fn run_cb_opcode(ctx: #ctx_ty, mut prev_ime: #prev_ime_ty, cbopcode: u8) {
                     match cbopcode {
                         #(#cbopcode)*
@@ -121,15 +110,12 @@ impl DirectExecutor {
             impl #feo3boy::gbz80core::executor::Executor for #name {
                 type State = ();
 
-                #[allow(unreachable_code)]
                 fn run_single_instruction(ctx: #ctx_ty) {
                     let mut prev_ime: #prev_ime_ty = None;
                     #log::trace!("[Internal Fetch]");
                     #fetch
                 }
             }
-
-            #module
         }
     }
 
@@ -196,7 +182,7 @@ impl DirectExecutor {
                         panic!("Skip and SkipIf are not allowed in AssignedMicrocode");
                     }
                     _ => {
-                        let path = match self.extern_funcs.get(&desc.name) {
+                        let path = match self.externs.get(&desc.name) {
                             Some(path) => path,
                             None => {
                                 panic!("Extern definition for Microcode {} not found", desc.name);
@@ -243,6 +229,11 @@ impl DirectExecutor {
             .iter()
             .map(|conv| self.generate_conversion(conv));
         let true_ret_vars = branch.true_returns.iter().map(|ret| ret.var);
+        let true_ret_vars = if branch.true_returns.is_empty() {
+            None
+        } else {
+            Some(quote! { (#(#true_ret_vars),*) })
+        };
 
         let code_if_false = self.generate_body(&branch.code_if_false);
         let false_end_conv = branch
@@ -250,6 +241,11 @@ impl DirectExecutor {
             .iter()
             .map(|conv| self.generate_conversion(conv));
         let false_ret_vars = branch.false_returns.iter().map(|ret| ret.var);
+        let false_ret_vars = if branch.false_returns.is_empty() {
+            None
+        } else {
+            Some(quote! { (#(#false_ret_vars),*) })
+        };
 
         let push_vars = branch.pushes.iter().map(|push| push.var);
         let push_vals = branch.pushes.iter().map(|push| get_type(push.val));
@@ -259,11 +255,11 @@ impl DirectExecutor {
             let (#(#push_vars),*): (#(#push_vals),*) = if #cond {
                 #code_if_true
                 #(#true_end_conv)*
-                (#(#true_ret_vars),*)
+                #true_ret_vars
             } else {
                 #code_if_false
                 #(#false_end_conv)*
-                (#(#false_ret_vars),*)
+                #false_ret_vars
             };
         }
     }
@@ -322,84 +318,4 @@ fn get_type(val: ValType) -> TokenStream {
             quote! { #feo3boy_opcodes::gbz80types::Flags }
         }
     }
-}
-
-/// Extract the docs from a list of attributes.
-fn extract_docs(attrs: &[Attribute]) -> Vec<Attribute> {
-    attrs
-        .iter()
-        .filter(|attr| match &attr.meta {
-            Meta::NameValue(nv) => nv.path.is_ident("doc"),
-            _ => false,
-        })
-        .cloned()
-        .collect()
-}
-
-/// Find all functions in the module with the `#[microcode_extern(ExternName)]` marker and
-/// map them to the function to use to implement that extern.
-fn extract_extern_funcs(mod_name: &Ident, items: &mut Vec<Item>) -> Result<HashMap<String, Path>> {
-    items
-        .iter_mut()
-        .map(|item| {
-            Ok(match item {
-                Item::Fn(func) => extract_microcode_marker(&mut func.attrs)?.map(|ident| {
-                    let func_name = &func.sig.ident;
-                    (ident.to_string(), parse_quote!(#mod_name :: #func_name))
-                }),
-                _ => None,
-            })
-        })
-        .filter_map(Result::transpose)
-        .collect()
-}
-
-/// Reads through the attributes and finds one labeled `microcode_extern` or and extracts
-/// the `Ident` from it. Returns None if the value is not a `microcode_extern` def.
-fn extract_microcode_marker(attrs: &mut Vec<Attribute>) -> Result<Option<Ident>> {
-    let mut res = None;
-
-    let mut i = attrs.len();
-    while i > 0 {
-        i -= 1;
-        match &attrs[i].meta {
-            Meta::Path(path) => {
-                if path.is_ident("microcode_extern") {
-                    return Err(Error::new_spanned(
-                        path,
-                        "#[microcode_extern] marker on requires an argument to specify \
-                        the name of the extern being defined",
-                    ));
-                }
-                // Retain all other path attributes.
-                continue;
-            }
-            Meta::List(list) => {
-                if !list.path.is_ident("microcode_extern") {
-                    // Not a microcode attribute, don't delete.
-                    continue;
-                };
-                if !res.is_none() {
-                    return Err(Error::new_spanned(
-                        &list.path,
-                        "may only specify one #[microcode_extern(...)] attribute.",
-                    ));
-                }
-                res = Some(syn::parse2::<Ident>(list.tokens.clone())?);
-            }
-            Meta::NameValue(nv) => {
-                if nv.path.is_ident("microcode_extern") {
-                    return Err(Error::new_spanned(
-                        &nv.path,
-                        "`#[microcode_extern(...)]` uses a parenthsized argument not \
-                        `microcode_extern = ... syntax`",
-                    ));
-                }
-                // Not a microcode attribute, retain it.
-                continue;
-            }
-        }
-        attrs.remove(i);
-    }
-    Ok(res)
 }

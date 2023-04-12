@@ -70,6 +70,28 @@ impl Element {
             }
         }
     }
+
+    /// Return true if the given element ends with FetchNextInstruction, ParseOpcode, or
+    /// ParseCBOpcode. For Branches, only returns true if all branches end with one of
+    /// those opcodes.
+    pub fn ends_with_terminal(&self) -> bool {
+        match self {
+            Element::Microcode(microcode) => match microcode {
+                Microcode::FetchNextInstruction
+                | Microcode::ParseOpcode
+                | Microcode::ParseCBOpcode => true,
+                _ => false,
+            },
+            Element::Block(block) => match block.elements.last() {
+                Some(last) => last.ends_with_terminal(),
+                None => false,
+            },
+            Element::Branch(Branch {
+                code_if_true,
+                code_if_false,
+            }) => code_if_true.ends_with_terminal() && code_if_false.ends_with_terminal(),
+        }
+    }
 }
 
 impl Default for Element {
