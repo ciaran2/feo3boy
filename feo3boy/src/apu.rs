@@ -493,6 +493,31 @@ impl ChannelControl {
     }
 }
 
+const HIGH_PASS_CUTOFF: f32 = 200.0;
+
+#[derive(Clone, Debug, Default)]
+struct HighPassFilter {
+    last_input: (f32, f32),
+    last_output: (f32, f32),
+    alpha: f32,
+}
+
+impl HighPassFilter {
+    fn set_sample_rate(&mut self, sample_rate: u32) {
+        self.alpha = 1.0 / ( 2.0 * 3.1416 / (sample_rate as f32) * HIGH_PASS_CUTOFF + 1.0);
+    }
+
+    fn filter_sample(&mut self, input: (f32, f32)) -> (f32, f32) {
+        let output = (self.alpha * (input.0 + self.last_output.0 - self.last_input.0),
+                        self.alpha * (input.1 + self.last_output.1 - self.last_input.1));
+
+        self.last_input = input;
+        self.last_output = output;
+
+        output
+    }
+}
+
 // We'll worry about double speed another time
 const CLOCK_SPEED: u32 = 4194304;
 
@@ -505,6 +530,7 @@ pub struct ApuState {
     output_sample: Option<(f32, f32)>,
     output_period: f32,
     sample_cursor: f32,
+    hpf: HighPassFilter,
 }
 
 impl ApuState {
@@ -514,11 +540,13 @@ impl ApuState {
             output_sample: None,
             output_period: 0.0,
             sample_cursor: 0.0,
+            hpf: HighPassFilter::default(),
         }
     }
 
     pub fn set_output_sample_rate(&mut self, sample_rate: u32) {
         self.output_period = CLOCK_SPEED as f32 / sample_rate as f32;
+        self.hpf.set_sample_rate(sample_rate);
         info!("Setting output period {}", self.output_period);
     }
 
@@ -1081,7 +1109,8 @@ pub fn tick(ctx: &mut impl ApuContext, tcycles: u64) {
 
             let left_sample = get_stereo_sample(ctx, sample_cursor, false);
             let right_sample = get_stereo_sample(ctx, sample_cursor, true);
-            ctx.apu_mut().output_sample = Some((left_sample, right_sample));
+            let stereo_sample = ctx.apu_mut().hpf.filter_sample((left_sample, right_sample));
+            ctx.apu_mut().output_sample = Some(stereo_sample);
         }
     }
 
