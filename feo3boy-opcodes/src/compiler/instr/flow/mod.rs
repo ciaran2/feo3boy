@@ -81,12 +81,7 @@ impl Element {
     /// those opcodes.
     pub fn ends_with_terminal(&self) -> bool {
         match self {
-            Element::Microcode(microcode) => match microcode {
-                Microcode::FetchNextInstruction
-                | Microcode::ParseOpcode
-                | Microcode::ParseCBOpcode => true,
-                _ => false,
-            },
+            Element::Microcode(microcode) => microcode.is_terminal(),
             Element::Block(block) => match block.elements.last() {
                 Some(last) => last.ends_with_terminal(),
                 None => false,

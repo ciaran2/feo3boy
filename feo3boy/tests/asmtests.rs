@@ -3,6 +3,7 @@ use std::{iter, mem};
 use feo3boy::gbz80core::direct_executor::DirectExecutor;
 use feo3boy::gbz80core::direct_executor_v2::DirectExecutorV2;
 use feo3boy::gbz80core::microcode_executor::MicrocodeExecutor;
+use feo3boy::gbz80core::stepping_executor::SteppingExecutor;
 
 macro_rules! executor_tests {
     ($executor:ty, $modname:ident) => {
@@ -124,6 +125,7 @@ macro_rules! executor_tests {
 executor_tests!(DirectExecutor, direct_executor);
 executor_tests!(MicrocodeExecutor, microcode_executor);
 executor_tests!(DirectExecutorV2, direct_executor_v2);
+executor_tests!(SteppingExecutor, stepping_executor);
 
 /// Tests which depend on the cpu_instrs.gb test rom. cpu_instrs is not included in the
 /// repository for licensing reasons. Copy it to this folder before trying to run these
@@ -137,6 +139,7 @@ mod test_roms {
     use feo3boy::gbz80core::direct_executor_v2::DirectExecutorV2;
     use feo3boy::gbz80core::executor::Executor;
     use feo3boy::gbz80core::microcode_executor::MicrocodeExecutor;
+    use feo3boy::gbz80core::stepping_executor::SteppingExecutor;
     use feo3boy::memdev::{BiosRom, Cartridge, RootMemDevice};
     use feo3boy_opcodes::opcode::Opcode;
 
@@ -178,39 +181,51 @@ Passed all tests";
         let mut gb_direct = Box::new(Gb::new(bios.clone(), cart.clone()));
         let mut gb_microcode = Box::new(Gb::new_microcode(bios.clone(), cart.clone()));
         let mut gb_direct_v2 = Box::new(Gb::new_v2(bios.clone(), cart.clone()));
+        let mut gb_stepping = Box::new(Gb::new_stepping(bios.clone(), cart.clone()));
         let mut output_direct = Vec::new();
         let mut output_microcode = Vec::new();
         let mut output_direct_v2 = Vec::new();
+        let mut output_stepping = Vec::new();
 
         loop {
             output_direct.extend(gb_direct.serial.stream.receive_bytes());
             output_microcode.extend(gb_microcode.serial.stream.receive_bytes());
             output_direct_v2.extend(gb_direct_v2.serial.stream.receive_bytes());
+            output_stepping.extend(gb_stepping.serial.stream.receive_bytes());
 
             let ex_pc = gb_direct.cpustate.regs.pc;
             let instr_direct = Opcode::decode(gb_direct.mmu.read_byte(ex_pc));
             let instr_microcode = Opcode::decode(gb_microcode.mmu.read_byte(ex_pc));
             let instr_direct_v2 = Opcode::decode(gb_direct_v2.mmu.read_byte(ex_pc));
+            let instr_stepping = Opcode::decode(gb_stepping.mmu.read_byte(ex_pc));
             DirectExecutor::run_single_instruction(&mut *gb_direct);
             MicrocodeExecutor::run_single_instruction(&mut *gb_microcode);
             DirectExecutorV2::run_single_instruction(&mut *gb_direct_v2);
+            SteppingExecutor::run_single_instruction(&mut *gb_stepping);
             assert!(
-                gb_direct.cpustate == gb_microcode.cpustate,
-                "Mismatch after PC {}: {}/{}/{}\nDirect: {:?}\nMicrodode: {:?}\nDirect V2: {:?}",
+                gb_direct.cpustate == gb_microcode.cpustate
+                    && gb_direct.cpustate == gb_direct_v2.cpustate
+                    && gb_direct.cpustate == gb_stepping.cpustate,
+                "Mismatch after PC {}: {}/{}/{}/{}\nDirect: {:?}\nMicrodode: {:?}\n\
+                Direct V2: {:?}\nStepping: {:?}",
                 ex_pc,
                 instr_direct,
                 instr_microcode,
                 instr_direct_v2,
+                instr_stepping,
                 gb_direct.cpustate,
                 gb_microcode.cpustate,
                 gb_direct_v2.cpustate,
+                gb_stepping.cpustate,
             );
 
             let output_direct = String::from_utf8_lossy(&output_direct);
             let output_microcode = String::from_utf8_lossy(&output_microcode);
             let output_direct_v2 = String::from_utf8_lossy(&output_direct_v2);
+            let output_stepping = String::from_utf8_lossy(&output_stepping);
             assert_eq!(output_direct, output_microcode);
             assert_eq!(output_direct, output_direct_v2);
+            assert_eq!(output_direct, output_stepping);
             if let ControlFlow::Break(()) = check_cpu_instrs_output(output_direct.as_ref()) {
                 break;
             }

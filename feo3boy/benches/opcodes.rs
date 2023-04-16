@@ -3,6 +3,7 @@ use feo3boy::gbz80core::direct_executor::DirectExecutor;
 use feo3boy::gbz80core::direct_executor_v2::DirectExecutorV2;
 use feo3boy::gbz80core::executor::Executor;
 use feo3boy::gbz80core::microcode_executor::{MicrocodeExecutor, MicrocodeState};
+use feo3boy::gbz80core::stepping_executor::{SteppingExecutor, SteppingExecutorState};
 use feo3boy::gbz80core::Gbz80State;
 use feo3boy::memdev::{AllRam, RootMemDevice};
 
@@ -50,6 +51,16 @@ fn opcodes_benchmark(c: &mut Criterion) {
                 (Gbz80State::default(), mem, ())
             },
             |gb| run_until_halted::<DirectExecutorV2>(gb),
+            BatchSize::LargeInput,
+        )
+    });
+    c.bench_function("fibonacci-stepping", |b| {
+        b.iter_batched_ref(
+            || {
+                let mem = AllRam::from(fib);
+                (Gbz80State::default(), mem, SteppingExecutorState::default())
+            },
+            |gb| run_until_halted::<SteppingExecutor>(gb),
             BatchSize::LargeInput,
         )
     });
@@ -143,6 +154,18 @@ Passed all tests";
     group.bench_function("cpu_instrs-direct-v2", |b| {
         b.iter_batched_ref(
             || (Box::new(Gb::new_v2(bios.clone(), cart.clone())), Vec::new()),
+            |(gb, output)| run_cpu_instrs(&mut **gb, output),
+            BatchSize::LargeInput,
+        );
+    });
+    group.bench_function("cpu_instrs-stepping", |b| {
+        b.iter_batched_ref(
+            || {
+                (
+                    Box::new(Gb::new_stepping(bios.clone(), cart.clone())),
+                    Vec::new(),
+                )
+            },
             |(gb, output)| run_cpu_instrs(&mut **gb, output),
             BatchSize::LargeInput,
         );

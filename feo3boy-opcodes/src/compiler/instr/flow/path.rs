@@ -6,13 +6,13 @@ use std::{mem, slice};
 
 use crate::count_repetition;
 
-/// Selects a child [`Element`] within an `Element`. The selector must match the parent
-/// type.
+/// Selects a child [`Element`][super::Element] within an `Element`. The selector must
+/// match the parent type.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum ElementSelector {
-    /// Selects between the true and false paths of a [`Branch`].
+    /// Selects between the true and false paths of a [`Branch`][super::Branch].
     Branch(bool),
-    /// Indexes into the children of a [`Block`].
+    /// Indexes into the children of a [`Block`][super::Block].
     Block(usize),
 }
 
@@ -27,6 +27,38 @@ impl ElementSelector {
     #[inline]
     pub fn as_mut_path(&mut self) -> &mut ElementPath {
         ElementPath::from_mut_slice(slice::from_mut(self))
+    }
+
+    /// Gets the branch boolean or panics.
+    pub fn unwrap_branch(self) -> bool {
+        match self {
+            ElementSelector::Branch(cond) => cond,
+            ElementSelector::Block(_) => panic!("Not a Branch Selector"),
+        }
+    }
+
+    /// Gets the block index or panics.
+    pub fn unwrap_block(self) -> usize {
+        match self {
+            ElementSelector::Block(idx) => idx,
+            ElementSelector::Branch(_) => panic!("Not a Block Selector"),
+        }
+    }
+
+    /// Mutably gets the branch boolean or panics.
+    pub fn unwrap_branch_mut(&mut self) -> &mut bool {
+        match self {
+            ElementSelector::Branch(cond) => cond,
+            ElementSelector::Block(_) => panic!("Not a Branch Selector"),
+        }
+    }
+
+    /// Mutably gets the block index or panics.
+    pub fn unwrap_block_mut(&mut self) -> &mut usize {
+        match self {
+            ElementSelector::Block(idx) => idx,
+            ElementSelector::Branch(_) => panic!("Not a Block Selector"),
+        }
     }
 }
 
@@ -67,7 +99,7 @@ impl ElementIndex for ElementSelector {
     }
 }
 
-/// A path to a particular child [`Element`].
+/// A path to a particular child [`Element`][super::Element].
 #[derive(Debug, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 #[repr(transparent)]
 pub struct ElementPathBuf {
@@ -117,6 +149,14 @@ impl ElementPathBuf {
         P: ElementIndex,
     {
         self.path.extend(path.path_selectors())
+    }
+
+    /// Pop the last element off of this path selector, transforming it into its parent.
+    /// Returns the [`ElementSelector`] that was popped, or `None` if the path was already
+    /// the root.
+    #[inline]
+    pub fn pop(&mut self) -> Option<ElementSelector> {
+        self.path.pop()
     }
 }
 
@@ -256,7 +296,7 @@ impl<'p> ElementIndex for &'p mut ElementPathBuf {
     }
 }
 
-/// A path to a particular child [`Element`].
+/// A path to a particular child [`Element`][super::Element].
 #[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 #[repr(transparent)]
 pub struct ElementPath {
@@ -264,9 +304,12 @@ pub struct ElementPath {
 }
 
 impl ElementPath {
+    /// An empty element path.
+    pub const EMPTY: &ElementPath = ElementPath::from_slice(&[]);
+
     /// Create an [`ElementPath`] ref from a slice of [`ElementSelector`].
     #[inline]
-    pub fn from_slice<'p>(slice: &'p [ElementSelector]) -> &'p Self {
+    pub const fn from_slice<'p>(slice: &'p [ElementSelector]) -> &'p Self {
         // Safety: ElementPath is repr(transparent) to [ElementSelector], so transmuting
         // from &[ElementSelector] to &ElementPath is safe.
         unsafe { mem::transmute(slice) }
@@ -280,6 +323,12 @@ impl ElementPath {
         unsafe { mem::transmute(slice) }
     }
 
+    /// Gets the number of [selectors][ElementSelector] in this [`ElementPath`].
+    #[inline]
+    pub const fn len(&self) -> usize {
+        self.path.len()
+    }
+
     /// Creates an [`ElementPathBuf`] from this [`ElementPath`].
     #[inline]
     pub fn to_buf(&self) -> ElementPathBuf {
@@ -288,7 +337,7 @@ impl ElementPath {
 
     /// Get this [`ElementPath`] as a slice.
     #[inline]
-    pub fn as_slice(&self) -> &[ElementSelector] {
+    pub const fn as_slice(&self) -> &[ElementSelector] {
         &self.path
     }
 
@@ -312,10 +361,26 @@ impl ElementPath {
 
     /// Get the parent of this [`ElementPath`] if any. Returns `None` for the root (empty)
     /// path.
-    pub fn parent(&self) -> Option<&ElementPath> {
-        self.path
-            .split_last()
-            .map(|(_, head)| ElementPath::from_slice(head))
+    pub const fn parent(&self) -> Option<&ElementPath> {
+        match self.path.split_last() {
+            Some((_, head)) => Some(ElementPath::from_slice(head)),
+            None => None,
+        }
+    }
+
+    /// Gets the last selector from the [`ElementPath`].
+    #[inline]
+    pub const fn last(&self) -> Option<ElementSelector> {
+        match self.path.last() {
+            Some(last) => Some(*last),
+            None => None,
+        }
+    }
+
+    /// Mutably gets the last selector from the [`ElementPath`].
+    #[inline]
+    pub fn last_mut(&mut self) -> Option<&mut ElementSelector> {
+        self.path.last_mut()
     }
 }
 
@@ -401,7 +466,7 @@ impl PartialEq<ElementPathBuf> for &mut ElementPath {
     }
 }
 
-/// Trait for types which can be used to index into an [`Element`].
+/// Trait for types which can be used to index into an [`Element`][super::Element].
 pub trait ElementIndex {
     type PathSelectors: Iterator<Item = ElementSelector>
         + DoubleEndedIterator

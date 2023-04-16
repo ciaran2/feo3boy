@@ -47,6 +47,7 @@ impl FuncElement {
     }
 }
 
+/// Microcode with required type conversions and variable assignments provided.
 #[derive(Debug)]
 pub struct AssignedMicrocode {
     /// The microcode to execute.
@@ -199,7 +200,7 @@ impl AssignedBranch {
                 .map(|asgn| parent_stack.push(asgn.val))
                 .collect()
         } else if false_terminal {
-            // False branch is a terminal operation, but false is not. Take our pushes from
+            // False branch is a terminal operation, but true is not. Take our pushes from
             // the true stack, and update the parent stack (the result of our operation)
             // from the end state of the parent of the true branch.
             assert!(
@@ -275,8 +276,8 @@ impl AssignedBranch {
             true_end_conv,
             true_returns: true_stack.local_stack,
             code_if_false,
-            false_returns: false_stack.local_stack,
             false_end_conv,
+            false_returns: false_stack.local_stack,
             pushes,
         }
     }

@@ -28,7 +28,8 @@ pub const fn ___array_size_helper<T, const N: usize>(_: &[T; N]) -> usize {
 ///
 /// Usage:
 /// ```
-/// count_repetition!(a, 3, (), {}, 4, foo::Bar);
+/// # use feo3boy_opcodes::count_repetition;
+/// count_repetition!(a, 3, (), {}, 4, foo);
 /// ```
 #[macro_export]
 macro_rules! count_repetition {

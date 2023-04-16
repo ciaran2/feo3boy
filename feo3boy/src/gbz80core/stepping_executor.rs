@@ -1,12 +1,24 @@
-//! Contains the code-generated direct executor.
+//! Contains the code-generated stepping executor.
 
-use feo3boy_executor_generator::define_direct_executor;
+use feo3boy_executor_generator::define_state_executor;
 
 use crate::gbz80core::externdefs;
 
-define_direct_executor!(
-    /// New version of DirectExecutor which is code-generated from the microcode.
-    pub DirectExecutorV2,
+define_state_executor!(
+    /// An executor which allows sub-stepping like the
+    /// [MicrocodeExecutor][crate::gbz80core::microcode_executor::MicrocodeExecutor], but
+    /// is code generated to use a minimum number of states and less interpretation, so is
+    /// much more performant.
+    ///
+    /// In this executor, states only change whenever there is a
+    /// [`Yield`][feo3boy_opcodes::microcode::Microcode::Yield] or
+    /// [`FetchNextInstruction`][feo3boy_opcodes::microcode::Microcode::FetchNextInstruction].
+    ///
+    /// Where the `MicrocodeExecutor` executor uses a [`Vec`] as its stack to store bytes
+    /// between microcodes, the microcode stack here exists only at compile time. All
+    /// values stored on the microcode stack are instead placed either in rust variables
+    /// or in fields of the executor's state.
+    pub SteppingExecutor,
     externs = [
         ReadReg => externdefs::read_reg,
         WriteReg => externdefs::write_reg,
@@ -41,16 +53,16 @@ mod tests {
     use super::*;
 
     /// Convenience type for an ExecutorContext with a unit state.
-    trait Ctx: ExecutorContext<State = ()> {}
+    trait Ctx: ExecutorContext<State = SteppingExecutorState> {}
 
-    impl<E: ExecutorContext<State = ()>> Ctx for E {}
+    impl<E: ExecutorContext<State = SteppingExecutorState>> Ctx for E {}
 
     fn init() {
         let _ = env_logger::builder().is_test(true).try_init();
     }
 
     fn run_single_instruction(ctx: &mut impl Ctx) {
-        DirectExecutorV2::run_single_instruction(ctx)
+        SteppingExecutor::run_single_instruction(ctx)
     }
 
     #[test]
@@ -59,6 +71,7 @@ mod tests {
 
         let mut cpu = Gbz80State::new();
         let mut testmem = [0u8; 0x10000];
+        let mut state = SteppingExecutorState::default();
 
         testmem[0] = 0x3e;
         testmem[1] = 0x80;
@@ -69,19 +82,19 @@ mod tests {
         testmem[6] = 0x85;
         testmem[7] = 0x81;
 
-        run_single_instruction(&mut (&mut cpu, &mut testmem));
+        run_single_instruction(&mut (&mut cpu, &mut testmem, &mut state));
         assert_eq!(cpu.regs.acc, 0x80, "{:?}", cpu.regs);
 
-        run_single_instruction(&mut (&mut cpu, &mut testmem));
+        run_single_instruction(&mut (&mut cpu, &mut testmem, &mut state));
         assert_eq!(cpu.regs.b, 0x01, "{:?}", cpu.regs);
 
-        run_single_instruction(&mut (&mut cpu, &mut testmem));
+        run_single_instruction(&mut (&mut cpu, &mut testmem, &mut state));
         assert_eq!(cpu.regs.acc, 0x81, "{:?}", cpu.regs);
 
-        run_single_instruction(&mut (&mut cpu, &mut testmem));
+        run_single_instruction(&mut (&mut cpu, &mut testmem, &mut state));
         assert_eq!(cpu.regs.c, 0x85, "{:?}", cpu.regs);
 
-        run_single_instruction(&mut (&mut cpu, &mut testmem));
+        run_single_instruction(&mut (&mut cpu, &mut testmem, &mut state));
         assert_eq!(cpu.regs.acc, 0x6, "{:?}", cpu.regs);
         assert!(cpu.regs.flags.contains(Flags::CARRY), "{:?}", cpu.regs);
     }
@@ -124,7 +137,11 @@ mod tests {
         }
         for inst in (0x40..=0x7f).filter(|&i| i != 0x76) {
             for input in 0..=0xff {
-                let mut ctx = (Gbz80State::default(), [0u8; 0x10000]);
+                let mut ctx = (
+                    Gbz80State::default(),
+                    [0u8; 0x10000],
+                    SteppingExecutorState::default(),
+                );
                 // Start with HL at a high number so any single-byte change to it will never
                 // collide with the instruction at 0x00.
                 ctx.0.regs.set_hl(0xAA);
@@ -171,7 +188,11 @@ mod tests {
             .flat_map(|high| [high + 0x06, high + 0x0e])
         {
             for input in 0..=0xff {
-                let mut ctx = (Gbz80State::default(), [0u8; 3]);
+                let mut ctx = (
+                    Gbz80State::default(),
+                    [0u8; 3],
+                    SteppingExecutorState::default(),
+                );
                 // Start with HL at a high number so any single-byte change to it will never
                 // collide with the instruction at 0x00.
                 ctx.0.regs.set_hl(2);
@@ -215,7 +236,11 @@ mod tests {
                 for v1 in 0..=0xff {
                     for v2 in 0..=0xff {
                         println!("add({:02x}) {},{}", inst, v1, v2);
-                        let mut ctx = (Gbz80State::default(), [0u8; 2]);
+                        let mut ctx = (
+                            Gbz80State::default(),
+                            [0u8; 2],
+                            SteppingExecutorState::default(),
+                        );
                         ctx.1[0] = inst;
                         ctx.0.regs.acc = v1;
                         ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
@@ -249,7 +274,11 @@ mod tests {
             for v1 in 0..=0xff {
                 for v2 in 0..=0xff {
                     println!("add(c6) {},{}", v1, v2);
-                    let mut ctx = (Gbz80State::default(), [0u8; 2]);
+                    let mut ctx = (
+                        Gbz80State::default(),
+                        [0u8; 2],
+                        SteppingExecutorState::default(),
+                    );
                     ctx.1[0] = 0xc6;
                     ctx.0.regs.acc = v1;
                     ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
@@ -280,7 +309,11 @@ mod tests {
             // A,A
             for v in 0..=0xff {
                 println!("add(87) {},{}", v, v);
-                let mut ctx = (Gbz80State::default(), [0u8; 1]);
+                let mut ctx = (
+                    Gbz80State::default(),
+                    [0u8; 1],
+                    SteppingExecutorState::default(),
+                );
                 ctx.1[0] = 0x87;
                 ctx.0.regs.acc = v;
                 ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
@@ -334,7 +367,11 @@ mod tests {
                 for v1 in 0..=0xff {
                     for v2 in 0..=0xff {
                         println!("adc({:02x}) {},{} {}", inst, v1, v2, carry);
-                        let mut ctx = (Gbz80State::default(), [0u8; 2]);
+                        let mut ctx = (
+                            Gbz80State::default(),
+                            [0u8; 2],
+                            SteppingExecutorState::default(),
+                        );
                         ctx.1[0] = inst;
                         ctx.0.regs.acc = v1;
                         ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
@@ -369,7 +406,11 @@ mod tests {
             for v1 in 0..=0xff {
                 for v2 in 0..=0xff {
                     println!("adc(ce) {},{} {}", v1, v2, carry);
-                    let mut ctx = (Gbz80State::default(), [0u8; 2]);
+                    let mut ctx = (
+                        Gbz80State::default(),
+                        [0u8; 2],
+                        SteppingExecutorState::default(),
+                    );
                     ctx.1[0] = 0xce;
                     ctx.0.regs.acc = v1;
                     ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
@@ -401,7 +442,11 @@ mod tests {
             // ADC A,A
             for v in 0..=0xff {
                 println!("adc(8f) {},{} {}", v, v, carry);
-                let mut ctx = (Gbz80State::default(), [0u8; 1]);
+                let mut ctx = (
+                    Gbz80State::default(),
+                    [0u8; 1],
+                    SteppingExecutorState::default(),
+                );
                 ctx.1[0] = 0x8f;
                 ctx.0.regs.acc = v;
                 ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
@@ -458,7 +503,11 @@ mod tests {
                 for v1 in 0..=0xff {
                     for v2 in 0..=0xff {
                         println!("sub({:02x}) {},{}", inst, v1, v2);
-                        let mut ctx = (Gbz80State::default(), [0u8; 2]);
+                        let mut ctx = (
+                            Gbz80State::default(),
+                            [0u8; 2],
+                            SteppingExecutorState::default(),
+                        );
                         ctx.1[0] = inst;
                         ctx.0.regs.acc = v1;
                         ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
@@ -491,7 +540,11 @@ mod tests {
             for v1 in 0..=0xff {
                 for v2 in 0..=0xff {
                     println!("sub(d6) {},{}", v1, v2);
-                    let mut ctx = (Gbz80State::default(), [0u8; 2]);
+                    let mut ctx = (
+                        Gbz80State::default(),
+                        [0u8; 2],
+                        SteppingExecutorState::default(),
+                    );
                     ctx.1[0] = 0xd6;
                     ctx.0.regs.acc = v1;
                     ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
@@ -521,7 +574,11 @@ mod tests {
             }
             for v in 0..=0xff {
                 println!("sub(97) {},{}", v, v);
-                let mut ctx = (Gbz80State::default(), [0u8; 1]);
+                let mut ctx = (
+                    Gbz80State::default(),
+                    [0u8; 1],
+                    SteppingExecutorState::default(),
+                );
                 ctx.1[0] = 0x97;
                 ctx.0.regs.acc = v;
                 ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
@@ -565,7 +622,11 @@ mod tests {
                 for v1 in 0..=0xff {
                     for v2 in 0..=0xff {
                         println!("sbc({:02x}) {},{} {}", inst, v1, v2, carry);
-                        let mut ctx = (Gbz80State::default(), [0u8; 2]);
+                        let mut ctx = (
+                            Gbz80State::default(),
+                            [0u8; 2],
+                            SteppingExecutorState::default(),
+                        );
                         ctx.1[0] = inst;
                         ctx.0.regs.acc = v1;
                         ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
@@ -598,7 +659,11 @@ mod tests {
             for v1 in 0..=0xff {
                 for v2 in 0..=0xff {
                     println!("sbc(de) {},{} {}", v1, v2, carry);
-                    let mut ctx = (Gbz80State::default(), [0u8; 2]);
+                    let mut ctx = (
+                        Gbz80State::default(),
+                        [0u8; 2],
+                        SteppingExecutorState::default(),
+                    );
                     ctx.1[0] = 0xde;
                     ctx.0.regs.acc = v1;
                     ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
@@ -628,7 +693,11 @@ mod tests {
             }
             for v in 0..=0xff {
                 println!("sbc(9f) {},{} {}", v, v, carry);
-                let mut ctx = (Gbz80State::default(), [0u8; 1]);
+                let mut ctx = (
+                    Gbz80State::default(),
+                    [0u8; 1],
+                    SteppingExecutorState::default(),
+                );
                 ctx.1[0] = 0x9f;
                 ctx.0.regs.acc = v;
                 ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
@@ -676,7 +745,11 @@ mod tests {
                 for v1 in 0..=0xff {
                     for v2 in 0..=0xff {
                         println!("and({:02x}) {},{}", inst, v1, v2);
-                        let mut ctx = (Gbz80State::default(), [0u8; 2]);
+                        let mut ctx = (
+                            Gbz80State::default(),
+                            [0u8; 2],
+                            SteppingExecutorState::default(),
+                        );
                         ctx.1[0] = inst;
                         ctx.0.regs.acc = v1;
                         ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
@@ -703,7 +776,11 @@ mod tests {
             for v1 in 0..=0xff {
                 for v2 in 0..=0xff {
                     println!("and(e6) {},{}", v1, v2);
-                    let mut ctx = (Gbz80State::default(), [0u8; 2]);
+                    let mut ctx = (
+                        Gbz80State::default(),
+                        [0u8; 2],
+                        SteppingExecutorState::default(),
+                    );
                     ctx.1[0] = 0xe6;
                     ctx.0.regs.acc = v1;
                     ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
@@ -727,7 +804,11 @@ mod tests {
             }
             for v in 0..=0xff {
                 println!("and(a7) {},{}", v, v);
-                let mut ctx = (Gbz80State::default(), [0u8; 1]);
+                let mut ctx = (
+                    Gbz80State::default(),
+                    [0u8; 1],
+                    SteppingExecutorState::default(),
+                );
                 ctx.1[0] = 0xa7;
                 ctx.0.regs.acc = v;
                 ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
@@ -772,7 +853,11 @@ mod tests {
                 for v1 in 0..=0xff {
                     for v2 in 0..=0xff {
                         println!("xor({:02x}) {},{}", inst, v1, v2);
-                        let mut ctx = (Gbz80State::default(), [0u8; 2]);
+                        let mut ctx = (
+                            Gbz80State::default(),
+                            [0u8; 2],
+                            SteppingExecutorState::default(),
+                        );
                         ctx.1[0] = inst;
                         ctx.0.regs.acc = v1;
                         ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
@@ -799,7 +884,11 @@ mod tests {
             for v1 in 0..=0xff {
                 for v2 in 0..=0xff {
                     println!("xor(ee) {},{}", v1, v2);
-                    let mut ctx = (Gbz80State::default(), [0u8; 2]);
+                    let mut ctx = (
+                        Gbz80State::default(),
+                        [0u8; 2],
+                        SteppingExecutorState::default(),
+                    );
                     ctx.1[0] = 0xee;
                     ctx.0.regs.acc = v1;
                     ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
@@ -823,7 +912,11 @@ mod tests {
             }
             for v in 0..=0xff {
                 println!("and(af) {},{}", v, v);
-                let mut ctx = (Gbz80State::default(), [0u8; 1]);
+                let mut ctx = (
+                    Gbz80State::default(),
+                    [0u8; 1],
+                    SteppingExecutorState::default(),
+                );
                 ctx.1[0] = 0xaf;
                 ctx.0.regs.acc = v;
                 ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
@@ -866,7 +959,11 @@ mod tests {
                 for v1 in 0..=0xff {
                     for v2 in 0..=0xff {
                         println!("or({:02x}) {},{}", inst, v1, v2);
-                        let mut ctx = (Gbz80State::default(), [0u8; 2]);
+                        let mut ctx = (
+                            Gbz80State::default(),
+                            [0u8; 2],
+                            SteppingExecutorState::default(),
+                        );
                         ctx.1[0] = inst;
                         ctx.0.regs.acc = v1;
                         ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
@@ -893,7 +990,11 @@ mod tests {
             for v1 in 0..=0xff {
                 for v2 in 0..=0xff {
                     println!("or(f6) {},{}", v1, v2);
-                    let mut ctx = (Gbz80State::default(), [0u8; 2]);
+                    let mut ctx = (
+                        Gbz80State::default(),
+                        [0u8; 2],
+                        SteppingExecutorState::default(),
+                    );
                     ctx.1[0] = 0xf6;
                     ctx.0.regs.acc = v1;
                     ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
@@ -917,7 +1018,11 @@ mod tests {
             }
             for v in 0..=0xff {
                 println!("or(b7) {},{}", v, v);
-                let mut ctx = (Gbz80State::default(), [0u8; 1]);
+                let mut ctx = (
+                    Gbz80State::default(),
+                    [0u8; 1],
+                    SteppingExecutorState::default(),
+                );
                 ctx.1[0] = 0xb7;
                 ctx.0.regs.acc = v;
                 ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
@@ -962,7 +1067,11 @@ mod tests {
                 for v1 in 0..=0xff {
                     for v2 in 0..=0xff {
                         println!("cp({:02x}) {},{}", inst, v1, v2);
-                        let mut ctx = (Gbz80State::default(), [0u8; 2]);
+                        let mut ctx = (
+                            Gbz80State::default(),
+                            [0u8; 2],
+                            SteppingExecutorState::default(),
+                        );
                         ctx.1[0] = inst;
                         ctx.0.regs.acc = v1;
                         ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
@@ -994,7 +1103,11 @@ mod tests {
             for v1 in 0..=0xff {
                 for v2 in 0..=0xff {
                     println!("cp(fe) {},{}", v1, v2);
-                    let mut ctx = (Gbz80State::default(), [0u8; 2]);
+                    let mut ctx = (
+                        Gbz80State::default(),
+                        [0u8; 2],
+                        SteppingExecutorState::default(),
+                    );
                     ctx.1[0] = 0xfe;
                     ctx.0.regs.acc = v1;
                     ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
@@ -1023,7 +1136,11 @@ mod tests {
             }
             for v in 0..=0xff {
                 println!("cp(bf) {},{}", v, v);
-                let mut ctx = (Gbz80State::default(), [0u8; 1]);
+                let mut ctx = (
+                    Gbz80State::default(),
+                    [0u8; 1],
+                    SteppingExecutorState::default(),
+                );
                 ctx.1[0] = 0xbf;
                 ctx.0.regs.acc = v;
                 ctx.0.regs.flags = Flags::from_bits_truncate(existing_flags);
@@ -1061,7 +1178,11 @@ mod tests {
 
                 for (opcode, should_jump) in ops {
                     println!("jr({:02x}) -> {} should: {}", opcode, offset, should_jump);
-                    let mut ctx = (Gbz80State::default(), [0u8; 0x200]);
+                    let mut ctx = (
+                        Gbz80State::default(),
+                        [0u8; 0x200],
+                        SteppingExecutorState::default(),
+                    );
                     ctx.0.regs.flags = Flags::from_bits_truncate(flags);
                     ctx.1[0x100] = opcode;
                     ctx.0.regs.pc = 0x100;
@@ -1104,7 +1225,11 @@ mod tests {
 
                 for (opcode, should_jump) in ops {
                     println!("jp({:02x}) -> {:04x} should: {}", opcode, dest, should_jump);
-                    let mut ctx = (Gbz80State::default(), [0u8; 3]);
+                    let mut ctx = (
+                        Gbz80State::default(),
+                        [0u8; 3],
+                        SteppingExecutorState::default(),
+                    );
                     ctx.0.regs.flags = Flags::from_bits_truncate(flags);
                     ctx.1[0] = opcode;
                     let [low, high] = dest.to_le_bytes();
@@ -1135,7 +1260,11 @@ mod tests {
         for flags in (0x00..=0xf0).step_by(0x10) {
             for dest in 0x0000u16..=0xffff {
                 println!("jp(e9) -> {:04x}", dest);
-                let mut ctx = (Gbz80State::default(), [0u8; 1]);
+                let mut ctx = (
+                    Gbz80State::default(),
+                    [0u8; 1],
+                    SteppingExecutorState::default(),
+                );
                 ctx.0.regs.flags = Flags::from_bits_truncate(flags);
                 ctx.1[0] = 0xe9;
                 ctx.0.regs.set_hl(dest);
@@ -1168,7 +1297,11 @@ mod tests {
         ];
 
         for (opcode, dest) in rsts {
-            let mut ctx = (Gbz80State::default(), [0u8; 0x200]);
+            let mut ctx = (
+                Gbz80State::default(),
+                [0u8; 0x200],
+                SteppingExecutorState::default(),
+            );
             ctx.1[0x101] = opcode;
             ctx.0.regs.pc = 0x101;
             ctx.0.regs.sp = 0x200;
@@ -1212,7 +1345,11 @@ mod tests {
                         "ret({:02x}) -> {:04x} should: {}",
                         opcode, dest, should_jump
                     );
-                    let mut ctx = (Gbz80State::default(), [0u8; 0x200]);
+                    let mut ctx = (
+                        Gbz80State::default(),
+                        [0u8; 0x200],
+                        SteppingExecutorState::default(),
+                    );
                     ctx.0.regs.flags = Flags::from_bits_truncate(flags);
                     ctx.1[0x100] = opcode;
                     ctx.0.regs.pc = 0x100;
@@ -1245,7 +1382,11 @@ mod tests {
 
         for dest in 0x0000u16..=0xffff {
             println!("reti(0xd9) -> {:04x}", dest);
-            let mut ctx = (Gbz80State::default(), [0u8; 0x200]);
+            let mut ctx = (
+                Gbz80State::default(),
+                [0u8; 0x200],
+                SteppingExecutorState::default(),
+            );
             ctx.1[0x100] = 0xd9;
             ctx.0.regs.pc = 0x100;
             let [low, high] = dest.to_le_bytes();
@@ -1289,7 +1430,11 @@ mod tests {
                         "call({:02x}) -> {:04x} should: {}",
                         opcode, dest, should_jump
                     );
-                    let mut ctx = (Gbz80State::default(), [0u8; 0x200]);
+                    let mut ctx = (
+                        Gbz80State::default(),
+                        [0u8; 0x200],
+                        SteppingExecutorState::default(),
+                    );
                     ctx.0.regs.flags = Flags::from_bits_truncate(flags);
                     ctx.1[0x100] = opcode;
                     ctx.0.regs.pc = 0x100;

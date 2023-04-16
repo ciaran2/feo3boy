@@ -20,6 +20,20 @@ impl ValType {
     }
 }
 
+impl Microcode {
+    /// Returns true if this microcode operation causes the currently executing
+    /// instruction to terminate. True for
+    /// [`FetchNextInstruction`][Microcode::FetchNextInstruction]
+    /// [`ParseOpcode`][Microcode::ParseOpcode], and
+    /// [`ParseCBOpcode`][Microcode::ParseCBOpcode].
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Microcode::FetchNextInstruction | Microcode::ParseOpcode | Microcode::ParseCBOpcode
+        )
+    }
+}
+
 /// [`Microcode`] is a set of simple instructions designed specifically for implementing
 /// the opcodes on the gbz80 processor used on the gameboy. These instructions operate on
 /// a stack of bytes called the microcode stack, which is separate from the gameboy's

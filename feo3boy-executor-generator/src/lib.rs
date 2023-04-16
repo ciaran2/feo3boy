@@ -7,9 +7,12 @@ use syn::parse_macro_input;
 
 use crate::direct_executor::DirectExecutor;
 use crate::parsing::ExecutorDef;
+use crate::state_executor::StateExecutor;
 
 mod direct_executor;
 mod parsing;
+mod state_executor;
+mod types;
 
 /// Generates an implementation of the DirectExecutor.
 #[proc_macro]
@@ -18,6 +21,20 @@ pub fn define_direct_executor(item: proc_macro::TokenStream) -> proc_macro::Toke
     let executor = parse_macro_input!(item as ExecutorDef);
 
     let def = match DirectExecutor::extract(executor) {
+        Ok(def) => def,
+        Err(e) => return e.into_compile_error().into(),
+    };
+
+    def.generate().into()
+}
+
+/// Generates an implementation of the StateMachineExecutor.
+#[proc_macro]
+pub fn define_state_executor(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    // Name and mapping of externs for the executor.
+    let executor = parse_macro_input!(item as ExecutorDef);
+
+    let def = match StateExecutor::extract(executor) {
         Ok(def) => def,
         Err(e) => return e.into_compile_error().into(),
     };
