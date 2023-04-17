@@ -563,7 +563,7 @@ impl ApuState {
 }
 
 pub trait Channel {
-    fn get_sample(&self, sample_cursor: f32) -> f32;
+    fn get_sample(&self) -> f32;
 
     fn read_control(&self) -> u8;
     fn set_control(&mut self, value: u8);
@@ -581,6 +581,7 @@ pub struct PulseChannel {
     sweep: Sweep,
     pub timer: PulseTimer,
     period: u32,
+    sample_cursor: u32,
     phase_offset: u32,
     active: bool,
     triggered: bool,
@@ -613,19 +614,24 @@ impl PulseChannel {
 
     pub fn set_wavelength_low(&mut self, low_byte: u8) {
         self.wavelength = (self.wavelength & 0x700) | low_byte as u16;
-        self.generate_period();
     }
 
     fn generate_period(&mut self) {
         self.period = 32 * (2048 - self.wavelength as u32);
     }
+
+    pub fn tick(&mut self, tcycles: u32) {
+        if self.period > 0 {
+            self.sample_cursor = ( self.sample_cursor + tcycles ) % self.period;
+        }
+    }
 }
 
 impl Channel for PulseChannel {
-    fn get_sample(&self, sample_cursor: f32) -> f32 {
+    fn get_sample(&self) -> f32 {
         if self.envelope_control.dac_enabled() && self.active {
-            let pulse_step = (((sample_cursor as u32 + self.phase_offset) % self.period)
-                / (self.period / 8)) as usize;
+            let pulse_step = (((self.sample_cursor as u32 + self.phase_offset) % self.period)
+             / (self.period / 8)) as usize;
             debug!(
                 "Sampling pulse channel from step {} of duty cycle {}",
                 pulse_step,
@@ -653,7 +659,6 @@ impl Channel for PulseChannel {
 
         self.length_enable = control.contains(ChannelControl::LENGTH_ENABLE);
         self.wavelength = (self.wavelength & 0xff) | (control.wavelength_high() as u16) << 8;
-        self.generate_period();
     }
 
     fn set_length(&mut self, value: u8) {
@@ -667,6 +672,7 @@ impl Channel for PulseChannel {
             self.triggered = false;
             self.envelope = self.envelope_control.new_envelope();
             self.sweep = self.sweep_control.new_sweep();
+            self.generate_period();
 
             info!(
                 "Pulse channel triggered at frequency {} with envelope {:?}, sweep control: {:x}, sweep {:?}, length_enable {}, length_acc {}",
@@ -750,6 +756,7 @@ pub struct WavetableChannel {
     enabled: bool,
     active: bool,
     triggered: bool,
+    sample_cursor: u32,
     wavelength: u16,
     level_shift: u8,
     length_enable: bool,
@@ -767,7 +774,6 @@ impl WavetableChannel {
 
     pub fn set_wavelength_low(&mut self, low_byte: u8) {
         self.wavelength = (self.wavelength & 0x700) | low_byte as u16;
-        self.generate_period();
     }
 
     pub fn get_samples(&self, samples: usize) -> u8 {
@@ -793,12 +799,18 @@ impl WavetableChannel {
     pub fn generate_period(&mut self) {
         self.period = 64 * (2048 - self.wavelength as u32);
     }
+
+    pub fn tick(&mut self, tcycles: u32) {
+        if self.period > 0 {
+            self.sample_cursor = ( self.sample_cursor + tcycles ) % self.period;
+        }
+    }
 }
 
 impl Channel for WavetableChannel {
-    fn get_sample(&self, sample_cursor: f32) -> f32 {
+    fn get_sample(&self) -> f32 {
         if self.enabled && self.active {
-            let wavetable_step = (((sample_cursor as u32 + self.phase_offset) % self.period)
+            let wavetable_step = (((self.sample_cursor as u32 + self.phase_offset) % self.period)
                 / (self.period / 32)) as usize;
             debug!(
                 "Sampling wavetable channel from step {} of sample table.",
@@ -826,7 +838,6 @@ impl Channel for WavetableChannel {
 
         self.length_enable = control.contains(ChannelControl::LENGTH_ENABLE);
         self.wavelength = (self.wavelength & 0xff) | (control.wavelength_high() as u16) << 8;
-        self.generate_period();
     }
 
     fn set_length(&mut self, value: u8) {
@@ -843,6 +854,7 @@ impl Channel for WavetableChannel {
 
             self.active = true;
             self.triggered = false;
+            self.generate_period();
         }
     }
 
@@ -941,7 +953,7 @@ impl NoiseChannel {
 }
 
 impl Channel for NoiseChannel {
-    fn get_sample(&self, _sample_cursor: f32) -> f32 {
+    fn get_sample(&self) -> f32 {
         if self.envelope_control.dac_enabled() && self.active {
             let dac_input = (self.lfsr & 0x1) * self.envelope.level();
             1.0 - (dac_input as f32 / 15.0 * 2.0)
@@ -1061,24 +1073,24 @@ pub trait ApuContext {
     fn apu_regs_mut(&mut self) -> &mut ApuRegs;
 }
 
-fn get_stereo_sample(ctx: &impl ApuContext, sample_cursor: f32, right: bool) -> f32 {
+fn get_stereo_sample(ctx: &impl ApuContext, right: bool) -> f32 {
     let channel_mix = ctx.apu_regs().sound_pan.channel_mix(right);
 
     ctx.apu_regs().sound_volume.vol_multiplier(right)
         * (if channel_mix.contains(ChannelMix::CH1) {
-            0.25 * ctx.apu_regs().ch1.get_sample(sample_cursor)
+            0.25 * ctx.apu_regs().ch1.get_sample()
         } else {
             0.0
         } + if channel_mix.contains(ChannelMix::CH2) {
-            0.25 * ctx.apu_regs().ch2.get_sample(sample_cursor)
+            0.25 * ctx.apu_regs().ch2.get_sample()
         } else {
             0.0
         } + if channel_mix.contains(ChannelMix::CH3) {
-            0.25 * ctx.apu_regs().ch3.get_sample(sample_cursor)
+            0.25 * ctx.apu_regs().ch3.get_sample()
         } else {
             0.0
         } + if channel_mix.contains(ChannelMix::CH4) {
-            0.25 * ctx.apu_regs().ch4.get_sample(sample_cursor)
+            0.25 * ctx.apu_regs().ch4.get_sample()
         } else {
             0.0
         })
@@ -1095,30 +1107,37 @@ pub fn apu_tick(ctx: &mut impl ApuContext) {
 pub fn tick(ctx: &mut impl ApuContext, tcycles: u64) {
     let mut sample_cursor = ctx.apu().sample_cursor;
 
-    ctx.apu_regs_mut().ch4.tick(tcycles as u32);
-
     ctx.apu_regs_mut().ch1.check_trigger();
     ctx.apu_regs_mut().ch2.check_trigger();
     ctx.apu_regs_mut().ch3.check_trigger();
     ctx.apu_regs_mut().ch4.check_trigger();
 
     if ctx.apu().output_period > 0.0 {
-        let next_sample = sample_cursor % ctx.apu().output_period;
-        if tcycles as f32 > next_sample.into() {
-            sample_cursor += next_sample;
+        let next_sample = ctx.apu().output_period - sample_cursor;
+        if tcycles as f32 > next_sample {
 
-            let left_sample = get_stereo_sample(ctx, sample_cursor, false);
-            let right_sample = get_stereo_sample(ctx, sample_cursor, true);
+            ctx.apu_regs_mut().ch1.tick(next_sample as u32);
+            ctx.apu_regs_mut().ch2.tick(next_sample as u32);
+            ctx.apu_regs_mut().ch3.tick(next_sample as u32);
+            ctx.apu_regs_mut().ch4.tick(next_sample as u32);
+
+            let left_sample = get_stereo_sample(ctx, false);
+            let right_sample = get_stereo_sample(ctx, true);
             let stereo_sample = ctx.apu_mut().hpf.filter_sample((left_sample, right_sample));
             ctx.apu_mut().output_sample = Some(stereo_sample);
+
+            ctx.apu_regs_mut().ch1.tick(tcycles as u32 - next_sample as u32);
+            ctx.apu_regs_mut().ch2.tick(tcycles as u32 - next_sample as u32);
+            ctx.apu_regs_mut().ch3.tick(tcycles as u32 - next_sample as u32);
+            ctx.apu_regs_mut().ch4.tick(tcycles as u32 - next_sample as u32);
         }
+        else {
+            ctx.apu_regs_mut().ch1.tick(tcycles as u32);
+            ctx.apu_regs_mut().ch2.tick(tcycles as u32);
+            ctx.apu_regs_mut().ch3.tick(tcycles as u32);
+            ctx.apu_regs_mut().ch4.tick(tcycles as u32);
+        }
+
+        ctx.apu_mut().sample_cursor = (sample_cursor + tcycles as f32) % ctx.apu().output_period;
     }
-
-    sample_cursor += tcycles as f32;
-
-    if sample_cursor > MAX_PERIOD as f32 {
-        sample_cursor -= MAX_PERIOD as f32;
-    }
-
-    ctx.apu_mut().sample_cursor = sample_cursor;
 }
