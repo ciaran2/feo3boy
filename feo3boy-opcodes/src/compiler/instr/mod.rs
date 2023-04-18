@@ -12,14 +12,14 @@ pub mod builder;
 pub mod flow;
 
 /// Which opcode this instruction implements.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Ord, PartialOrd)]
 pub enum InstrId {
+    /// Instruction implements the CPU internal-fetch routine.
+    InternalFetch,
     /// Instruction implements a normal opcode.
     Opcode(Opcode),
     /// Instruction implements the second byte of a CB opcode.
     CBOpcode(CBOpcode),
-    /// Instruction implements the CPU internal-fetch routine.
-    InternalFetch,
 }
 
 impl fmt::Display for InstrId {

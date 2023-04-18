@@ -5,6 +5,7 @@ use crate::gbz80core::direct_executor::DirectExecutor;
 use crate::gbz80core::direct_executor_v2::DirectExecutorV2;
 use crate::gbz80core::executor::Executor;
 use crate::gbz80core::microcode_executor::MicrocodeExecutor;
+use crate::gbz80core::stepping_executor::SteppingExecutor;
 use crate::gbz80core::{CpuContext, ExecutorContext, Gbz80State};
 use crate::input::{self, ButtonRegister, ButtonStates, InputContext};
 use crate::interrupts::InterruptContext;
@@ -53,6 +54,13 @@ impl Gb<MicrocodeExecutor> {
 impl Gb<DirectExecutorV2> {
     /// Create a `Gb` with the given bios and cartridge, using the V2 direct executor.
     pub fn new_v2(bios: BiosRom, cart: Cartridge) -> Self {
+        Self::for_executor(bios, cart)
+    }
+}
+
+impl Gb<SteppingExecutor> {
+    /// Create a `Gb` with the given bios and cartridge, using the stepping executor
+    pub fn new_stepping(bios: BiosRom, cart: Cartridge) -> Self {
         Self::for_executor(bios, cart)
     }
 }

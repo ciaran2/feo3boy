@@ -4,9 +4,9 @@ use feo3boy_opcodes::compiler::args::{Arg, Literal};
 use feo3boy_opcodes::compiler::direct_executor_generation::{
     AssignedBlock, AssignedBranch, AssignedMicrocode, FuncElement,
 };
-use feo3boy_opcodes::compiler::variables::{Conversion, VarAssignment};
+use feo3boy_opcodes::compiler::variables::VarAssignment;
 use feo3boy_opcodes::compiler::OperationType;
-use feo3boy_opcodes::microcode::{Microcode, ValType};
+use feo3boy_opcodes::microcode::Microcode;
 use feo3boy_opcodes::opcode::{CBOpcode, InternalFetch, Opcode};
 use proc_macro2::{Ident, TokenStream};
 use quote::quote;
@@ -14,6 +14,7 @@ use syn::{Attribute, Path, Result, Visibility};
 
 use crate::get_crate;
 use crate::parsing::ExecutorDef;
+use crate::types::{generate_conversions, get_type};
 
 /// Code generator for the DirectExecutor.
 pub struct DirectExecutor {
@@ -135,11 +136,7 @@ impl DirectExecutor {
 
         let executor = &self.name;
 
-        let conversions = code
-            .conversions
-            .iter()
-            .map(|conv| self.generate_conversion(conv));
-
+        let conversions = generate_conversions(&code.conversions);
         let args = code.args.iter().map(|arg| match arg {
             Arg::StackValue(VarAssignment { var, .. }) => quote! { #var },
             Arg::Literal(literal) => literal.constant_value(get_crate),
@@ -161,11 +158,11 @@ impl DirectExecutor {
                         return;
                     },
                     Microcode::ParseOpcode => quote! {
-                        #(#conversions)*
+                        #conversions
                         return #executor::run_opcode(ctx, prev_ime, #(#args),*);
                     },
                     Microcode::ParseCBOpcode => quote! {
-                        #(#conversions)*
+                        #conversions
                         return #executor::run_cb_opcode(ctx, prev_ime, #(#args),*);
                     },
                     Microcode::TickImeOnEnd => quote! {
@@ -189,7 +186,7 @@ impl DirectExecutor {
                             }
                         };
                         quote! {
-                            #(#conversions)*
+                            #conversions
                             let (#(#return_vars),*): (#(#return_vals),*) = #path(
                                 ctx,
                                 #(#args),*
@@ -200,7 +197,7 @@ impl DirectExecutor {
             }
             OperationType::Function { path } => {
                 quote! {
-                    #(#conversions)*
+                    #conversions
                     let (#(#return_vars),*): (#(#return_vals),*) = #feo3boy_opcodes::microcode::#path(
                         #(#args),*
                     );
@@ -210,24 +207,19 @@ impl DirectExecutor {
     }
 
     fn generate_block(&self, block: &AssignedBlock) -> TokenStream {
-        let ops = block.elements.iter().map(|elem| self.generate_body(elem));
-        quote! {
-            #(#ops)*
-        }
+        block
+            .elements
+            .iter()
+            .map(|elem| self.generate_body(elem))
+            .collect()
     }
 
     fn generate_branch(&self, branch: &AssignedBranch) -> TokenStream {
-        let cond_conversion = branch
-            .cond_conversion
-            .iter()
-            .map(|conv| self.generate_conversion(conv));
+        let cond_conversion = generate_conversions(&branch.cond_conversion);
         let cond = &branch.cond;
 
         let code_if_true = self.generate_body(&branch.code_if_true);
-        let true_end_conv = branch
-            .true_end_conv
-            .iter()
-            .map(|conv| self.generate_conversion(conv));
+        let true_end_conv = generate_conversions(&branch.true_end_conv);
         let true_ret_vars = branch.true_returns.iter().map(|ret| ret.var);
         let true_ret_vars = if branch.true_returns.is_empty() {
             None
@@ -236,10 +228,7 @@ impl DirectExecutor {
         };
 
         let code_if_false = self.generate_body(&branch.code_if_false);
-        let false_end_conv = branch
-            .true_end_conv
-            .iter()
-            .map(|conv| self.generate_conversion(conv));
+        let false_end_conv = generate_conversions(&branch.false_end_conv);
         let false_ret_vars = branch.false_returns.iter().map(|ret| ret.var);
         let false_ret_vars = if branch.false_returns.is_empty() {
             None
@@ -251,71 +240,16 @@ impl DirectExecutor {
         let push_vals = branch.pushes.iter().map(|push| get_type(push.val));
 
         quote! {
-            #(#cond_conversion)*
+            #cond_conversion
             let (#(#push_vars),*): (#(#push_vals),*) = if #cond {
                 #code_if_true
-                #(#true_end_conv)*
+                #true_end_conv
                 #true_ret_vars
             } else {
                 #code_if_false
-                #(#false_end_conv)*
+                #false_end_conv
                 #false_ret_vars
             };
-        }
-    }
-
-    fn generate_conversion(&self, conversion: &Conversion) -> TokenStream {
-        match conversion {
-            Conversion::SameSize { from, to } => {
-                let to_ty = get_type(to.val);
-                let from_var = from.var;
-                let to_var = to.var;
-                match (from.val, to.val) {
-                    (ValType::Bool, ValType::U8) => quote! {
-                        let #to_var: #to_ty = #from_var as #to_ty;
-                    },
-                    (ValType::Bool, ValType::Flags) => quote! {
-                        let #to_var: #to_ty = #to_ty::from_bits_truncate(#from_var as u8);
-                    },
-                    (ValType::U8, ValType::Bool) => quote! {
-                        let #to_var: #to_ty = #from_var != 0;
-                    },
-                    (ValType::U8, ValType::Flags) => quote! {
-                        let #to_var: #to_ty = #to_ty::from_bits_truncate(#from_var);
-                    },
-                    (ValType::Flags, ValType::Bool) => quote! {
-                        let #to_var: #to_ty = !#from_var.is_empty();
-                    },
-                    (ValType::Flags, ValType::U8) => quote! {
-                        let #to_var: #to_ty = #from_var.bits();
-                    },
-                    (a, b) if a == b => quote! {
-                        let #to_var: #to_ty = #from_var;
-                    },
-                    _ => panic!(
-                        "Unsupported same-size conversion from {:?} to {:?}",
-                        from.val, to.val,
-                    ),
-                }
-            }
-            Conversion::Split { from, low, high } => quote! {
-                let [#low, #high]: [u8; 2] = #from.to_le_bytes();
-            },
-            Conversion::Merge { low, high, to } => quote! {
-                let #to: u16 = u16::from_le_bytes([#low, #high]);
-            },
-        }
-    }
-}
-
-fn get_type(val: ValType) -> TokenStream {
-    match val {
-        ValType::Bool => quote! { bool },
-        ValType::U16 => quote! { u16 },
-        ValType::U8 => quote! { u8 },
-        ValType::Flags => {
-            let feo3boy_opcodes = get_crate("feo3boy-opcodes");
-            quote! { #feo3boy_opcodes::gbz80types::Flags }
         }
     }
 }

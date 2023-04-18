@@ -320,7 +320,14 @@ pub enum MicrocodeFlow {
     Continue,
 }
 
-/// Executes microcode by interpreting microcode opcodes individually.
+/// Executes microcode by directly interpreting microcode opcodes individually.
+///
+/// This is highly inefficient, as values must be repeatedly pushed onto and off of a
+/// [`Vec`] stack and each microcode instruction results in a `match` to figure out what
+/// code to run for it.
+///
+/// For a higher performance sub-stepping executor, see
+/// [SteppingExecutor][crate::gbz80core::stepping_executor::SteppingExecutor].
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub struct MicrocodeExecutor;
 

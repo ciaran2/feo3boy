@@ -9,6 +9,7 @@ pub mod direct_executor_v2;
 pub mod executor;
 mod externdefs;
 pub mod microcode_executor;
+pub mod stepping_executor;
 
 /// CPU registers on the GB Z80 processor.
 ///

@@ -26,7 +26,7 @@ impl fmt::Display for InternalFetch {
 
 /// Parsed Opcode, not including any arguments that may be loaded from immediates, nor any follow-up
 /// ops if the operation is a prefixed op.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum Opcode {
     /// No operation.
     Nop,
@@ -285,7 +285,7 @@ impl fmt::Display for Opcode {
 //////////////////////
 
 /// Opcodes that come after a CB prefix opcode.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct CBOpcode {
     /// The operand to operate on.
     pub operand: Operand8,
@@ -332,7 +332,7 @@ impl fmt::Display for CBOpcode {
 }
 
 /// Type of operation performed in a CB prefix opcode.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum CBOperation {
     /// 8-bit left rotate. Bit 7 goes to both the carry and bit 0.
     RotateLeft8,

@@ -4,7 +4,7 @@
 use std::fmt;
 
 /// ALU Operation type.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum AluOp {
     Add,
     AddCarry,
@@ -49,7 +49,7 @@ impl fmt::Display for AluOp {
 }
 
 /// Type of unary ALU operation. All ops here apply only to A and Flags.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum AluUnaryOp {
     /// 8-bit left rotate. Bit 7 goes to both the carry and bit 0.
     RotateLeft8,
@@ -103,7 +103,7 @@ impl fmt::Display for AluUnaryOp {
 }
 
 /// 8 bit operand. Either the source or destination of an 8 bit operation.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum Operand8 {
     // 8 bit registers.
     /// Normal register B.
@@ -199,7 +199,7 @@ impl fmt::Display for Operand8 {
 }
 
 /// 16 bit operand.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum Operand16 {
     /// Register pair BC.
     BC,
@@ -261,7 +261,7 @@ impl fmt::Display for Operand16 {
 }
 
 /// Conditional for conditional jump/conditional ret.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum ConditionCode {
     Unconditional,
     NonZero,

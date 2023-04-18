@@ -93,6 +93,15 @@ impl<'a> StackTracker<'a> {
         }
     }
 
+    /// Create a new root variable assigner with the specified initial stack.
+    pub fn root_with_stack(assigner: &'a VarAssigner, initial_stack: Vec<VarAssignment>) -> Self {
+        Self {
+            parent: None,
+            assigner,
+            local_stack: initial_stack,
+        }
+    }
+
     /// Remove a value of the specified type from this stack, returning both the variable
     /// assignment corresponding to the value as well as any conversions required to get
     /// the value, in the order they must be performed. Any excess bytes that had to be
@@ -264,6 +273,17 @@ impl<'a> StackTracker<'a> {
                 .as_deref()
                 .map(|p| p.total_bytes())
                 .unwrap_or_default()
+    }
+
+    /// Get a snapshot of the cumulative stack at this layer + all parents.
+    pub fn snapshot(&self) -> Vec<VarAssignment> {
+        let mut parent_snapshot = self
+            .parent
+            .as_deref()
+            .map(Self::snapshot)
+            .unwrap_or_default();
+        parent_snapshot.extend_from_slice(&self.local_stack);
+        parent_snapshot
     }
 }
 
