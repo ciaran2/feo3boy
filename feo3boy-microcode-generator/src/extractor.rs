@@ -29,7 +29,6 @@ pub fn extract_defs(name: Ident, mut module: ItemMod) -> Result<Defs> {
         }
     };
 
-    let externs_name = format_ident!("{}Extern", name);
     let descriptor_name = format_ident!("{}Descriptor", name);
 
     Ok(Defs {
@@ -39,7 +38,6 @@ pub fn extract_defs(name: Ident, mut module: ItemMod) -> Result<Defs> {
             vis,
             docs,
             ops,
-            externs_name,
             descriptor_name,
         },
         allowed_types,

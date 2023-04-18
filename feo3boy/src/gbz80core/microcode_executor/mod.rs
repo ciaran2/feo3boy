@@ -13,10 +13,7 @@ use log::{debug, trace};
 use once_cell::sync::Lazy;
 
 use crate::gbz80core::executor::{Executor, ExecutorState, PausePoint, SubInstructionExecutor};
-use crate::gbz80core::oputils::halt;
-use crate::gbz80core::{ExecutorContext, InterruptMasterState};
-use crate::interrupts::Interrupts;
-use crate::memdev::RootMemDevice;
+use crate::gbz80core::{externdefs, ExecutorContext, InterruptMasterState};
 
 mod tests;
 
@@ -48,13 +45,11 @@ impl MicrocodeState {
         // is_fetch_start is set by executing the FetchNextInstruction and cleared
         // when retrieveing the first microcode of the new instruction being fetched.
         self.is_fetch_start = false;
-        if self.pc < self.instruction.len() {
-            let ucode = self.instruction[self.pc];
-            self.pc += 1;
-            ucode
-        } else {
-            Microcode::FetchNextInstruction
-        }
+        // Builder always inserts FetchNextInstruction on the end, so we don't have to
+        // worry about passing the end of the instr.
+        let ucode = self.instruction[self.pc];
+        self.pc += 1;
+        ucode
     }
 }
 
@@ -188,9 +183,19 @@ impl MicrocodeStack {
 /// you should probably only allow save-states between instructions, that way you don't
 /// have to worry about how to serialize this in the Gbz80State and how to deal with if
 /// the instructions change between emulator versions.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone)]
 #[repr(transparent)]
 pub struct Instr(&'static InstrDef);
+
+impl PartialEq for Instr {
+    fn eq(&self, other: &Self) -> bool {
+        // Since we use &'static definitions, we can compare Instrs using pointer
+        // equality.
+        self.0 as *const _ == other.0 as *const _
+    }
+}
+
+impl Eq for Instr {}
 
 impl Instr {
     /// Get the number of microcode instructions in this Instr.
@@ -372,13 +377,17 @@ impl Run<Microcode> {
     fn run(self, ctx: &mut impl Ctx) -> MicrocodeFlow {
         match *self {
             Microcode::Yield => return MicrocodeFlow::Yield1m,
-            Microcode::ReadReg { reg } => reg.runner().read(ctx),
-            Microcode::WriteReg { reg } => reg.runner().write(ctx),
-            Microcode::ReadMem => read_mem8(ctx),
-            Microcode::WriteMem => write_mem8(ctx),
+            Microcode::ReadReg { reg } => externdefs::read_reg.apply_ctx_arg(ctx, reg),
+            Microcode::WriteReg { reg } => externdefs::write_reg.apply_ctx_arg(ctx, reg),
+            Microcode::ReadMem => externdefs::read_mem.apply_ctx(ctx),
+            Microcode::WriteMem => externdefs::write_mem.apply_ctx(ctx),
             Microcode::Append { val } => microcode::defs::append.apply_arg(ctx, val),
-            Microcode::GetFlagsMasked { mask } => get_flags_masked(ctx, mask),
-            Microcode::SetFlagsMasked { mask } => set_flags_masked(ctx, mask),
+            Microcode::GetFlagsMasked { mask } => {
+                externdefs::get_flags_masked.apply_ctx_arg(ctx, mask)
+            }
+            Microcode::SetFlagsMasked { mask } => {
+                externdefs::set_flags_masked.apply_ctx_arg(ctx, mask)
+            }
             Microcode::Not => microcode::defs::not.apply(ctx),
             Microcode::Add => microcode::defs::add.apply(ctx),
             Microcode::Adc => microcode::defs::adc.apply(ctx),
@@ -400,22 +409,24 @@ impl Run<Microcode> {
             Microcode::TestBit { bit } => microcode::defs::test_bit.apply_arg(ctx, bit),
             Microcode::SetBit { bit } => microcode::defs::set_bit.apply_arg(ctx, bit),
             Microcode::ResetBit { bit } => microcode::defs::reset_bit.apply_arg(ctx, bit),
-            Microcode::ReadReg16 { reg } => reg.runner().read(ctx),
-            Microcode::WriteReg16 { reg } => reg.runner().write(ctx),
+            Microcode::ReadReg16 { reg } => externdefs::read_reg16.apply_ctx_arg(ctx, reg),
+            Microcode::WriteReg16 { reg } => externdefs::write_reg16.apply_ctx_arg(ctx, reg),
             Microcode::Inc16 => microcode::defs::inc16.apply(ctx),
             Microcode::Dec16 => microcode::defs::dec16.apply(ctx),
             Microcode::Add16 => microcode::defs::add16.apply(ctx),
             Microcode::OffsetAddr => microcode::defs::offset_addr.apply(ctx),
-            Microcode::Stop => panic!("STOP is bizarre and complicated and not implemented."),
-            Microcode::Halt => halt(ctx),
-            Microcode::EnableInterrupts { immediate } => enable_interrupts(ctx, immediate),
-            Microcode::DisableInterrupts => ctx.cpu_mut().interrupt_master_enable.clear(),
-            Microcode::CheckHalt => check_halt(ctx),
-            Microcode::ClearHalt => ctx.cpu_mut().halted = false,
-            Microcode::CheckIme => check_ime(ctx),
-            Microcode::GetActiveInterrupts => get_active_interrupts(ctx),
-            Microcode::PopHaltBug => pop_halt_bug(ctx),
-            Microcode::PopInterrupt => pop_interrupt(ctx),
+            Microcode::Stop => microcode::defs::stop(),
+            Microcode::Halt => externdefs::halt(ctx),
+            Microcode::EnableInterrupts { immediate } => {
+                externdefs::enable_interrupts(ctx, immediate)
+            }
+            Microcode::DisableInterrupts => externdefs::disable_interrupts(ctx),
+            Microcode::CheckHalt => externdefs::check_halt.apply_ctx(ctx),
+            Microcode::ClearHalt => externdefs::clear_halt(ctx),
+            Microcode::CheckIme => externdefs::check_ime.apply_ctx(ctx),
+            Microcode::GetActiveInterrupts => externdefs::get_active_interrupts.apply_ctx(ctx),
+            Microcode::PopHaltBug => externdefs::pop_halt_bug.apply_ctx(ctx),
+            Microcode::PopInterrupt => externdefs::pop_interrupt.apply_ctx(ctx),
             Microcode::TickImeOnEnd => tick_ime_on_end(ctx),
             Microcode::Skip { steps } => skip(ctx, steps),
             Microcode::SkipIf { steps } => skip_if(ctx, steps),
@@ -430,81 +441,6 @@ impl Run<Microcode> {
         }
         MicrocodeFlow::Continue
     }
-}
-
-/// Pop a 16 bit address and use it to read an 8 bit value from memory onto the stack.
-fn read_mem8(ctx: &mut impl Ctx) {
-    let addr = ctx.executor_mut().stack.popu16();
-    let val = ctx.mem().read_byte(addr);
-    ctx.executor_mut().stack.pushu8(val);
-}
-
-/// Pop a 16 bit address and an 8 bit value and write the value to the address.
-fn write_mem8(ctx: &mut impl Ctx) {
-    let addr = ctx.executor_mut().stack.popu16();
-    let val = ctx.executor_mut().stack.popu8();
-    ctx.mem_mut().write_byte(addr, val);
-}
-
-/// Internal implementation of microcode to fetch masked flags to the output.
-fn get_flags_masked(ctx: &mut impl Ctx, mask: Flags) {
-    let flags = ctx.cpu().regs.flags.intersection(mask);
-    ctx.executor_mut().stack.pushu8(flags.bits());
-}
-
-/// Internal implementation of microcode to apply masked flags to the output.
-fn set_flags_masked(ctx: &mut impl Ctx, mask: Flags) {
-    let flags = Flags::from_bits_truncate(ctx.executor_mut().stack.popu8());
-    ctx.cpu_mut().regs.flags.merge(flags, mask);
-}
-
-/// Internal implementation of the microcode enable interrupts instruction. Runs either
-/// set or set_next_instruction, depending on whether the interrupt is to be set
-/// immeidately or not.
-fn enable_interrupts(ctx: &mut impl Ctx, immediate: bool) {
-    if immediate {
-        ctx.cpu_mut().interrupt_master_enable.set();
-    } else {
-        ctx.cpu_mut().interrupt_master_enable.set_next_instruction();
-    }
-}
-
-/// Pushes the value of whether the CPU is halted onto the microcode stack as a u8.
-fn check_halt(ctx: &mut impl Ctx) {
-    let halted = ctx.cpu().halted as u8;
-    ctx.executor_mut().stack.pushu8(halted);
-}
-
-/// Pushes the value of whether the CPU IME is enabled onto the microcode stack as a
-/// u8.
-fn check_ime(ctx: &mut impl Ctx) {
-    let ime = ctx.cpu().interrupt_master_enable.enabled() as u8;
-    ctx.executor_mut().stack.pushu8(ime);
-}
-
-/// Pushes the set of interrupts which are both active and enabled onto the microcode
-/// stack.
-fn get_active_interrupts(ctx: &mut impl Ctx) {
-    let active = ctx.interrupts().active().bits();
-    ctx.executor_mut().stack.pushu8(active);
-}
-
-/// Pushes the value of the halt_bug flag onto the microcode stack, clearing the value.
-fn pop_halt_bug(ctx: &mut impl Ctx) {
-    let halt_bug = mem::replace(&mut ctx.cpu_mut().halt_bug, false) as u8;
-    ctx.executor_mut().stack.pushu8(halt_bug);
-}
-
-/// Pushes the destination address of the next active and enabled interrupt onto the
-/// microcode stack and clears that interrupt. Panics if no interrupts are active!.
-fn pop_interrupt(ctx: &mut impl Ctx) {
-    match ctx.interrupts().active().iter().next() {
-            Some(interrupt) => {
-                ctx.interrupts_mut().clear(interrupt);
-                ctx.executor_mut().stack.pushu16(interrupt.handler_addr());
-            }
-            None => panic!("Must not use the PopInterrupt microcode instruction if there are no active interrupts."),
-        }
 }
 
 /// Enables IME ticking on the next `FetchNextInstruction`.
@@ -578,62 +514,6 @@ fn parse_cb_opcode(ctx: &mut impl Ctx) {
     ctx.executor_mut().instruction = Instr::cbopcode(opcode);
 }
 
-impl Run<Reg8> {
-    /// Read this register into the microcode stack.
-    fn read(self, ctx: &mut impl Ctx) {
-        let val = match self.0 {
-            Reg8::Acc => ctx.cpu().regs.acc,
-            Reg8::B => ctx.cpu().regs.b,
-            Reg8::C => ctx.cpu().regs.c,
-            Reg8::D => ctx.cpu().regs.d,
-            Reg8::E => ctx.cpu().regs.e,
-            Reg8::H => ctx.cpu().regs.h,
-            Reg8::L => ctx.cpu().regs.l,
-        };
-        ctx.executor_mut().stack.pushu8(val);
-    }
-
-    /// Write this register from the microcode stack.
-    fn write(self, ctx: &mut impl Ctx) {
-        let val = ctx.executor_mut().stack.popu8();
-        match self.0 {
-            Reg8::Acc => ctx.cpu_mut().regs.acc = val,
-            Reg8::B => ctx.cpu_mut().regs.b = val,
-            Reg8::C => ctx.cpu_mut().regs.c = val,
-            Reg8::D => ctx.cpu_mut().regs.d = val,
-            Reg8::E => ctx.cpu_mut().regs.e = val,
-            Reg8::H => ctx.cpu_mut().regs.h = val,
-            Reg8::L => ctx.cpu_mut().regs.l = val,
-        }
-    }
-}
-
-impl Run<Reg16> {
-    fn read(self, ctx: &mut impl Ctx) {
-        let val = match self.0 {
-            Reg16::AF => ctx.cpu().regs.af(),
-            Reg16::BC => ctx.cpu().regs.bc(),
-            Reg16::DE => ctx.cpu().regs.de(),
-            Reg16::HL => ctx.cpu().regs.hl(),
-            Reg16::Sp => ctx.cpu().regs.sp,
-            Reg16::Pc => ctx.cpu().regs.pc,
-        };
-        ctx.executor_mut().stack.pushu16(val);
-    }
-
-    fn write(self, ctx: &mut impl Ctx) {
-        let val = ctx.executor_mut().stack.popu16();
-        match self.0 {
-            Reg16::AF => ctx.cpu_mut().regs.set_af(val),
-            Reg16::BC => ctx.cpu_mut().regs.set_bc(val),
-            Reg16::DE => ctx.cpu_mut().regs.set_de(val),
-            Reg16::HL => ctx.cpu_mut().regs.set_hl(val),
-            Reg16::Sp => ctx.cpu_mut().regs.sp = val,
-            Reg16::Pc => ctx.cpu_mut().regs.pc = val,
-        }
-    }
-}
-
 trait FromStack: Sized {
     fn from_stack(ctx: &mut impl Ctx) -> Self;
 }
@@ -703,6 +583,7 @@ macro_rules! applier {
             $($out: ToStack,)*
             F: FnOnce($($in),*) -> ($($out),*),
         > Apply<($($in),*), ($($out),*)> for F {
+            #[inline]
             fn apply(self, ctx: &mut impl Ctx) {
                 $(let $in = $in::from_stack(ctx);)*
                 let ($($out),*) = self($($in),*);
@@ -739,6 +620,7 @@ macro_rules! arg_applier {
             $($out: ToStack,)*
             F: FnOnce(T, $($in),*) -> ($($out),*),
         > ApplyArg<T, ($($in),*), ($($out),*)> for F {
+            #[inline]
             fn apply_arg(self, ctx: &mut impl Ctx, arg: T) {
                 $(let $in = $in::from_stack(ctx);)*
                 let ($($out),*) = self(arg, $($in),*);
@@ -760,3 +642,82 @@ arg_applier!([In1, In2, In3], [Out1, Out2]);
 arg_applier!([In1], [Out1, Out2, Out3]);
 arg_applier!([In1, In2], [Out1, Out2, Out3]);
 arg_applier!([In1, In2, In3], [Out1, Out2, Out3]);
+
+trait ApplyCtx<C, I, O> {
+    fn apply_ctx(self, ctx: &mut C);
+}
+
+macro_rules! ctx_applier {
+    ([$($in:ident),*], [$($out:ident),*]) => {
+        #[allow(unused_parens, non_snake_case)]
+        impl<
+            C: Ctx,
+            $($in: FromStack,)*
+            $($out: ToStack,)*
+            F: FnOnce(&mut C, $($in),*) -> ($($out),*),
+        > ApplyCtx<C, ($($in),*), ($($out),*)> for F {
+            #[inline]
+            fn apply_ctx(self, ctx: &mut C) {
+                $(let $in = $in::from_stack(ctx);)*
+                let ($($out),*) = self(ctx, $($in),*);
+                $($out.to_stack(ctx);)*
+            }
+        }
+    }
+}
+
+ctx_applier!([], [Out1]);
+ctx_applier!([In1], []);
+ctx_applier!([In1, In2], []);
+ctx_applier!([In1], [Out1]);
+ctx_applier!([In1, In2], [Out1]);
+ctx_applier!([In1, In2, In3], [Out1]);
+ctx_applier!([In1], [Out1, Out2]);
+ctx_applier!([In1, In2], [Out1, Out2]);
+ctx_applier!([In1, In2, In3], [Out1, Out2]);
+ctx_applier!([In1], [Out1, Out2, Out3]);
+ctx_applier!([In1, In2], [Out1, Out2, Out3]);
+ctx_applier!([In1, In2, In3], [Out1, Out2, Out3]);
+ctx_applier!([In1], [Out1, Out2, Out3, Out4]);
+ctx_applier!([In1, In2], [Out1, Out2, Out3, Out4]);
+ctx_applier!([In1, In2, In3], [Out1, Out2, Out3, Out4]);
+
+trait ApplyCtxArg<C, T, I, O> {
+    fn apply_ctx_arg(self, ctx: &mut C, arg: T);
+}
+
+macro_rules! ctx_applier {
+    ([$($in:ident),*], [$($out:ident),*]) => {
+        #[allow(unused_parens, non_snake_case)]
+        impl<
+            C: Ctx,
+            T,
+            $($in: FromStack,)*
+            $($out: ToStack,)*
+            F: FnOnce(&mut C, T, $($in),*) -> ($($out),*),
+        > ApplyCtxArg<C, T, ($($in),*), ($($out),*)> for F {
+            #[inline]
+            fn apply_ctx_arg(self, ctx: &mut C, arg: T) {
+                $(let $in = $in::from_stack(ctx);)*
+                let ($($out),*) = self(ctx, arg, $($in),*);
+                $($out.to_stack(ctx);)*
+            }
+        }
+    }
+}
+
+ctx_applier!([], [Out1]);
+ctx_applier!([In1], []);
+ctx_applier!([In1, In2], []);
+ctx_applier!([In1], [Out1]);
+ctx_applier!([In1, In2], [Out1]);
+ctx_applier!([In1, In2, In3], [Out1]);
+ctx_applier!([In1], [Out1, Out2]);
+ctx_applier!([In1, In2], [Out1, Out2]);
+ctx_applier!([In1, In2, In3], [Out1, Out2]);
+ctx_applier!([In1], [Out1, Out2, Out3]);
+ctx_applier!([In1, In2], [Out1, Out2, Out3]);
+ctx_applier!([In1, In2, In3], [Out1, Out2, Out3]);
+ctx_applier!([In1], [Out1, Out2, Out3, Out4]);
+ctx_applier!([In1, In2], [Out1, Out2, Out3, Out4]);
+ctx_applier!([In1, In2, In3], [Out1, Out2, Out3, Out4]);

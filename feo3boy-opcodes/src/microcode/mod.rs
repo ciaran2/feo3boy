@@ -4,13 +4,21 @@ use quote::quote;
 
 use feo3boy_microcode_generator::define_microcode;
 
-use crate::compiler::args::{Arg, AsLiteral};
-use crate::compiler::OperationType;
 use crate::gbz80types::Flags;
 use crate::microcode::args::{Reg16, Reg8};
 
 pub mod args;
 pub mod combocodes;
+
+impl ValType {
+    /// Size in bytes of values of this type.
+    pub fn bytes(self) -> usize {
+        match self {
+            ValType::U8 | ValType::Bool | ValType::Flags => 1,
+            ValType::U16 => 2,
+        }
+    }
+}
 
 /// [`Microcode`] is a set of simple instructions designed specifically for implementing
 /// the opcodes on the gbz80 processor used on the gameboy. These instructions operate on
@@ -28,7 +36,7 @@ pub mod defs {
     use crate::gbz80types::Flags;
 
     allowed_types! {
-        name = ValTypes,
+        name = ValType,
         types = [
             /// Specifies a stack argument of type `u8`.
             u8 => U8,

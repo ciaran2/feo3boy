@@ -4,10 +4,12 @@ use std::fmt;
 use std::ops::Index;
 use std::slice::SliceIndex;
 
+use crate::compiler::instr::flow::Element;
 use crate::microcode::Microcode;
 use crate::opcode::{CBOpcode, InternalFetch, Opcode};
 
 pub mod builder;
+pub mod flow;
 
 /// Which opcode this instruction implements.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -32,12 +34,14 @@ impl fmt::Display for InstrId {
 
 /// Definition of an instruction in the gbz80 CPU. Opcodes identify particular
 /// instructions.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct InstrDef {
     /// ID of the instruction being defined.
     id: InstrId,
     /// Sequence of microcodes which make up this instruction definition.
     microcode: Vec<Microcode>,
+    /// Code-flow of this InstrDef.
+    flow: Element,
 }
 
 impl InstrDef {
@@ -49,6 +53,11 @@ impl InstrDef {
     /// Get the label applied to this InstrDef.
     pub fn id(&self) -> InstrId {
         self.id
+    }
+
+    /// Get the code-flow of this instruction definition.
+    pub fn flow(&self) -> &Element {
+        &self.flow
     }
 }
 

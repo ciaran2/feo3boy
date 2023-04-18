@@ -1,10 +1,11 @@
 [workspace]
 members = [
   "feo3boy",
-  "feo3boy-player",
-  "feo3boy-opcodes",
+  "feo3boy-executor-generator",
   "feo3boy-memdev-derive",
   "feo3boy-microcode-generator",
+  "feo3boy-opcodes",
+  "feo3boy-player",
   "web-debugger",
 ]
 resolver = "2"

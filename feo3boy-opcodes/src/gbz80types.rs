@@ -1,8 +1,9 @@
 //! Types which are used in the gbz80.
 use bitflags::bitflags;
+use proc_macro2::TokenStream;
 use quote::quote;
 
-use crate::compiler::args::{AsLiteral, Literal};
+use crate::compiler::args::{CrateFetcher, Literal};
 use crate::compiler::instr::builder::{InstrBuilder, MicrocodeReadable, MicrocodeWritable};
 use crate::microcode::Microcode;
 
@@ -67,9 +68,12 @@ impl MicrocodeReadable for Flags {
     }
 }
 
-impl AsLiteral for Flags {
-    fn as_literal(&self) -> Literal {
-        let val = self.bits();
-        quote! { Flags::from_bits_retain(#val) }.into()
+impl Literal for Flags {
+    fn constant_value(&self, crates: CrateFetcher) -> TokenStream {
+        let feo3boy_opcodes = crates("feo3boy-opcodes");
+        let val = format!("0b{:b}u8", self.bits())
+            .parse::<proc_macro2::Literal>()
+            .unwrap();
+        quote! { #feo3boy_opcodes::gbz80types::Flags::from_bits_retain(#val) }.into()
     }
 }

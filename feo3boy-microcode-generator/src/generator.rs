@@ -2,16 +2,18 @@ use proc_macro2::{Ident, TokenStream};
 use quote::{quote, ToTokens};
 use syn::{ItemMod, Type};
 
-use crate::defs::{
-    AllowedType, AllowedTypes, ArgSource, Defs, MicrocodeOp, MicrocodeSubtype, MicrocodeTypeDef,
-    StackInfo,
+use crate::{
+    defs::{
+        AllowedType, AllowedTypes, ArgSource, Defs, MicrocodeOp, MicrocodeSubtype,
+        MicrocodeTypeDef, StackInfo,
+    },
+    get_crate,
 };
 
 /// Generates the `Microcode` type from the [`MicrocodeTypeDef`].
 pub fn generate_microcode_type(def: &Defs) -> TokenStream {
     let enum_def = generate_enum_def(&def.microcode_type, &def.module.ident);
     let allowed_types_def = generate_allowed_types_def(&def.allowed_types);
-    let extern_names = generate_extern_names_def(&def.microcode_type);
     let descriptor_def = generate_descriptor_def(&def.microcode_type, &def.allowed_types);
     let descriptors_impl =
         generate_descriptors_impl(&def.microcode_type, &def.allowed_types, &def.module);
@@ -20,7 +22,6 @@ pub fn generate_microcode_type(def: &Defs) -> TokenStream {
     quote! {
         #enum_def
         #allowed_types_def
-        #extern_names
         #descriptor_def
         #descriptors_impl
         #module_def
@@ -184,45 +185,11 @@ fn generate_allowed_types_def(
     }
 }
 
-/// Generates an enum to represent the extern names for the microcode.
-fn generate_extern_names_def(
-    MicrocodeTypeDef {
-        vis,
-        name,
-        externs_name,
-        ops,
-        ..
-    }: &MicrocodeTypeDef,
-) -> TokenStream {
-    let doc = format!("Names all the possible externs defined by the [`{name}`] type.");
-
-    let names = ops.iter().filter_map(|op| match op.subtype {
-        MicrocodeSubtype::Extern => {
-            let name = &op.name;
-            let doc = &op.docs;
-            Some(quote! {
-                #(#doc)*
-                #name,
-            })
-        }
-        MicrocodeSubtype::Function => None,
-    });
-
-    quote! {
-        #[doc = #doc]
-        #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-        #vis enum #externs_name {
-            #(#names)*
-        }
-    }
-}
-
 /// Generate the descriptor type for the microcode.
 fn generate_descriptor_def(
     MicrocodeTypeDef {
         vis,
         descriptor_name,
-        externs_name,
         ..
     }: &MicrocodeTypeDef,
     AllowedTypes {
@@ -247,7 +214,7 @@ fn generate_descriptor_def(
             /// in the order they should be pushed onto the stack.
             pub returns: Vec<#allowed_types_name>,
             /// Which type of operation this is (an extern or a pure function).
-            pub optype: #feo3boy_opcodes::compiler::OperationType<#externs_name>,
+            pub optype: #feo3boy_opcodes::compiler::OperationType,
         }
     }
 }
@@ -318,21 +285,24 @@ fn generate_descriptor_value(
     module: &ItemMod,
 ) -> TokenStream {
     let descriptor_name = &def.descriptor_name;
-    let externs_name = &def.externs_name;
     let allowed_types_name = &allowed_types.name;
     let name = op.name.to_string();
+
+    let feo3boy_opcodes = get_crate("feo3boy-opcodes");
 
     let args = op.args.iter().map(|arg| match &arg.source {
         ArgSource::Field(field) => {
             let field_name = &field.name;
             quote! {
-                Arg::Literal(AsLiteral::as_literal(&#field_name))
+                #feo3boy_opcodes::compiler::args::Arg::Literal(
+                    #feo3boy_opcodes::compiler::args::DynLiteral::new(#field_name)
+                )
             }
         }
         ArgSource::Stack(_) => {
             let typename = rust_type_to_allowed_type(&arg.ty, allowed_types);
             quote! {
-                Arg::StackValue(#allowed_types_name::#typename)
+                #feo3boy_opcodes::compiler::args::Arg::StackValue(#allowed_types_name::#typename)
             }
         }
     });
@@ -346,18 +316,15 @@ fn generate_descriptor_value(
 
     let optype = match op.subtype {
         MicrocodeSubtype::Extern => {
-            let name = &op.name;
             quote! {
-                OperationType::Extern {
-                    name: #externs_name::#name,
-                }
+                #feo3boy_opcodes::compiler::OperationType::Extern
             }
         }
         MicrocodeSubtype::Function => {
             let modname = &module.ident;
             let funcname = &op.func_name;
             quote! {
-                OperationType::Function {
+                #feo3boy_opcodes::compiler::OperationType::Function {
                     path: quote! { #modname::#funcname }
                 }
             }

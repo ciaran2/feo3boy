@@ -25,9 +25,6 @@ pub struct MicrocodeTypeDef {
     /// List of operations defined by this microcode.
     pub ops: Vec<MicrocodeOp>,
 
-    /// Name of the type that defines the extern names.
-    pub externs_name: Ident,
-
     /// Name of the type that defines the descriptors.
     pub descriptor_name: Ident,
 }

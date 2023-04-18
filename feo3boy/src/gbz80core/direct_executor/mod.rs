@@ -10,8 +10,7 @@ use feo3boy_opcodes::opcode::{CBOpcode, CBOperation, InternalFetch, Opcode};
 use log::{debug, trace, warn};
 
 use crate::gbz80core::executor::Executor;
-use crate::gbz80core::oputils::halt;
-use crate::gbz80core::ExecutorContext;
+use crate::gbz80core::{externdefs, ExecutorContext};
 use crate::interrupts::Interrupts;
 use crate::memdev::RootMemDevice;
 
@@ -145,7 +144,7 @@ impl Run<Opcode> {
             Opcode::Dec16(operand) => dec16(ctx, operand),
             Opcode::Load16 { dest, source } => load16(ctx, dest, source),
             Opcode::Add16(operand) => add16(ctx, operand),
-            Opcode::Halt => halt(ctx),
+            Opcode::Halt => externdefs::halt(ctx),
             Opcode::AluOp { operand, op } => alu_op(ctx, operand, op),
             Opcode::AluUnary(op) => op.runner().run(ctx),
             Opcode::Call(cond) => call(ctx, cond),
@@ -154,8 +153,8 @@ impl Run<Opcode> {
             Opcode::Push(operand) => push(ctx, operand),
             Opcode::Pop(operand) => pop(ctx, operand),
             Opcode::PrefixCB => <Run<CBOpcode>>::load_and_run(ctx),
-            Opcode::DisableInterrupts => disable_interrupts(ctx),
-            Opcode::EnableInterrupts => enable_interrupts(ctx),
+            Opcode::DisableInterrupts => externdefs::disable_interrupts(ctx),
+            Opcode::EnableInterrupts => externdefs::enable_interrupts(ctx, false),
             Opcode::RetInterrupt => interrupt_return(ctx),
             Opcode::OffsetSp => offset_sp(ctx),
             Opcode::AddressOfOffsetSp => address_of_offset_sp(ctx),
@@ -382,16 +381,6 @@ fn pop_helper(ctx: &mut impl Ctx) -> u16 {
     let high = ctx.mem().read_byte(addr);
 
     u16::from_le_bytes([low, high])
-}
-
-/// DI instruction (applies immediately).
-fn disable_interrupts(ctx: &mut impl Ctx) {
-    ctx.cpu_mut().interrupt_master_enable.clear();
-}
-
-/// EI instruction (applies after the following instruction).
-fn enable_interrupts(ctx: &mut impl Ctx) {
-    ctx.cpu_mut().interrupt_master_enable.set_next_instruction();
 }
 
 /// Enabled interrupts and returns.
