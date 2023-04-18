@@ -16,7 +16,7 @@ use crate::gbz80core::executor::{Executor, ExecutorState, PausePoint, SubInstruc
 use crate::gbz80core::oputils::halt;
 use crate::gbz80core::{ExecutorContext, InterruptMasterState};
 use crate::interrupts::Interrupts;
-use crate::memdev::{Addr, MemDevice};
+use crate::memdev::RootMemDevice;
 
 mod tests;
 
@@ -434,16 +434,16 @@ impl Run<Microcode> {
 
 /// Pop a 16 bit address and use it to read an 8 bit value from memory onto the stack.
 fn read_mem8(ctx: &mut impl Ctx) {
-    let addr = Addr::from(ctx.executor_mut().stack.popu16());
-    let val = ctx.mem().read(addr);
+    let addr = ctx.executor_mut().stack.popu16();
+    let val = ctx.mem().read_byte(addr);
     ctx.executor_mut().stack.pushu8(val);
 }
 
 /// Pop a 16 bit address and an 8 bit value and write the value to the address.
 fn write_mem8(ctx: &mut impl Ctx) {
-    let addr = Addr::from(ctx.executor_mut().stack.popu16());
+    let addr = ctx.executor_mut().stack.popu16();
     let val = ctx.executor_mut().stack.popu8();
-    ctx.mem_mut().write(addr, val);
+    ctx.mem_mut().write_byte(addr, val);
 }
 
 /// Internal implementation of microcode to fetch masked flags to the output.

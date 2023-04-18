@@ -288,10 +288,25 @@ pub fn view_io(props: &ViewIoProps) -> Html {
             {named("LYC")}
             <span class="byte">{hexbyte(props.io.ppu_regs.lcdc_y_compare)}</span>
         </div>
-        <div class="line unimplemented">
+        <div class="line">
             {addr(0xff46)}
-            {named("DMA")}
-            <span class="byte">{hexbyte(props.io.ppu_regs.dma_addr)}</span>
+            {named("DMA (base)")}
+            <span class="byte">{hex16(props.io.ppu_regs.dma.base_addr())}</span>
+        </div>
+        <div class="line">
+            {addr(0xff46)}
+            {named("DMA (active)")}
+            <span>{props.io.ppu_regs.dma.active()}</span>
+        </div>
+        <div class="line">
+            {addr(0xff46)}
+            {named("DMA (source)")}
+            <span>{hex16(props.io.ppu_regs.dma.source_addr())}</span>
+        </div>
+        <div class="line">
+            {addr(0xff46)}
+            {named("DMA (dest)")}
+            <span>{hex16(props.io.ppu_regs.dma.dest_addr().raw())}</span>
         </div>
         <div class="line">
             {addr(0xff47)}

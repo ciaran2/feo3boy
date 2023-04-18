@@ -1,4 +1,4 @@
-use feo3boy::memdev::MemDevice;
+use feo3boy::memdev::RootMemDevice;
 use feo3boy_opcodes::opcode::args::{ConditionCode, Operand16, Operand8};
 use feo3boy_opcodes::opcode::{CBOpcode, Opcode};
 use yew::prelude::*;
@@ -14,13 +14,10 @@ pub struct InstrInfo {
 }
 
 impl InstrInfo {
-    pub fn fetch_at(mem: &impl MemDevice, addr: u16) -> Self {
+    pub fn fetch_at(mem: &impl RootMemDevice, addr: u16) -> Self {
         Self {
-            opcode: Opcode::decode(mem.read(addr.into())),
-            imm: [
-                mem.read(addr.wrapping_add(1).into()),
-                mem.read(addr.wrapping_add(2).into()),
-            ],
+            opcode: Opcode::decode(mem.read(addr)),
+            imm: mem.read(addr.wrapping_add(1)),
         }
     }
 

@@ -13,7 +13,7 @@ use crate::gbz80core::executor::Executor;
 use crate::gbz80core::oputils::halt;
 use crate::gbz80core::ExecutorContext;
 use crate::interrupts::Interrupts;
-use crate::memdev::MemDevice;
+use crate::memdev::RootMemDevice;
 
 mod args;
 mod tests;
@@ -360,12 +360,12 @@ fn push_helper(ctx: &mut impl Ctx, val: u16) {
     ctx.yield1m();
     let addr = ctx.cpu().regs.sp.wrapping_sub(1);
     ctx.cpu_mut().regs.sp = addr;
-    ctx.mem_mut().write(addr.into(), high);
+    ctx.mem_mut().write_byte(addr, high);
 
     ctx.yield1m();
     let addr = ctx.cpu().regs.sp.wrapping_sub(1);
     ctx.cpu_mut().regs.sp = addr;
-    ctx.mem_mut().write(addr.into(), low);
+    ctx.mem_mut().write_byte(addr, low);
 }
 
 /// Pop helper, shared between pop and ret. Pops value from the stack, waiting 1m between each byte
@@ -374,12 +374,12 @@ fn pop_helper(ctx: &mut impl Ctx) -> u16 {
     ctx.yield1m();
     let addr = ctx.cpu().regs.sp;
     ctx.cpu_mut().regs.sp = addr.wrapping_add(1);
-    let low = ctx.mem().read(addr.into());
+    let low = ctx.mem().read_byte(addr);
 
     ctx.yield1m();
     let addr = ctx.cpu().regs.sp;
     ctx.cpu_mut().regs.sp = addr.wrapping_add(1);
-    let high = ctx.mem().read(addr.into());
+    let high = ctx.mem().read_byte(addr);
 
     u16::from_le_bytes([low, high])
 }

@@ -3,17 +3,17 @@ use feo3boy::gbz80core::direct_executor::DirectExecutor;
 use feo3boy::gbz80core::executor::Executor;
 use feo3boy::gbz80core::microcode_executor::{MicrocodeExecutor, MicrocodeState};
 use feo3boy::gbz80core::Gbz80State;
-use feo3boy::memdev::{Addr, MemDevice};
+use feo3boy::memdev::{AllRam, RootMemDevice};
 
-fn run_until_halted<E: Executor>(gb: &mut (Gbz80State, ByteMem, E::State)) -> (u8, u8, u8, u8) {
+fn run_until_halted<E: Executor>(gb: &mut (Gbz80State, AllRam, E::State)) -> (u8, u8, u8, u8) {
     while !gb.0.halted {
         E::run_single_instruction(gb);
     }
     (
-        gb.1 .0[0xC000],
-        gb.1 .0[0xC001],
-        gb.1 .0[0xC002],
-        gb.1 .0[0xC003],
+        gb.1.read_byte(0xC000),
+        gb.1.read_byte(0xC001),
+        gb.1.read_byte(0xC002),
+        gb.1.read_byte(0xC003),
     )
 }
 
@@ -25,7 +25,7 @@ fn opcodes_benchmark(c: &mut Criterion) {
     c.bench_function("fibonacci-direct", |b| {
         b.iter_batched_ref(
             || {
-                let mem = ByteMem::from(fib);
+                let mem = AllRam::from(fib);
                 (Gbz80State::default(), mem, ())
             },
             |gb| run_until_halted::<DirectExecutor>(gb),
@@ -35,7 +35,7 @@ fn opcodes_benchmark(c: &mut Criterion) {
     c.bench_function("fibonacci-microcode", |b| {
         b.iter_batched_ref(
             || {
-                let mem = ByteMem::from(fib);
+                let mem = AllRam::from(fib);
                 (Gbz80State::default(), mem, MicrocodeState::default())
             },
             |gb| run_until_halted::<MicrocodeExecutor>(gb),
@@ -48,7 +48,7 @@ fn opcodes_benchmark(c: &mut Criterion) {
 criterion_group! {
     name = long_running;
     config = Criterion::default()
-        .measurement_time(std::time::Duration::from_secs(120))
+        //.measurement_time(std::time::Duration::from_secs(240))
         .sample_size(10);
     targets = cartridge_benchmark
 }
@@ -107,14 +107,17 @@ Passed all tests";
 
     let cart = Cartridge::parse(&include_bytes!("../tests/cpu_instrs.gb")[..]).unwrap();
     let bios = BiosRom::new(*include_bytes!("../tests/bios.bin"));
-    c.bench_function("cpu_instrs-direct", |b| {
+
+    let mut group = c.benchmark_group("CpuInstrs");
+    group.sampling_mode(criterion::SamplingMode::Flat);
+    group.bench_function("cpu_instrs-direct", |b| {
         b.iter_batched_ref(
             || (Box::new(Gb::new(bios.clone(), cart.clone())), Vec::new()),
             |(gb, output)| run_cpu_instrs(&mut **gb, output),
             BatchSize::LargeInput,
         );
     });
-    c.bench_function("cpu_instrs-microcode", |b| {
+    group.bench_function("cpu_instrs-microcode", |b| {
         b.iter_batched_ref(
             || {
                 (
@@ -133,32 +136,3 @@ criterion_main!(basic, long_running);
 
 #[cfg(not(feature = "test-roms"))]
 criterion_main!(basic);
-
-/// Simple memory device that consists of just 0x10000 bytes.
-struct ByteMem(Box<[u8]>);
-
-impl From<&[u8]> for ByteMem {
-    /// Creates an ExtendMem with initial data set by copying from a byte slice.
-    fn from(bytes: &[u8]) -> Self {
-        let mut vec = Vec::from(bytes);
-        vec.resize(0x10000, 0);
-        Self(vec.into_boxed_slice())
-    }
-}
-
-impl<const N: usize> From<&[u8; N]> for ByteMem {
-    /// Creates an ExtendMem with initial data set by copying from a byte slice.
-    fn from(bytes: &[u8; N]) -> Self {
-        (&bytes[..]).into()
-    }
-}
-
-impl MemDevice for ByteMem {
-    fn read(&self, addr: Addr) -> u8 {
-        self.0[addr.index()]
-    }
-
-    fn write(&mut self, addr: Addr, data: u8) {
-        self.0[addr.index()] = data;
-    }
-}

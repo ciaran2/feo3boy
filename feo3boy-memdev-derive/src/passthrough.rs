@@ -6,7 +6,7 @@ use crate::get_crate;
 
 /// Build the byte wrapper type for the derive input.
 pub fn build_passthrough(item: &DeriveInput) -> Result<TokenStream> {
-    let field = match &item.data {
+    let (field, field_ty) = match &item.data {
         Data::Struct(s) => match &s.fields {
             syn::Fields::Named(fields) => {
                 if fields.named.len() != 1 {
@@ -17,7 +17,7 @@ pub fn build_passthrough(item: &DeriveInput) -> Result<TokenStream> {
                     ));
                 }
                 let field = &fields.named[0];
-                field.ident.to_token_stream()
+                (field.ident.to_token_stream(), field.ty.clone())
             }
             syn::Fields::Unnamed(fields) => {
                 if fields.unnamed.len() != 1 {
@@ -27,7 +27,8 @@ pub fn build_passthrough(item: &DeriveInput) -> Result<TokenStream> {
                         field.",
                     ));
                 }
-                quote! { 0 }
+                let field = &fields.unnamed[0];
+                (quote! { 0 }, field.ty.clone())
             }
             syn::Fields::Unit => {
                 return Err(Error::new(
@@ -50,12 +51,22 @@ pub fn build_passthrough(item: &DeriveInput) -> Result<TokenStream> {
 
     Ok(quote! {
         impl #feo3boy::memdev::MemDevice for #ty {
-            fn read(&self, addr: #feo3boy::memdev::Addr) -> u8 {
-                #feo3boy::memdev::MemDevice::read(&self.#field, addr)
+            const LEN: usize = <#field_ty as #feo3boy::memdev::MemDevice>::LEN;
+
+            fn read_byte_relative(&self, addr: #feo3boy::memdev::RelativeAddr) -> u8 {
+                #feo3boy::memdev::MemDevice::read_byte_relative(&self.#field, addr)
             }
 
-            fn write(&mut self, addr: #feo3boy::memdev::Addr, val: u8) {
-                #feo3boy::memdev::MemDevice::write(&mut self.#field, addr, val)
+            fn read_bytes_relative(&self, addr: #feo3boy::memdev::RelativeAddr, data: &mut [u8]) {
+                #feo3boy::memdev::MemDevice::read_bytes_relative(&self.#field, addr, data)
+            }
+
+            fn write_byte_relative(&mut self, addr: #feo3boy::memdev::RelativeAddr, val: u8) {
+                #feo3boy::memdev::MemDevice::write_byte_relative(&mut self.#field, addr, val)
+            }
+
+            fn write_bytes_relative(&mut self, addr: #feo3boy::memdev::RelativeAddr, data: &[u8]) {
+                #feo3boy::memdev::MemDevice::write_bytes_relative(&mut self.#field, addr, data)
             }
         }
     })

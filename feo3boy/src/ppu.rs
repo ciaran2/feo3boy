@@ -1,10 +1,21 @@
 use crate::bits::BitGroup;
 use crate::interrupts::{InterruptContext, InterruptFlags, Interrupts};
-use crate::memdev::{Addr, MemDevice, Oam, Vram};
+use crate::memdev::{
+    MemContext, MemDevice, MemSource, MemValue, Oam, RelativeAddr, RootMemDevice, Vram,
+};
 use bitflags::bitflags;
 use log::{debug, trace};
 use std::collections::VecDeque;
-use std::ops::Deref;
+use std::{mem, slice};
+
+/// Address where OAM begins. Used when constructing addresses for directly accessing OAM,
+/// in order to correctly register the raw address that is being accessed. Note that this
+/// relies on the assumption that VRAM is being mapped in its standard location.
+const VRAM_BEGIN: RelativeAddr = RelativeAddr::device_start(0x8000);
+/// Address where OAM begins. Used when constructing addresses for directly accessing OAM,
+/// in order to correctly register the raw address that is being accessed. Note that this
+/// relies on the assumption that OAM is being mapped in its standard location.
+const OAM_BEGIN: RelativeAddr = RelativeAddr::device_start(0xfe00);
 
 pub enum LcdMode {
     HBlank = 0,
@@ -127,6 +138,10 @@ impl ObjAttrs {
 }
 
 #[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
+// Repr C ensures that the order of fields matches the GB layout. We don't actually
+// transmute from the equivalent array type, but doing this may allow the compiler to
+// optimize to a transmute.
+#[repr(C)]
 struct Object {
     y: u8,
     x: u8,
@@ -157,6 +172,31 @@ impl Object {
     }
 }
 
+impl MemValue for Object {
+    #[inline]
+    fn copy_from_mem<S: MemSource>(&mut self, source: S) {
+        // Treat self as a byte slice. This is safe because all of the fields are u8 or
+        // #[repr(transparent)] around a u8.
+        // ObjAttrs safely allows any u8 bit pattern (e.g. via `from_bits_retain`), so
+        // filling it with invalid bits is OK. We just have to filter back to only allowed
+        // flags afterwards.
+        let slice =
+            unsafe { slice::from_raw_parts_mut(self as *mut _ as *mut u8, mem::size_of::<Self>()) };
+        source.get_bytes(slice);
+        // Filter invalid attrs.
+        self.attrs &= ObjAttrs::all();
+    }
+
+    #[inline]
+    fn copy_to_mem<D: crate::memdev::MemDest>(&self, dest: D) {
+        // Treat self as a byte slice. This is safe because all of the fields are u8 or
+        // #[repr(transparent)] around a u8.
+        let slice =
+            unsafe { slice::from_raw_parts(self as *const _ as *const u8, mem::size_of::<Self>()) };
+        dest.set_bytes(slice);
+    }
+}
+
 //impl PartialEq for Object {
 //    fn eq(&self, other: &Self) -> bool { self.x == other.x }
 //}
@@ -176,17 +216,13 @@ impl Oam {
     fn get_object(&self, i: u16) -> Object {
         trace!("getting attributes for object: {}", i);
         let base_index = i * 4;
-        Object {
-            y: self.deref().read(Addr::from(base_index)),
-            x: self.deref().read(Addr::from(base_index + 1)),
-            tile_id: self.deref().read(Addr::from(base_index + 2)),
-            attrs: ObjAttrs::from_bits_truncate(self.deref().read(Addr::from(base_index + 3))),
-        }
+        self.bypass()
+            .read_relative(OAM_BEGIN.move_forward_by(base_index))
     }
 }
 
 /// Context trait providing access to fields needed to service graphics.
-pub trait PpuContext: InterruptContext {
+pub trait PpuContext: InterruptContext + MemContext {
     /// Get the ppu state.
     fn ppu(&self) -> &PpuState;
 
@@ -225,16 +261,132 @@ fn get_tile_line(
 
     let line_address = (base_address + 16 * tile_offset + 2 * line as i16) as u16;
 
-    let low_bits = ctx.vram().deref().read(Addr::from(line_address));
-    let high_bits = ctx.vram().deref().read(Addr::from(line_address + 1));
+    let [low_bits, high_bits]: [u8; 2] = ctx
+        .vram()
+        .bypass()
+        .read_relative(VRAM_BEGIN.move_forward_by(line_address));
 
     let mut output = [0; 8];
-    for i in 0..=7 {
-        let bit = if flip_x { i } else { 7 - i };
-        output[i] = ((low_bits & (1 << bit)) >> bit) + (2 * ((high_bits & (1 << bit)) >> bit));
+
+    /// Extract the specified bit from low and high and form a new two-bit number using
+    /// them.
+    #[inline(always)]
+    fn extract(low: u8, high: u8, bit: usize) -> u8 {
+        ((low >> bit) & 1) | (((high >> bit) & 1) << 1)
+    }
+    if flip_x {
+        for (i, bit) in (0..=7).enumerate() {
+            output[i] = extract(low_bits, high_bits, bit);
+        }
+    } else {
+        for (i, bit) in (0..=7).rev().enumerate() {
+            output[i] = extract(low_bits, high_bits, bit);
+        }
     }
 
     output
+}
+
+/// State of the Direct Memory Access system.
+#[derive(Debug, Clone, Eq, PartialEq)]
+#[repr(C)]
+pub struct DmaState {
+    addr_low: u8,
+    addr_high: u8,
+}
+
+impl Default for DmaState {
+    fn default() -> Self {
+        Self {
+            // DMA stops after 0x9f, and is inactive by default so we start the low byte
+            // of the DMA address at 0xa0.
+            addr_low: 0xa0,
+            /// The high byte of DMA is set by the program.
+            addr_high: 0,
+        }
+    }
+}
+
+impl DmaState {
+    #[inline]
+    fn read_inner(&self) -> u8 {
+        self.addr_high
+    }
+
+    #[inline]
+    fn write_inner(&mut self, value: u8) {
+        self.addr_low = 0;
+        self.addr_high = value;
+    }
+
+    /// Gets the DMA base address.
+    #[inline]
+    pub fn base_addr(&self) -> u16 {
+        u16::from_le_bytes([0, self.addr_high])
+    }
+
+    /// Returns true if DMA is active.
+    #[inline]
+    pub fn active(&self) -> bool {
+        self.addr_low < 0xa0
+    }
+
+    /// Get the source address for the DMA read.
+    ///
+    /// This returns an absolute address within the GameBoy address space.
+    #[inline]
+    pub fn source_addr(&self) -> u16 {
+        u16::from_le_bytes([self.addr_low, self.addr_high])
+    }
+
+    /// Gets the destination address for the DMA read.
+    ///
+    /// This is a relative address within OAM. The relative base is the default address
+    /// that OAM is mapped to. Note that because of how RelativeAddr works, this address
+    /// will be valid for a read directly from OAM no matter where OAM is mapped, however
+    /// the "raw" address may be wrong if OAM is not mapped in its normal location.
+    pub fn dest_addr(&self) -> RelativeAddr {
+        OAM_BEGIN.move_forward_by(self.addr_low as u16)
+    }
+
+    /// Move forward by one byte. If the last byte in the DMA has been read, this makes
+    /// the DMA inactive.
+    ///
+    /// This should not be called if DMA is not active.
+    fn advance(&mut self) {
+        // If called while DMA is not active, it can incorrectly wrap around and restart
+        // DMA. For performance, this check is only used in Debug mode.
+        debug_assert!(self.active());
+        self.addr_low += 1;
+    }
+}
+
+impl MemDevice for DmaState {
+    const LEN: usize = 1;
+
+    #[inline]
+    fn read_byte_relative(&self, addr: RelativeAddr) -> u8 {
+        check_addr!(DmaState, addr);
+        self.read_inner()
+    }
+
+    #[inline]
+    fn read_bytes_relative(&self, addr: RelativeAddr, data: &mut [u8]) {
+        check_addr!(DmaState, addr, data.len());
+        data[0] = self.read_inner();
+    }
+
+    #[inline]
+    fn write_byte_relative(&mut self, addr: RelativeAddr, data: u8) {
+        check_addr!(DmaState, addr);
+        self.write_inner(data);
+    }
+
+    #[inline]
+    fn write_bytes_relative(&mut self, addr: RelativeAddr, data: &[u8]) {
+        check_addr!(DmaState, addr, data.len());
+        self.write_inner(data[0]);
+    }
 }
 
 /// Memory-mapped IO registers used by the PPU.
@@ -246,28 +398,27 @@ pub struct PpuRegs {
     pub scroll_x: u8,
     pub lcdc_y: u8,
     pub lcdc_y_compare: u8,
-    pub dma_addr: u8,
+    /// DMAanager.
+    pub dma: DmaState,
     pub bg_palette: u8,
     pub obj_palette: [u8; 2],
     pub window_y: u8,
     pub window_x: u8,
 }
 
-memdev_fields! {
-    PpuRegs {
-        0x00 => lcd_control,
-        0x01 => lcd_status,
-        0x02 => scroll_y,
-        0x03 => scroll_x,
-        0x04 => { lcdc_y, readonly },
-        0x05 => lcdc_y_compare,
-        0x06 => dma_addr,
-        0x07 => bg_palette,
-        0x08..=0x09 => obj_palette,
-        0x0a => window_y,
-        0x0b => window_x,
-    }
-}
+memdev_fields!(PpuRegs, len: 0x0c, {
+    0x00 => lcd_control,
+    0x01 => lcd_status,
+    0x02 => scroll_y,
+    0x03 => scroll_x,
+    0x04 => { lcdc_y, readonly },
+    0x05 => lcdc_y_compare,
+    0x06 => dma,
+    0x07 => bg_palette,
+    0x08..=0x09 => obj_palette,
+    0x0a => window_y,
+    0x0b => window_x,
+});
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PpuState {
@@ -359,8 +510,8 @@ pub fn bg_tile_fetch(ctx: &mut impl PpuContext) {
 
     let tile_id = ctx
         .vram()
-        .deref()
-        .read(Addr::from(tile_id_base + tile_id_offset));
+        .bypass()
+        .read_byte_relative(VRAM_BEGIN.move_forward_by(tile_id_base + tile_id_offset));
 
     if ctx.ppu_regs().lcdc_y / 8 == 0 {
         debug!(
@@ -390,6 +541,8 @@ pub fn bg_tile_fetch(ctx: &mut impl PpuContext) {
 }
 
 pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
+    tick_dma(ctx, tcycles);
+
     if ctx
         .ppu_regs()
         .lcd_control
@@ -566,5 +719,22 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
         }
     } else {
         trace!("LCD is disabled.");
+    }
+}
+
+/// Run one DMA tick.
+fn tick_dma(ctx: &mut impl PpuContext, _tcycles: u64) {
+    if ctx.ppu_regs().dma.active() {
+        // The address add can never overflow because "base" is always a multiple of 0x100
+        // and offset is always 0x00..0xa0, so essentially this address add is just
+        // combining bits.
+        let src = ctx.ppu_regs().dma.source_addr();
+        let dest = ctx.ppu_regs().dma.dest_addr();
+        let byte = ctx.mem().read_byte(src);
+        ctx.oam_mut()
+            .bypass_mut()
+            .bypass_mut()
+            .write_byte_relative(dest, byte);
+        ctx.ppu_regs_mut().dma.advance();
     }
 }

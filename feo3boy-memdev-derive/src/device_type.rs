@@ -9,11 +9,14 @@ use syn::{DeriveInput, Error, Expr, Meta, Result, Token};
 #[derive(Parse)]
 pub enum DeviceType {
     /// The type is a wrapper around a single byte.
-    #[peek(kw::byte, name = "ByteWrapper")]
-    ByteWrapper(ByteWrapper),
+    #[peek(kw::bits, name = "BitsWrapper")]
+    BitsWrapper(BitsWrapper),
     /// The type is a wrapper around bitflags.
     #[peek(kw::bitflags, name = "BitFlags")]
     BitFlags(BitFlags),
+    /// The type is a wrapper around bitflags.
+    #[peek(kw::byte, name = "ByteWrapper")]
+    ByteWrapper(ByteWrapper),
     /// Passthrough mem device.
     #[peek(kw::passthrough, name = "PassThrough")]
     Passthrough(kw::passthrough),
@@ -69,11 +72,11 @@ impl DeviceType {
     }
 }
 
-/// Contents of the `#[memdev(byte, readable = ..., writable = ...)]` expression.
+/// Contents of the `#[memdev(bits, readable = ..., writable = ...)]` expression.
 #[derive(Parse)]
-pub struct ByteWrapper {
-    /// The byte token that starts this expression.
-    pub byte: kw::byte,
+pub struct BitsWrapper {
+    /// The bits token that starts this expression.
+    pub byte: kw::bits,
     /// The values for the `readable = ...`  and `writable = ...` inputs.
     pub readwrite: ReadableWritable,
 }
@@ -119,16 +122,48 @@ pub struct Readable {
 /// The sequence `readable = <expr>`.
 #[derive(Parse)]
 pub struct Writable {
-    pub readable: kw::writable,
+    pub writable: kw::writable,
+    pub equals: Token![=],
+    pub value: Expr,
+}
+
+/// Contests of the `#[memdev(byte, read = ..., write = ...)]` expression.
+#[derive(Parse)]
+pub struct ByteWrapper {
+    /// The byte token that starts this expression.
+    pub byte: kw::byte,
+    pub comma1: Token![,],
+    /// The value set for "read".
+    pub read: Read,
+    pub comma2: Token![,],
+    /// The value set for "write".
+    pub write: Write,
+}
+
+/// The sequence `read = <expr>`.
+#[derive(Parse)]
+pub struct Read {
+    pub read: kw::read,
+    pub equals: Token![=],
+    pub value: Expr,
+}
+
+/// The sequence `readable = <expr>`.
+#[derive(Parse)]
+pub struct Write {
+    pub write: kw::write,
     pub equals: Token![=],
     pub value: Expr,
 }
 
 mod kw {
-    syn::custom_keyword!(byte);
+    syn::custom_keyword!(bits);
     syn::custom_keyword!(bitflags);
+    syn::custom_keyword!(byte);
     syn::custom_keyword!(passthrough);
 
     syn::custom_keyword!(readable);
+    syn::custom_keyword!(read);
     syn::custom_keyword!(writable);
+    syn::custom_keyword!(write);
 }

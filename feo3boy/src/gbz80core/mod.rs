@@ -2,7 +2,7 @@ pub use feo3boy_opcodes::gbz80types::Flags;
 
 use crate::gbz80core::executor::ExecutorState;
 use crate::interrupts::{InterruptContext, MemInterrupts};
-use crate::memdev::{MemContext, MemDevice};
+use crate::memdev::{MemContext, MemDevice, RootExtend};
 
 pub mod direct_executor;
 pub mod executor;
@@ -210,25 +210,25 @@ impl<M> CpuContext for (Gbz80State, M) {
 }
 
 impl<M: MemDevice> MemContext for (Gbz80State, M) {
-    type Mem = M;
+    type Mem = RootExtend<M>;
 
     #[inline]
     fn mem(&self) -> &Self::Mem {
-        &self.1
+        RootExtend::wrap_ref(&self.1)
     }
 
     #[inline]
     fn mem_mut(&mut self) -> &mut Self::Mem {
-        &mut self.1
+        RootExtend::wrap_mut(&mut self.1)
     }
 }
 
 impl<M: MemDevice> InterruptContext for (Gbz80State, M) {
-    type Interrupts = MemInterrupts<M>;
+    type Interrupts = MemInterrupts<RootExtend<M>>;
 
     #[inline]
     fn interrupts(&self) -> &Self::Interrupts {
-        MemInterrupts::wrap(self.mem())
+        MemInterrupts::wrap_ref(self.mem())
     }
 
     #[inline]
@@ -271,25 +271,25 @@ impl<M> CpuContext for (&mut Gbz80State, &mut M) {
 }
 
 impl<M: MemDevice> MemContext for (&mut Gbz80State, &mut M) {
-    type Mem = M;
+    type Mem = RootExtend<M>;
 
     #[inline]
     fn mem(&self) -> &Self::Mem {
-        self.1
+        RootExtend::wrap_ref(self.1)
     }
 
     #[inline]
     fn mem_mut(&mut self) -> &mut Self::Mem {
-        self.1
+        RootExtend::wrap_mut(self.1)
     }
 }
 
 impl<M: MemDevice> InterruptContext for (&mut Gbz80State, &mut M) {
-    type Interrupts = MemInterrupts<M>;
+    type Interrupts = MemInterrupts<RootExtend<M>>;
 
     #[inline]
     fn interrupts(&self) -> &Self::Interrupts {
-        MemInterrupts::wrap(self.mem())
+        MemInterrupts::wrap_ref(self.mem())
     }
 
     #[inline]
@@ -331,25 +331,25 @@ impl<M, S> CpuContext for (Gbz80State, M, S) {
 }
 
 impl<M: MemDevice, S> MemContext for (Gbz80State, M, S) {
-    type Mem = M;
+    type Mem = RootExtend<M>;
 
     #[inline]
     fn mem(&self) -> &Self::Mem {
-        &self.1
+        RootExtend::wrap_ref(&self.1)
     }
 
     #[inline]
     fn mem_mut(&mut self) -> &mut Self::Mem {
-        &mut self.1
+        RootExtend::wrap_mut(&mut self.1)
     }
 }
 
 impl<M: MemDevice, S> InterruptContext for (Gbz80State, M, S) {
-    type Interrupts = MemInterrupts<M>;
+    type Interrupts = MemInterrupts<RootExtend<M>>;
 
     #[inline]
     fn interrupts(&self) -> &Self::Interrupts {
-        MemInterrupts::wrap(self.mem())
+        MemInterrupts::wrap_ref(self.mem())
     }
 
     #[inline]
@@ -391,25 +391,25 @@ impl<M: MemDevice, S> CpuContext for (&mut Gbz80State, &mut M, &mut S) {
 }
 
 impl<M: MemDevice, S> MemContext for (&mut Gbz80State, &mut M, &mut S) {
-    type Mem = M;
+    type Mem = RootExtend<M>;
 
     #[inline]
     fn mem(&self) -> &Self::Mem {
-        self.1
+        RootExtend::wrap_ref(self.1)
     }
 
     #[inline]
     fn mem_mut(&mut self) -> &mut Self::Mem {
-        self.1
+        RootExtend::wrap_mut(self.1)
     }
 }
 
 impl<M: MemDevice, S> InterruptContext for (&mut Gbz80State, &mut M, &mut S) {
-    type Interrupts = MemInterrupts<M>;
+    type Interrupts = MemInterrupts<RootExtend<M>>;
 
     #[inline]
     fn interrupts(&self) -> &Self::Interrupts {
-        MemInterrupts::wrap(self.mem())
+        MemInterrupts::wrap_ref(self.mem())
     }
 
     #[inline]

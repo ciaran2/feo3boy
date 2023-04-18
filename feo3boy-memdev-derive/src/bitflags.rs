@@ -19,28 +19,45 @@ pub fn build_flags(item: &DeriveInput, flags: &BitFlags) -> Result<TokenStream> 
         None => quote! { #ty::all() },
     };
 
+    let read = quote! {
+        (*self & READABLE_BITS).bits() | !READABLE_BITS.bits()
+    };
+    let write = quote! {
+        *self = (*self - WRITABLE_BITS) | (#ty::from_bits_truncate(val) & WRITABLE_BITS)
+    };
+
     Ok(quote! {
         impl #feo3boy::memdev::MemDevice for #ty {
-            fn read(&self, addr: #feo3boy::memdev::Addr) -> u8 {
-                const READABLE_BITS: #ty = #readable;
+            const LEN: usize = 1;
 
-                assert!(
-                    addr.index() == 0,
-                    concat!("Address {} out of range for ", stringify!(#ty)),
-                    addr
-                );
-                (*self & READABLE_BITS).bits() | !READABLE_BITS.bits()
+            fn read_byte_relative(&self, addr: #feo3boy::memdev::RelativeAddr) -> u8 {
+                const READABLE_BITS: #ty = #readable;
+                #feo3boy::check_addr!(#ty, addr);
+                #read
             }
 
-            fn write(&mut self, addr: #feo3boy::memdev::Addr, val: u8) {
+            fn write_byte_relative(&mut self, addr: #feo3boy::memdev::RelativeAddr, val: u8) {
                 const WRITABLE_BITS: #ty = #writable;
+                #feo3boy::check_addr!(#ty, addr);
+                #write;
+            }
 
-                assert!(
-                    addr.index() == 0,
-                    concat!("Address {} out of range for ", stringify!(#ty)),
-                    addr
-                );
-                *self = (*self - WRITABLE_BITS) | (#ty::from_bits_truncate(val) & WRITABLE_BITS)
+            fn read_bytes_relative(&self, addr: #feo3boy::memdev::RelativeAddr, data: &mut [u8]) {
+                const READABLE_BITS: #ty = #readable;
+                #feo3boy::check_addr!(#ty, addr, data.len());
+                match data.first_mut() {
+                    Some(data) => *data = #read,
+                    None => {}
+                }
+            }
+
+            fn write_bytes_relative(&mut self, addr: #feo3boy::memdev::RelativeAddr, data: &[u8]) {
+                const WRITABLE_BITS: #ty = #writable;
+                #feo3boy::check_addr!(#ty, addr, data.len());
+                match data.first().copied() {
+                    Some(val) => #write,
+                    None => {}
+                }
             }
         }
     })

@@ -62,7 +62,7 @@ fn load8bit() {
             0x68..=0x6f => ctx.cpu_mut().regs.l = val,
             0x70..=0x77 => {
                 let dest = ctx.cpu().regs.hl().into();
-                ctx.mem_mut().write(dest, val)
+                ctx.mem_mut().write_byte(dest, val)
             }
             0x78..=0x7f => ctx.cpu_mut().regs.acc = val,
             _ => unreachable!(),
@@ -78,7 +78,7 @@ fn load8bit() {
             0x5 => ctx.cpu_mut().regs.l = val,
             0x6 => {
                 let dest = ctx.cpu().regs.hl().into();
-                ctx.mem_mut().write(dest, val)
+                ctx.mem_mut().write_byte(dest, val)
             }
             0x7 => ctx.cpu_mut().regs.acc = val,
             _ => unreachable!(),
@@ -122,7 +122,7 @@ fn load8bit_immediate() {
             0x2e => ctx.cpu_mut().regs.l = val,
             0x36 => {
                 let dest = ctx.cpu().regs.hl().into();
-                ctx.mem_mut().write(dest, val)
+                ctx.mem_mut().write_byte(dest, val)
             }
             0x3e => ctx.cpu_mut().regs.acc = val,
             _ => unreachable!(),
@@ -167,7 +167,7 @@ fn add8bit() {
             0x5 => ctx.cpu_mut().regs.l = val,
             0x6 => {
                 let dest = ctx.cpu().regs.hl().into();
-                ctx.mem_mut().write(dest, val)
+                ctx.mem_mut().write_byte(dest, val)
             }
             _ => unreachable!(),
         }
@@ -285,7 +285,7 @@ fn adc8bit() {
             0x5 => ctx.cpu_mut().regs.l = val,
             0x6 => {
                 let dest = ctx.cpu().regs.hl().into();
-                ctx.mem_mut().write(dest, val)
+                ctx.mem_mut().write_byte(dest, val)
             }
             _ => unreachable!(),
         }
@@ -410,7 +410,7 @@ fn sub8bit() {
             0x5 => ctx.cpu_mut().regs.l = val,
             0x6 => {
                 let dest = ctx.cpu().regs.hl().into();
-                ctx.mem_mut().write(dest, val)
+                ctx.mem_mut().write_byte(dest, val)
             }
             _ => unreachable!(),
         }
@@ -516,7 +516,7 @@ fn sbc8bit() {
             0x5 => ctx.cpu_mut().regs.l = val,
             0x6 => {
                 let dest = ctx.cpu().regs.hl().into();
-                ctx.mem_mut().write(dest, val)
+                ctx.mem_mut().write_byte(dest, val)
             }
             _ => unreachable!(),
         }
@@ -628,7 +628,7 @@ fn and8bit() {
             0x5 => ctx.cpu_mut().regs.l = val,
             0x6 => {
                 let dest = ctx.cpu().regs.hl().into();
-                ctx.mem_mut().write(dest, val)
+                ctx.mem_mut().write_byte(dest, val)
             }
             _ => unreachable!(),
         }
@@ -724,7 +724,7 @@ fn xor8bit() {
             0x5 => ctx.cpu_mut().regs.l = val,
             0x6 => {
                 let dest = ctx.cpu().regs.hl().into();
-                ctx.mem_mut().write(dest, val)
+                ctx.mem_mut().write_byte(dest, val)
             }
             _ => unreachable!(),
         }
@@ -818,7 +818,7 @@ fn or8bit() {
             0x5 => ctx.cpu_mut().regs.l = val,
             0x6 => {
                 let dest = ctx.cpu().regs.hl().into();
-                ctx.mem_mut().write(dest, val)
+                ctx.mem_mut().write_byte(dest, val)
             }
             _ => unreachable!(),
         }
@@ -914,7 +914,7 @@ fn cp8bit() {
             0x5 => ctx.cpu_mut().regs.l = val,
             0x6 => {
                 let dest = ctx.cpu().regs.hl().into();
-                ctx.mem_mut().write(dest, val)
+                ctx.mem_mut().write_byte(dest, val)
             }
             _ => unreachable!(),
         }

@@ -3,13 +3,13 @@ use std::{iter, mem};
 use feo3boy::gbz80core::direct_executor::DirectExecutor;
 use feo3boy::gbz80core::executor::Executor;
 use feo3boy::gbz80core::Gbz80State;
-use feo3boy::memdev::{Addr, MemDevice};
+use feo3boy::memdev::{AllRam, RootMemDevice};
 
 #[test]
 fn fibonacci() {
-    const OUTPUT: usize = 0xC000;
+    const OUTPUT: u16 = 0xC000;
 
-    let mut mem = ExtendMem::from(include_bytes!("fibonacci.bin"));
+    let mut mem = AllRam::from(include_bytes!("fibonacci.bin"));
     let mut cpu = Gbz80State::default();
     while !cpu.halted {
         DirectExecutor::run_single_instruction(&mut (&mut cpu, &mut mem));
@@ -25,24 +25,23 @@ fn fibonacci() {
     .enumerate()
     {
         if fib > u8::MAX as u32 {
-            assert_eq!(mem.0.len(), OUTPUT + i);
             break;
         }
-        assert_eq!(mem.0[OUTPUT + i], fib as u8);
+        assert_eq!(mem.read_byte(OUTPUT + i as u16), fib as u8);
     }
 }
 
 #[test]
 fn fibonacci16() {
-    const OUTPUT: usize = 0xC000;
+    const OUTPUT: u16 = 0xC000;
 
-    let mut mem = ExtendMem::from(include_bytes!("fibonacci16.bin"));
+    let mut mem = AllRam::from(include_bytes!("fibonacci16.bin"));
     let mut cpu = Gbz80State::default();
     while !cpu.halted {
         DirectExecutor::run_single_instruction(&mut (&mut cpu, &mut mem));
     }
 
-    let (mut f1, mut f2) = (0, 1);
+    let (mut f1, mut f2) = (0u32, 1);
     for (i, fib) in iter::from_fn(move || {
         let res = f1;
         f1 += f2;
@@ -52,19 +51,18 @@ fn fibonacci16() {
     .enumerate()
     {
         if fib > u16::MAX as u32 {
-            assert_eq!(mem.0.len(), OUTPUT + i * 2);
             break;
         }
-        let val = u16::from_le_bytes([mem.0[OUTPUT + i * 2], mem.0[OUTPUT + 1 + i * 2]]);
+        let val: u16 = mem.read(OUTPUT + i as u16 * 2);
         assert_eq!(val, fib as u16);
     }
 }
 
 #[test]
 fn squares() {
-    const OUTPUT: usize = 0xC000;
+    const OUTPUT: u16 = 0xC000;
 
-    let mut mem = ExtendMem::from(include_bytes!("squares.bin"));
+    let mut mem = AllRam::from(include_bytes!("squares.bin"));
     let mut cpu = Gbz80State::default();
     while !cpu.halted {
         DirectExecutor::run_single_instruction(&mut (&mut cpu, &mut mem));
@@ -72,10 +70,9 @@ fn squares() {
 
     for (i, square) in (1..).map(|x| x * x).enumerate() {
         if square > u8::MAX as u32 {
-            assert_eq!(mem.0.len(), OUTPUT + i);
             break;
         }
-        assert_eq!(mem.0[OUTPUT + i], square as u8);
+        assert_eq!(mem.read_byte(OUTPUT + i as u16), square as u8);
     }
 }
 
@@ -90,7 +87,7 @@ mod test_roms {
     use feo3boy::gbz80core::direct_executor::DirectExecutor;
     use feo3boy::gbz80core::executor::Executor;
     use feo3boy::gbz80core::microcode_executor::MicrocodeExecutor;
-    use feo3boy::memdev::{BiosRom, Cartridge};
+    use feo3boy::memdev::{BiosRom, Cartridge, RootMemDevice};
     use feo3boy_opcodes::opcode::Opcode;
 
     /// Checks if output matches the cpu_instrs output. Returns break when at the end of
@@ -163,8 +160,6 @@ Passed all tests";
     /// Run the "cpu_instrs" comparing state between microcode and direct execution.
     #[test]
     fn cpu_instrs_comparison() {
-        use feo3boy::memdev::{Addr, MemDevice};
-
         let cart = Cartridge::parse(&include_bytes!("cpu_instrs.gb")[..]).unwrap();
         let bios = BiosRom::new(*include_bytes!("bios.bin"));
 
@@ -178,8 +173,8 @@ Passed all tests";
             output_microcode.extend(gb_microcode.serial.stream.receive_bytes());
 
             let ex_pc = gb_direct.cpustate.regs.pc;
-            let instr_direct = Opcode::decode(gb_direct.mmu.read(Addr::from(ex_pc)));
-            let instr_microcode = Opcode::decode(gb_microcode.mmu.read(Addr::from(ex_pc)));
+            let instr_direct = Opcode::decode(gb_direct.mmu.read_byte(ex_pc));
+            let instr_microcode = Opcode::decode(gb_microcode.mmu.read_byte(ex_pc));
             DirectExecutor::run_single_instruction(&mut *gb_direct);
             MicrocodeExecutor::run_single_instruction(&mut *gb_microcode);
             assert!(
@@ -199,37 +194,5 @@ Passed all tests";
                 break;
             }
         }
-    }
-}
-
-/// Creates a MemDevice from a Vec<u8>. This memory device will return 0 for any read
-/// beyond the end of the vec and will automatically extend the vec to cover any write
-/// beyond the end.
-struct ExtendMem(Vec<u8>);
-
-impl From<&[u8]> for ExtendMem {
-    /// Creates an ExtendMem with initial data set by copying from a byte slice.
-    fn from(bytes: &[u8]) -> Self {
-        Self(Vec::from(bytes))
-    }
-}
-
-impl<const N: usize> From<&[u8; N]> for ExtendMem {
-    /// Creates an ExtendMem with initial data set by copying from a byte slice.
-    fn from(bytes: &[u8; N]) -> Self {
-        Self(Vec::from(&bytes[..]))
-    }
-}
-
-impl MemDevice for ExtendMem {
-    fn read(&self, addr: Addr) -> u8 {
-        self.0.get(addr.index()).copied().unwrap_or(0)
-    }
-
-    fn write(&mut self, addr: Addr, data: u8) {
-        if addr.index() >= self.0.len() {
-            self.0.resize(addr.index() + 1, 0);
-        }
-        self.0[addr.index()] = data;
     }
 }

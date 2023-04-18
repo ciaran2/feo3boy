@@ -1,4 +1,3 @@
-
 use std::io::{self, Read, Write};
 
 use crate::apu::{self, ApuContext, ApuRegs, ApuState};
@@ -119,7 +118,6 @@ impl<E: Executor> ExecutorContext for Gb<E> {
         // TODO: run background processing while yielded.
         // Continue processing serial while yielded.
         input::update(self);
-        self.mmu.tick(4);
         serial::tick(self, 4);
         // apu must update before timer to catch falling edges from CPU writes
         apu::tick(self, 4);
