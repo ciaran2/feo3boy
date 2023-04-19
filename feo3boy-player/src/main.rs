@@ -1,9 +1,11 @@
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 
 use clap::Parser;
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 
 use pixels::{Pixels, PixelsBuilder, SurfaceTexture};
 use winit::event::VirtualKeyCode;
@@ -21,7 +23,7 @@ use feo3boy::input::{ButtonStates, InputContext};
 use feo3boy::memdev::{BiosRom, Cartridge, SaveData};
 
 fn init_audio_stream(
-    mut sample_consumer: Consumer<(i16, i16), Arc<HeapRb<(i16, i16)>>>,
+    mut sample_consumer: Consumer<(f32, f32), Arc<HeapRb<(f32, f32)>>>,
 ) -> Option<(Stream, SampleRate)> {
     if let Some(device) = cpal::default_host().default_output_device() {
         let supported_config = {
@@ -51,25 +53,26 @@ fn init_audio_stream(
         if let Some(supported_config) = supported_config {
             let err_handler = |err| error!("Error in output audio stream: {}", err);
             let sample_rate = supported_config.sample_rate();
+            info!(
+                "Using supported config with supported buffer size {:?}",
+                supported_config.buffer_size()
+            );
 
+            let mut last_sample = (0.0, 0.0);
             let callback = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                info!("Running f32 audio callback");
-                let mut last_sample = (0.0, 0.0);
+                debug!("Running f32 audio callback");
                 for stereo_sample in data.chunks_mut(2) {
                     let sample_pair = match sample_consumer.pop() {
                         Some((left, right)) => {
-                            let sample_pair = (left as f32 / 255.0, right as f32 / 255.0);
-                            info!(
-                                "Writing ({},{}) to audio buffer",
-                                sample_pair.0, sample_pair.1
-                            );
-                            sample_pair
+                            debug!("Writing ({},{}) to audio buffer", left, right);
+                            (0.25 * left, 0.25 * right)
                         }
                         None => {
-                            //warn!("Sample FIFO empty");
+                            warn!("Sample FIFO empty");
                             last_sample
                         }
                     };
+
                     stereo_sample[0] = sample_pair.0;
                     stereo_sample[1] = sample_pair.1;
                     last_sample = sample_pair;
@@ -192,13 +195,16 @@ fn main() {
             .unwrap()
     };
 
-    let rb = HeapRb::new(200);
+    // TODO: make this dynamic to the actual sample rate
+    // exceeding 48K in the output should be pretty rare though
+    let rb = HeapRb::new(48000 / 60 * 2);
     let (mut sample_producer, sample_consumer) = rb.split();
     let audio_output_config = init_audio_stream(sample_consumer);
 
     if !args.mute {
         match audio_output_config {
             Some((ref stream, sample_rate)) => {
+                info!("Setting output sample rate: {}", sample_rate.0);
                 gb.set_sample_rate(sample_rate.0);
                 if let Err(err) = stream.play() {
                     error!("Error playing audio stream: {}", err);
@@ -223,6 +229,12 @@ fn main() {
         (VirtualKeyCode::Period, ButtonStates::B),
     ];
 
+    let fast_forward_binding = VirtualKeyCode::Tab;
+
+    let mut avg_sample_interval: f64 = 0.0;
+    let mut num_sample_intervals: f64 = 0.0;
+    let mut sample_instant = Instant::now();
+
     event_loop.run(move |event, _, control_flow| {
         control_flow.set_poll();
 
@@ -242,10 +254,17 @@ fn main() {
                         Err(err) => error!("Error opening save file: {}", err),
                     }
                 }
+                info!(
+                    "Average interval between samples: {} microseconds",
+                    avg_sample_interval
+                );
                 control_flow.set_exit();
             }
 
             gb.set_button_states(gen_button_states(&input_helper, &bindings));
+
+            let fast_forward = input_helper.key_held(fast_forward_binding);
+
             for _i in 0..100 {
                 {
                     let bytes = gb.serial.stream.receive_bytes();
@@ -258,9 +277,25 @@ fn main() {
                 }
                 let (display, audio_sample) = gb.tick();
                 if let Some(sample) = audio_sample {
+                    avg_sample_interval = if num_sample_intervals == 0.0 {
+                        sample_instant.elapsed().as_micros() as f64
+                    } else {
+                        avg_sample_interval * (num_sample_intervals - 1.0) / num_sample_intervals
+                            + sample_instant.elapsed().as_micros() as f64 / num_sample_intervals
+                    };
+                    num_sample_intervals += 1.0;
+                    sample_instant = Instant::now();
+
                     debug!("Sending ({},{}) to sample FIFO", sample.0, sample.1);
-                    if let Err(sample) = sample_producer.push(sample) {
-                        debug!("Error sending {} {} to sample FIFO", sample.0, sample.1);
+
+                    if !fast_forward {
+                        while let Err(sample) = sample_producer.push(sample) {
+                            debug!("Error sending ({},{}) to sample FIFO", sample.0, sample.1);
+                        }
+                    } else {
+                        if let Err(sample) = sample_producer.push(sample) {
+                            debug!("Error sending ({},{}) to sample FIFO", sample.0, sample.1);
+                        }
                     }
                 }
                 match display {
