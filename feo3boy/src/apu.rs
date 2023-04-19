@@ -614,6 +614,7 @@ impl PulseChannel {
 
     pub fn set_wavelength_low(&mut self, low_byte: u8) {
         self.wavelength = (self.wavelength & 0x700) | low_byte as u16;
+        self.generate_period();
     }
 
     fn generate_period(&mut self) {
@@ -659,6 +660,7 @@ impl Channel for PulseChannel {
 
         self.length_enable = control.contains(ChannelControl::LENGTH_ENABLE);
         self.wavelength = (self.wavelength & 0xff) | (control.wavelength_high() as u16) << 8;
+        self.generate_period();
     }
 
     fn set_length(&mut self, value: u8) {
@@ -672,7 +674,6 @@ impl Channel for PulseChannel {
             self.triggered = false;
             self.envelope = self.envelope_control.new_envelope();
             self.sweep = self.sweep_control.new_sweep();
-            self.generate_period();
 
             info!(
                 "Pulse channel triggered at frequency {} with envelope {:?}, sweep control: {:x}, sweep {:?}, length_enable {}, length_acc {}",
@@ -774,6 +775,7 @@ impl WavetableChannel {
 
     pub fn set_wavelength_low(&mut self, low_byte: u8) {
         self.wavelength = (self.wavelength & 0x700) | low_byte as u16;
+        self.generate_period();
     }
 
     pub fn get_samples(&self, samples: usize) -> u8 {
@@ -838,6 +840,7 @@ impl Channel for WavetableChannel {
 
         self.length_enable = control.contains(ChannelControl::LENGTH_ENABLE);
         self.wavelength = (self.wavelength & 0xff) | (control.wavelength_high() as u16) << 8;
+        self.generate_period();
     }
 
     fn set_length(&mut self, value: u8) {
@@ -854,7 +857,6 @@ impl Channel for WavetableChannel {
 
             self.active = true;
             self.triggered = false;
-            self.generate_period();
         }
     }
 
