@@ -8,9 +8,9 @@ edition = "2021"
 test-roms = []
 
 [dependencies]
-feo3boy-opcodes = { path = "../feo3boy-opcodes" }
-feo3boy-memdev-derive = { path = "../feo3boy-memdev-derive" }
-feo3boy-executor-generator = { path = "../feo3boy-executor-generator" }
+feo3boy-opcodes = { path = "../feo3boy-opcodes", version = "0.1.0" }
+feo3boy-memdev-derive = { path = "../feo3boy-memdev-derive", version = "0.1.0" }
+feo3boy-executor-generator = { path = "../feo3boy-executor-generator", version = "0.1.0" }
 bitflags = "2"
 log = "0.4"
 once_cell = "1"
