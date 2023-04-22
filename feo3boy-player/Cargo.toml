@@ -13,5 +13,5 @@ winit = "0.28"
 winit_input_helper = "0.14"
 cpal = "0.15"
 ringbuf = "0.3"
-feo3boy = { path = "../feo3boy" }
+feo3boy = { path = "../feo3boy", version = "0.1.0" }
 log = "0.4"
