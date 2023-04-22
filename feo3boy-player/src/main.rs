@@ -1,10 +1,10 @@
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
-use std::thread::sleep;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use clap::Parser;
+use executor_selector::ExecutorSelector;
 use log::{debug, error, info, warn};
 
 use pixels::{Pixels, PixelsBuilder, SurfaceTexture};
@@ -21,6 +21,8 @@ use std::sync::Arc;
 use feo3boy::gb::Gb;
 use feo3boy::input::{ButtonStates, InputContext};
 use feo3boy::memdev::{BiosRom, Cartridge, SaveData};
+
+mod executor_selector;
 
 fn init_audio_stream(
     mut sample_consumer: Consumer<(f32, f32), Arc<HeapRb<(f32, f32)>>>,
@@ -136,6 +138,9 @@ struct Args {
     /// Mute the emulator (don't set up an audio stream).
     #[arg(short, long)]
     mute: bool,
+    /// Choose which executor to use for the CPU.
+    #[arg(long, value_enum, default_value_t)]
+    executor: ExecutorSelector,
 }
 
 fn main() {
@@ -175,7 +180,7 @@ fn main() {
     };
 
     // Box to keep it off the stack.
-    let mut gb = Gb::new(bios, cart);
+    let mut gb = Gb::for_config(bios, cart, &args.executor);
 
     let mut stdout = io::stdout();
 
@@ -247,10 +252,11 @@ fn main() {
                             .expect("No known path for save file")
                             .as_path(),
                     ) {
-                        Ok(save_file) => match gb.write_save_data(save_file) {
-                            Ok(_) => (),
-                            Err(err) => error!("Error writing to save file: {}", err),
-                        },
+                        Ok(save_file) => {
+                            if let Err(err) = gb.write_save_data(save_file) {
+                                error!("Error writing to save file: {}", err);
+                            }
+                        }
                         Err(err) => error!("Error opening save file: {}", err),
                     }
                 }

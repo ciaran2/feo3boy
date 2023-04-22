@@ -3,7 +3,7 @@ use std::io::{self, Read, Write};
 use crate::apu::{self, ApuContext, ApuRegs, ApuState};
 use crate::gbz80core::direct_executor::DirectExecutor;
 use crate::gbz80core::direct_executor_v2::DirectExecutorV2;
-use crate::gbz80core::executor::Executor;
+use crate::gbz80core::executor::{Executor, ExecutorConfig};
 use crate::gbz80core::microcode_executor::MicrocodeExecutor;
 use crate::gbz80core::stepping_executor::SteppingExecutor;
 use crate::gbz80core::{CpuContext, ExecutorContext, Gbz80State};
@@ -35,6 +35,9 @@ pub struct Gb<E: Executor = DirectExecutor> {
     pub display_ready: bool,
     /// State of the executor.
     pub executor_state: E::State,
+    /// Total number of m-cycles that have passed since the Gb started (not saved,
+    /// restarts when starting from a savestate or cartrige ram save).
+    pub mcycles: u64,
 }
 
 impl Gb {
@@ -65,9 +68,13 @@ impl Gb<SteppingExecutor> {
     }
 }
 
-impl<E: Executor> Gb<E> {
+impl<E> Gb<E>
+where
+    E: Executor,
+    E::State: Default,
+{
     /// Create a `Gb` with the given bios and cartridge, using the executor specified by
-    /// this type.
+    /// this type. Works for executors with state types that implement `Default`.
     pub fn for_executor(bios: BiosRom, cart: Cartridge) -> Self {
         Gb {
             cpustate: Gbz80State::new(),
@@ -79,6 +86,29 @@ impl<E: Executor> Gb<E> {
             ppu: PpuState::new(),
             display_ready: false,
             executor_state: E::State::default(),
+            mcycles: 0,
+        }
+    }
+}
+
+impl<E: Executor> Gb<E> {
+    /// Create a `Gb` with the given bios and cartridge, using the provided config to
+    /// create the initial state of the executor.
+    pub fn for_config<C>(bios: BiosRom, cart: Cartridge, config: &C) -> Self
+    where
+        C: ExecutorConfig<Executor = E>,
+    {
+        Gb {
+            cpustate: Gbz80State::new(),
+            mmu: Box::new(GbMmu::new(bios, cart)),
+            button_states: ButtonStates::empty(),
+            serial: SerialState::new(),
+            timer: TimerState::new(),
+            apu: ApuState::new(),
+            ppu: PpuState::new(),
+            display_ready: false,
+            executor_state: config.create_initial_state(),
+            mcycles: 0,
         }
     }
 
@@ -131,6 +161,7 @@ impl<E: Executor> ExecutorContext for Gb<E> {
     }
 
     fn yield1m(&mut self) {
+        self.mcycles += 1;
         // TODO: run background processing while yielded.
         // Continue processing serial while yielded.
         input::update(self);
