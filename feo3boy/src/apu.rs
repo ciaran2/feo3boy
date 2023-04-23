@@ -504,12 +504,14 @@ struct HighPassFilter {
 
 impl HighPassFilter {
     fn set_sample_rate(&mut self, sample_rate: u32) {
-        self.alpha = 1.0 / ( 2.0 * 3.1416 / (sample_rate as f32) * HIGH_PASS_CUTOFF + 1.0);
+        self.alpha = 1.0 / (2.0 * 3.1416 / (sample_rate as f32) * HIGH_PASS_CUTOFF + 1.0);
     }
 
     fn filter_sample(&mut self, input: (f32, f32)) -> (f32, f32) {
-        let output = (self.alpha * (input.0 + self.last_output.0 - self.last_input.0),
-                        self.alpha * (input.1 + self.last_output.1 - self.last_input.1));
+        let output = (
+            self.alpha * (input.0 + self.last_output.0 - self.last_input.0),
+            self.alpha * (input.1 + self.last_output.1 - self.last_input.1),
+        );
 
         self.last_input = input;
         self.last_output = output;
@@ -623,7 +625,7 @@ impl PulseChannel {
 
     pub fn tick(&mut self, tcycles: u32) {
         if self.period > 0 {
-            self.sample_cursor = ( self.sample_cursor + tcycles ) % self.period;
+            self.sample_cursor = (self.sample_cursor + tcycles) % self.period;
         }
     }
 }
@@ -632,7 +634,7 @@ impl Channel for PulseChannel {
     fn get_sample(&self) -> f32 {
         if self.envelope_control.dac_enabled() && self.active {
             let pulse_step = (((self.sample_cursor as u32 + self.phase_offset) % self.period)
-             / (self.period / 8)) as usize;
+                / (self.period / 8)) as usize;
             debug!(
                 "Sampling pulse channel from step {} of duty cycle {}",
                 pulse_step,
@@ -804,7 +806,7 @@ impl WavetableChannel {
 
     pub fn tick(&mut self, tcycles: u32) {
         if self.period > 0 {
-            self.sample_cursor = ( self.sample_cursor + tcycles ) % self.period;
+            self.sample_cursor = (self.sample_cursor + tcycles) % self.period;
         }
     }
 }
@@ -1066,7 +1068,6 @@ memdev_fields!(ApuRegs, len: 0x30, {
     0x20..=0x2f => { ch3, skip_over: 5 },
 });
 
-
 pub trait ApuContext {
     fn apu(&self) -> &ApuState;
     fn apu_mut(&mut self) -> &mut ApuState;
@@ -1117,7 +1118,6 @@ pub fn tick(ctx: &mut impl ApuContext, tcycles: u64) {
     if ctx.apu().output_period > 0.0 {
         let next_sample = ctx.apu().output_period - sample_cursor;
         if tcycles as f32 > next_sample {
-
             ctx.apu_regs_mut().ch1.tick(next_sample as u32);
             ctx.apu_regs_mut().ch2.tick(next_sample as u32);
             ctx.apu_regs_mut().ch3.tick(next_sample as u32);
@@ -1128,12 +1128,19 @@ pub fn tick(ctx: &mut impl ApuContext, tcycles: u64) {
             let stereo_sample = ctx.apu_mut().hpf.filter_sample((left_sample, right_sample));
             ctx.apu_mut().output_sample = Some(stereo_sample);
 
-            ctx.apu_regs_mut().ch1.tick(tcycles as u32 - next_sample as u32);
-            ctx.apu_regs_mut().ch2.tick(tcycles as u32 - next_sample as u32);
-            ctx.apu_regs_mut().ch3.tick(tcycles as u32 - next_sample as u32);
-            ctx.apu_regs_mut().ch4.tick(tcycles as u32 - next_sample as u32);
-        }
-        else {
+            ctx.apu_regs_mut()
+                .ch1
+                .tick(tcycles as u32 - next_sample as u32);
+            ctx.apu_regs_mut()
+                .ch2
+                .tick(tcycles as u32 - next_sample as u32);
+            ctx.apu_regs_mut()
+                .ch3
+                .tick(tcycles as u32 - next_sample as u32);
+            ctx.apu_regs_mut()
+                .ch4
+                .tick(tcycles as u32 - next_sample as u32);
+        } else {
             ctx.apu_regs_mut().ch1.tick(tcycles as u32);
             ctx.apu_regs_mut().ch2.tick(tcycles as u32);
             ctx.apu_regs_mut().ch3.tick(tcycles as u32);

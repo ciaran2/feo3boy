@@ -4,7 +4,7 @@ use std::fmt::Debug;
 use crate::gbz80core::ExecutorContext;
 
 /// Trait for types which represent the state of a microcode executor.
-pub trait ExecutorState: Clone + Debug + Default + Eq + PartialEq {}
+pub trait ExecutorState: Clone + Debug + Eq + PartialEq {}
 
 impl ExecutorState for () {}
 
@@ -16,6 +16,14 @@ pub trait Executor {
     /// Run a single instruction on the GBZ80 CPU, using `yield1m` on the context whenever
     /// a yield is required.
     fn run_single_instruction(ctx: &mut impl ExecutorContext<State = Self::State>);
+}
+
+pub trait ExecutorConfig {
+    /// The executor that this configuration is for.
+    type Executor: Executor;
+
+    /// Creates the initial state for the executor based on the config.
+    fn create_initial_state(&self) -> <Self::Executor as Executor>::State;
 }
 
 /// Which type of pause point was reached in a `tick_until_yield_or_fetch`.
