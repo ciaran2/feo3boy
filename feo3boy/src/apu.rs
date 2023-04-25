@@ -1,5 +1,7 @@
+use std::ops::{Mul, MulAssign};
+
 use bitflags::bitflags;
-use log::{debug, error, info, trace};
+use log::{debug, info, trace};
 
 use crate::bits::BitGroup;
 use crate::memdev::{MemDevice, RelativeAddr};
@@ -497,8 +499,8 @@ const HIGH_PASS_CUTOFF: f32 = 200.0;
 
 #[derive(Clone, Debug, Default)]
 struct HighPassFilter {
-    last_input: (f32, f32),
-    last_output: (f32, f32),
+    last_input: Sample,
+    last_output: Sample,
     alpha: f32,
 }
 
@@ -507,11 +509,11 @@ impl HighPassFilter {
         self.alpha = 1.0 / (2.0 * 3.1416 / (sample_rate as f32) * HIGH_PASS_CUTOFF + 1.0);
     }
 
-    fn filter_sample(&mut self, input: (f32, f32)) -> (f32, f32) {
-        let output = (
-            self.alpha * (input.0 + self.last_output.0 - self.last_input.0),
-            self.alpha * (input.1 + self.last_output.1 - self.last_input.1),
-        );
+    fn filter_sample(&mut self, input: Sample) -> Sample {
+        let output = Sample {
+            left: self.alpha * (input.left + self.last_output.left - self.last_input.left),
+            right: self.alpha * (input.right + self.last_output.right - self.last_input.right),
+        };
 
         self.last_input = input;
         self.last_output = output;
@@ -524,21 +526,58 @@ impl HighPassFilter {
 const CLOCK_SPEED: u32 = 4194304;
 
 // maximum period of any waveform in t cycles
+#[allow(unused)]
 const MAX_PERIOD: u32 = 131072;
 
 #[derive(Clone, Debug)]
 pub struct ApuState {
-    //pub output_buffer: VecDeque<(i16, i16)>,
-    output_sample: Option<(f32, f32)>,
+    output_sample: Option<Sample>,
     output_period: f32,
     sample_cursor: f32,
     hpf: HighPassFilter,
 }
 
+/// A single audio sample.
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+pub struct Sample {
+    /// Wave value for the left speaker.
+    pub left: f32,
+    /// Wave value for the right speaker.
+    pub right: f32,
+}
+
+impl Mul<f32> for Sample {
+    type Output = Sample;
+
+    fn mul(self, rhs: f32) -> Self::Output {
+        Sample {
+            left: self.left * rhs,
+            right: self.right * rhs,
+        }
+    }
+}
+
+impl Mul<Sample> for f32 {
+    type Output = Sample;
+
+    #[inline]
+    fn mul(self, rhs: Sample) -> Self::Output {
+        rhs * self
+    }
+}
+
+impl MulAssign<f32> for Sample {
+    #[inline]
+    fn mul_assign(&mut self, rhs: f32) {
+        *self = *self * rhs;
+    }
+}
+
 impl ApuState {
     pub fn new() -> Self {
         ApuState {
-            //output_buffer: VecDeque::new(),
+            // Number of samples saved is low -- the runner should be moving these to the
+            // audio system faster than we're generating them.
             output_sample: None,
             output_period: 0.0,
             sample_cursor: 0.0,
@@ -552,15 +591,8 @@ impl ApuState {
         info!("Setting output period {}", self.output_period);
     }
 
-    pub fn consume_output_sample(&mut self) -> Option<(f32, f32)> {
-        let output_sample = self.output_sample;
-
-        //if let Some(sample) = output_sample {
-        //    info!("Emitting output sample {}, {}", sample.0, sample.1);
-        //}
-
-        self.output_sample = None;
-        output_sample
+    pub fn consume_output_sample(&mut self) -> Option<Sample> {
+        self.output_sample.take()
     }
 }
 
@@ -1108,7 +1140,7 @@ pub fn apu_tick(ctx: &mut impl ApuContext) {
 }
 
 pub fn tick(ctx: &mut impl ApuContext, tcycles: u64) {
-    let mut sample_cursor = ctx.apu().sample_cursor;
+    let sample_cursor = ctx.apu().sample_cursor;
 
     ctx.apu_regs_mut().ch1.check_trigger();
     ctx.apu_regs_mut().ch2.check_trigger();
@@ -1123,9 +1155,11 @@ pub fn tick(ctx: &mut impl ApuContext, tcycles: u64) {
             ctx.apu_regs_mut().ch3.tick(next_sample as u32);
             ctx.apu_regs_mut().ch4.tick(next_sample as u32);
 
-            let left_sample = get_stereo_sample(ctx, false);
-            let right_sample = get_stereo_sample(ctx, true);
-            let stereo_sample = ctx.apu_mut().hpf.filter_sample((left_sample, right_sample));
+            let sample = Sample {
+                left: get_stereo_sample(ctx, false),
+                right: get_stereo_sample(ctx, true),
+            };
+            let stereo_sample = ctx.apu_mut().hpf.filter_sample(sample);
             ctx.apu_mut().output_sample = Some(stereo_sample);
 
             ctx.apu_regs_mut()
