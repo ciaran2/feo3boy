@@ -173,6 +173,9 @@ struct Args {
     /// Whether to enable vsync (defaults to true).
     #[arg(long, action = ArgAction::Set, default_value_t = true)]
     vsync: bool,
+    /// Run this many times slower than realtime.
+    #[arg(long, default_value_t = 1)]
+    slomo: u32,
 }
 
 fn main() {
@@ -234,11 +237,13 @@ fn main() {
 
     let audio_output_config = init_audio_stream();
 
+    let slomo = args.slomo.max(1);
+
     let mut sample_producer = if !args.mute {
         match audio_output_config {
             Some((ref stream, sample_rate, sample_producer)) => {
                 info!("Setting output sample rate: {}", sample_rate.0);
-                gb.set_sample_rate(sample_rate.0);
+                gb.set_sample_rate(sample_rate.0 * slomo);
                 if let Err(err) = stream.play() {
                     error!("Error playing audio stream: {}", err);
                 }
@@ -275,7 +280,7 @@ fn main() {
     let mut pending_audio_sample: Option<Sample> = None;
 
     let mut last_loop_start = Instant::now();
-    let mut time_since_startup = Duration::ZERO;
+    let mut scaled_time_since_startup = Duration::ZERO;
 
     event_loop.run(move |event, _, control_flow| {
         let loop_start = Instant::now();
@@ -283,7 +288,7 @@ fn main() {
         last_loop_start = loop_start;
         // This is fine because Duration is an integer-based type, so we can do it
         // cumulatively like this.
-        time_since_startup += last_loop_time;
+        scaled_time_since_startup += last_loop_time / slomo;
 
         // Amount of time allocated for fast-forward.
         let ff_end = loop_start + last_loop_time.mul_f32(0.9).max(Duration::from_millis(5));
@@ -359,7 +364,7 @@ fn main() {
                     }
                 } else if args.mute {
                     let emu_time = gb.elapsed_time();
-                    if emu_time > time_since_startup {
+                    if emu_time > scaled_time_since_startup {
                         // Emulator has gotten ahead of realtime, time to break.
                         break;
                     }
