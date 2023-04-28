@@ -1,4 +1,5 @@
 use std::io::{self, Read, Write};
+use std::time::Duration;
 
 use crate::apu::{self, ApuContext, ApuRegs, ApuState};
 use crate::gbz80core::direct_executor::DirectExecutor;
@@ -32,12 +33,12 @@ pub struct Gb<E: Executor = DirectExecutor> {
     /// State of video rendering
     pub ppu: PpuState,
     /// Whether display is ready to be sent to the outside world
-    pub display_ready: bool,
+    display_ready: bool,
     /// State of the executor.
-    pub executor_state: E::State,
+    executor_state: E::State,
     /// Total number of m-cycles that have passed since the Gb started (not saved,
     /// restarts when starting from a savestate or cartrige ram save).
-    pub mcycles: u64,
+    mcycles: u64,
 }
 
 impl Gb {
@@ -114,22 +115,48 @@ impl<E: Executor> Gb<E> {
 
     /// Tick forward by one instruction, executing background and graphics processing
     /// operations as needed.
-    pub fn tick(&mut self) -> (Option<&[(u8, u8, u8)]>, Option<(f32, f32)>) {
+    pub fn tick(&mut self) {
+        self.display_ready = false;
         E::run_single_instruction(self);
+    }
 
+    /// Set the sample rate for the APU.
+    #[inline]
+    pub fn set_sample_rate(&mut self, sample_rate: u32) {
+        self.apu.set_output_sample_rate(sample_rate);
+    }
+
+    /// Returns true if the PPU finished a frame this tick and the display is ready to be
+    /// sent out.
+    #[inline]
+    pub fn display_ready(&self) -> bool {
+        self.display_ready
+    }
+
+    /// If the display is ready, get a reference to the PPU frame buffer.
+    pub fn get_ready_frame(&self) -> Option<&[(u8, u8, u8)]> {
         if self.display_ready {
-            self.display_ready = false;
-            (
-                Some(self.ppu.screen_buffer()),
-                self.apu.consume_output_sample(),
-            )
+            Some(self.ppu.screen_buffer())
         } else {
-            (None, self.apu.consume_output_sample())
+            None
         }
     }
 
-    pub fn set_sample_rate(&mut self, sample_rate: u32) {
-        self.apu.set_output_sample_rate(sample_rate);
+    /// Get the total number of mcycles elapsed since emulator start.
+    #[inline]
+    pub fn elapsed_mcycles(&self) -> u64 {
+        self.mcycles
+    }
+
+    /// Get the total duration since the emulator started (based on the number of m-cycles
+    /// elapsed.
+    pub fn elapsed_time(&self) -> Duration {
+        const MCYCLES_PER_SEC: u64 = 1_048_576;
+        const NANOS_SPER_SEC: u64 = 1_000_000_000;
+        let secs = self.mcycles / MCYCLES_PER_SEC;
+        let rem = self.mcycles % MCYCLES_PER_SEC;
+        let nanos = rem * NANOS_SPER_SEC / MCYCLES_PER_SEC;
+        Duration::new(secs, nanos as u32)
     }
 }
 
@@ -161,7 +188,7 @@ impl<E: Executor> ExecutorContext for Gb<E> {
     }
 
     fn yield1m(&mut self) {
-        self.mcycles += 1;
+        self.mcycles = self.mcycles.wrapping_add(1);
         // TODO: run background processing while yielded.
         // Continue processing serial while yielded.
         input::update(self);

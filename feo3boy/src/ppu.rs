@@ -420,10 +420,13 @@ memdev_fields!(PpuRegs, len: 0x0c, {
     0x0b => window_x,
 });
 
+pub type ScreenBuffer = Box<[(u8, u8, u8); 23040]>;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PpuState {
     truecolor_palette: [(u8, u8, u8); 4],
-    screen_buffer: [(u8, u8, u8); 23040],
+    visible_screen_buffer: ScreenBuffer,
+    drawing_screen_buffer: ScreenBuffer,
     scanline_ticks: u64,
     object_cursor: u16,
     scanline_x: u8,
@@ -441,7 +444,7 @@ impl PpuState {
     }
 
     pub fn screen_buffer(&self) -> &[(u8, u8, u8)] {
-        &self.screen_buffer
+        &*self.visible_screen_buffer
     }
 
     pub fn scanline_reset(&mut self) {
@@ -455,6 +458,14 @@ impl PpuState {
         self.bg_discard = 0;
         self.in_window = false;
     }
+
+    /// Swap the double-buffer between the visible and drawing screens.
+    fn swap_buffer(&mut self) {
+        mem::swap::<ScreenBuffer>(
+            &mut self.visible_screen_buffer,
+            &mut self.drawing_screen_buffer,
+        );
+    }
 }
 
 impl Default for PpuState {
@@ -466,7 +477,8 @@ impl Default for PpuState {
                 (0x5a, 0x5a, 0x5a),
                 (0x00, 0x00, 0x00),
             ],
-            screen_buffer: [(0xff, 0xff, 0xff); 23040],
+            visible_screen_buffer: Box::new([(0xff, 0xff, 0xff); 23040]),
+            drawing_screen_buffer: Box::new([(0xff, 0xff, 0xff); 23040]),
             scanline_ticks: 0,
             object_cursor: 0,
             scanline_x: 0,
@@ -586,6 +598,7 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
                         if lcd_stat.contains(LcdStat::VBLANK_INTERRUPT_ENABLE) {
                             ctx.interrupts_mut().send(InterruptFlags::STAT);
                         }
+                        ctx.ppu_mut().swap_buffer();
                         ctx.display_ready();
                     }
                 }
@@ -684,7 +697,7 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
                     let bg_pixel = ctx.ppu_mut().bg_fifo.pop_front().unwrap();
                     let obj_pixel = ctx.ppu_mut().obj_fifo.pop_front();
 
-                    ctx.ppu_mut().screen_buffer[buffer_index] = {
+                    ctx.ppu_mut().drawing_screen_buffer[buffer_index] = {
                         let gb_color = match obj_pixel {
                             Some(obj_pixel) => {
                                 if obj_pixel.0 == 0
