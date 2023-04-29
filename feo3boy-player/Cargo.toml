@@ -2,6 +2,7 @@
 name = "feo3boy-player"
 version = "0.1.0"
 edition = "2021"
+description = "Cross-platform frontend for the `feo3boy` emulator core."
 license = "MIT"
 repository = "https://github.com/ciaran2/feo3boy.git"
 categories = ["emulators"]
