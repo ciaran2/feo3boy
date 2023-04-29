@@ -3,6 +3,10 @@ name = "feo3boy"
 version = "0.1.0"
 authors = ["ciaran"]
 edition = "2021"
+license = "MIT"
+repository = "https://github.com/ciaran2/feo3boy.git"
+categories = ["emulators"]
+keywords = ["gameboy", "retro"]
 
 [features]
 test-roms = []

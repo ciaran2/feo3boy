@@ -2,6 +2,10 @@
 name = "web-debugger"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+repository = "https://github.com/ciaran2/feo3boy.git"
+categories = ["emulators"]
+keywords = ["gameboy", "retro"]
 
 [dependencies]
 feo3boy = { path = "../feo3boy" }
