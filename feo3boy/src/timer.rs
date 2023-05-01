@@ -1,5 +1,7 @@
-use crate::apu::{self, ApuContext};
+use std::mem;
+
 use crate::bits::BitGroup;
+use crate::clock::{ClockSnapshot, MCycle, SystemClockContext, TimedChangeTracker};
 use crate::interrupts::{InterruptContext, InterruptFlags, Interrupts};
 use crate::memdev::{MemDevice, RelativeAddr};
 
@@ -14,20 +16,20 @@ impl TimerControl {
     const TIMER_ENABLE: BitGroup = BitGroup(0b0000_0100);
     const RW_BITS: u8 = 0b0000_0111;
 
-    pub fn bits(&self) -> u8 {
+    pub const fn bits(&self) -> u8 {
         self.0
     }
 
     /// Get the timer period selecton number, this is *not* the actual period value
     /// selected.
     #[inline]
-    pub fn period_idx(&self) -> u8 {
+    pub const fn period_idx(&self) -> u8 {
         Self::TIMER_PERIOD.extract(self.0)
     }
 
     /// Get the actual period selected.
     #[inline]
-    pub fn period(&self) -> u16 {
+    pub const fn period(&self) -> u16 {
         match self.period_idx() {
             0 => 1024,
             1 => 16,
@@ -35,6 +37,13 @@ impl TimerControl {
             3 => 256,
             _ => panic!("Illegal timer period number encountered. This should be impossible."),
         }
+    }
+
+    /// Get a mask which extracts the bit from the divider which corresponds to the
+    /// selected period.
+    #[inline]
+    const fn divider_bit(&self) -> u16 {
+        self.period() >> 1
     }
 
     /// Set the timer period selecton number, this is *not* the actual period value
@@ -46,7 +55,7 @@ impl TimerControl {
 
     /// Get the timer enable
     #[inline]
-    pub fn timer_enable(&self) -> bool {
+    pub const fn timer_enable(&self) -> bool {
         Self::TIMER_ENABLE.extract_bool(self.0)
     }
 
@@ -57,13 +66,110 @@ impl TimerControl {
     }
 }
 
+#[derive(Default, Debug, Clone, Eq, PartialEq)]
+struct TimerCounter(TimedChangeTracker<u8>);
+
+impl TimerCounter {
+    /// Increment the timer and return true if it overflowed.
+    fn increment(&mut self) -> bool {
+        let (timer, overflow) = self.0.overflowing_add(1);
+        self.0.set_untracked(timer);
+        overflow
+    }
+}
+
+#[derive(Default, Debug, Clone, Eq, PartialEq)]
+pub struct TimerDivider(TimedChangeTracker<u16>);
+
+impl TimerDivider {
+    /// Update the timer divider based on the current m-cycle, and return the current
+    /// value.
+    fn update(&mut self, now: MCycle) -> u16 {
+        let ticks_since_update = now - self.0.changed_cycle();
+        let new_divider = *self.0 as u64 + ticks_since_update.as_tcycle().as_u64();
+        self.0.set_untracked(new_divider as u16);
+        *self.0
+    }
+
+    /// Clear the divider to zero and reset the modification time (mark dirty).
+    fn reset(&mut self) {
+        self.0.set(0);
+    }
+
+    /// Get the portion of the divider register that is visible to the CPU.
+    fn cpu_visible_portion(&self) -> u8 {
+        // Is this faster than using a shift or division? Do all those options optimize to
+        // the same thing? No idea!
+        let [_, high] = self.0.to_le_bytes();
+        high
+    }
+
+    /// Get the raw value of the divider.
+    pub fn value(&self) -> u16 {
+        *self.0
+    }
+
+    /// Get the clock cycle when the divider was last reset by the CPU.
+    pub fn reset_cycle(&self) -> MCycle {
+        self.0.changed_cycle()
+    }
+}
+
 /// Memory-mapped IO registers used by the Timer.
-#[derive(Default, Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct TimerRegs {
-    pub divider: u16,
-    pub timer: u8,
-    pub timer_mod: u8,
-    pub timer_control: TimerControl,
+    /// Divider is incremented at 16 KiHz or 32 KiHz at double speed. This register
+    /// controls when the other timer registers are incremented.
+    divider: TimerDivider,
+    /// Main counter register for the timer, incremented whenever the bit of `divider`
+    /// selected by `timer_period` goes from 1 to 0.
+    timer_counter: TimerCounter,
+    /// Timer modulo is the value that the timer counter gets reset to whenever it
+    /// overflows.
+    timer_mod: u8,
+    /// Control register for the timer which controls whether the timer is enabled and
+    /// what the period is.
+    timer_control: TimerControl,
+    /// Whether the timer is enabled, cached from timer_control.
+    timer_enable: bool,
+    /// The bit to be selected from the divider, derived from the timer period (cached
+    /// value of timer_control.period() >> 1).
+    selected_divider_bit: u16,
+}
+
+impl TimerRegs {
+    /// Update the divider and counter if they were written since the last time their
+    /// changed_times were updated.
+    pub fn update_if_dirty(&mut self, now: ClockSnapshot) {
+        self.divider.0.update_if_dirty(now);
+        self.timer_counter.0.update_if_dirty(now);
+    }
+
+    /// Set the value in the counter to the value in the `timer_mod`.
+    fn reset_counter_to_mod(&mut self) {
+        self.timer_counter.0.set_untracked(self.timer_mod);
+    }
+
+    /// Get the divider register.
+    pub fn divider(&self) -> &TimerDivider {
+        &self.divider
+    }
+}
+
+impl Default for TimerRegs {
+    fn default() -> Self {
+        let timer_control = TimerControl::default();
+        let timer_enable = timer_control.timer_enable();
+        let selected_divider_bit = timer_control.divider_bit();
+        Self {
+            divider: Default::default(),
+            timer_counter: Default::default(),
+            timer_mod: Default::default(),
+            timer_control,
+            timer_enable,
+            selected_divider_bit,
+        }
+    }
 }
 
 impl MemDevice for TimerRegs {
@@ -71,8 +177,8 @@ impl MemDevice for TimerRegs {
 
     fn read_byte_relative(&self, addr: RelativeAddr) -> u8 {
         match addr.relative() {
-            0x00 => (self.divider / 0x100) as u8,
-            0x01 => self.timer,
+            0x00 => self.divider.cpu_visible_portion(),
+            0x01 => *self.timer_counter.0,
             0x02 => self.timer_mod,
             0x03 => self.timer_control.read_byte_relative(addr.offset_by(0x03)),
             _ => panic!("Address {} out of range for TimerRegs", addr),
@@ -81,12 +187,17 @@ impl MemDevice for TimerRegs {
 
     fn write_byte_relative(&mut self, addr: RelativeAddr, val: u8) {
         match addr.relative() {
-            0x00 => self.divider = 0,
-            0x01 => self.timer = val,
+            0x00 => self.divider.reset(),
+            0x01 => {
+                self.timer_counter.0.set(val);
+            }
             0x02 => self.timer_mod = val,
-            0x03 => self
-                .timer_control
-                .write_byte_relative(addr.offset_by(0x03), val),
+            0x03 => {
+                self.timer_control
+                    .write_byte_relative(addr.offset_by(0x03), val);
+                self.timer_enable = self.timer_control.timer_enable();
+                self.selected_divider_bit = self.timer_control.divider_bit();
+            }
             _ => panic!("Address {} out of range for TimerRegs", addr),
         }
     }
@@ -95,7 +206,7 @@ impl MemDevice for TimerRegs {
 }
 
 /// Context trait providing access to fields needed to service graphics.
-pub trait TimerContext: InterruptContext + ApuContext {
+pub trait TimerContext: InterruptContext + SystemClockContext {
     /// Get the timer state.
     fn timer(&self) -> &TimerState;
 
@@ -108,10 +219,11 @@ pub trait TimerContext: InterruptContext + ApuContext {
 
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct TimerState {
-    timer_ticks: u64,
-    old_divider: u16,
-    interrupt_queued: bool,
-    interrupt_delay: u64,
+    /// The bit selected from the divider last cycle. The timer increments whenever the
+    /// bit selected from the divider goes from 1 to 0.
+    old_divider_bit: bool,
+    /// Tracks when the timer overflow
+    overflow_timing: Option<TimerOverflowTiming>,
 }
 
 impl TimerState {
@@ -119,73 +231,95 @@ impl TimerState {
         Default::default()
     }
 
-    fn queue_interrupt(&mut self) {
-        self.interrupt_queued = true;
-        self.interrupt_delay = 4;
+    /// Set the interrupt to be triggered after appropriate delay.
+    fn queue_interrupt(&mut self, now: MCycle) {
+        self.overflow_timing = Some(TimerOverflowTiming {
+            overflowed_at: now,
+            interrupt_at: now + 1,
+        });
     }
 }
 
-fn increment_timer(ctx: &mut impl TimerContext) {
-    let (timer, overflow) = ctx.timer_regs().timer.overflowing_add(1);
-
-    if overflow {
-        ctx.timer_mut().queue_interrupt();
-    }
-
-    ctx.timer_regs_mut().timer = timer;
+#[derive(Default, Debug, Copy, Clone, PartialEq, Eq)]
+struct TimerOverflowTiming {
+    /// The clock cycle when the timer overflowed. This is the cycle where the TIMA
+    /// register is set to 00 and readable as 00 by the CPU.
+    overflowed_at: MCycle,
+    /// The clock cycle when the interrupt should be sent.
+    interrupt_at: MCycle,
 }
 
-fn check_interrupt(ctx: &mut impl TimerContext, tcycles: u64) {
-    // an intervening write to the timer will discard the interrupt
-    if ctx.timer().interrupt_queued && ctx.timer_regs().timer == 0 {
-        if tcycles >= ctx.timer().interrupt_delay as u64 {
-            ctx.timer_mut().interrupt_queued = false;
-            let timer_mod = ctx.timer_regs().timer_mod;
-            ctx.timer_regs_mut().timer = timer_mod;
+pub fn tick(ctx: &mut impl TimerContext) {
+    let now = ctx.clock().elapsed_cycles();
+
+    // We need to handle weird behavior related to cycles when the timer overflows (copied
+    // from https://gbdev.io/pandocs/Timer_Obscure_Behaviour.html).
+    //
+    //           [Z] [A] [B][C]
+    // SYS  FD FE FF |00| 01 02 03
+    // TIMA FF FF FF |00| 23 23 23
+    // TMA  23 23 23 |23| 23 23 23
+    // IF   E0 E0 E0 |E0| E4 E4 E4
+
+    if let Some(TimerOverflowTiming {
+        overflowed_at,
+        interrupt_at,
+    }) = ctx.timer().overflow_timing
+    {
+        if ctx.timer_regs().timer_counter.0.changed_cycle() == overflowed_at {
+            // The timer register written on the same cycle that it overflowed. This
+            // aborts the interrupt.
+            ctx.timer_mut().overflow_timing = None;
+        } else if now == interrupt_at {
+            // We are on the interrupt cycle.
+            ctx.timer_regs_mut().reset_counter_to_mod();
             ctx.interrupts_mut().send(InterruptFlags::TIMER);
-        } else {
-            ctx.timer_mut().interrupt_delay -= tcycles;
-        }
-    } else {
-        ctx.timer_mut().interrupt_queued = false;
-    }
-}
-
-pub fn tick(ctx: &mut impl TimerContext, tcycles: u64) {
-    let mut divider = ctx.timer_regs().divider;
-
-    check_interrupt(ctx, tcycles);
-
-    if ctx.timer_regs().timer_control.timer_enable() {
-        let period = ctx.timer_regs().timer_control.period();
-
-        // falling edge case when divider has been reset
-        if (ctx.timer().old_divider & (period >> 1)) != 0 && (divider & (period >> 1)) == 0 {
-            increment_timer(ctx);
-        } else {
-            let mask = period - 1;
-
-            if divider & mask + tcycles as u16 & mask > period || tcycles > period as u64 {
-                increment_timer(ctx)
-            }
-        }
-    }
-
-    // Update APU at ~512 Hz
-    // period will have to be dynamic to support GBC double speed
-    let period = 0x2000;
-    // falling edge case when divider has been reset
-    if (ctx.timer().old_divider & (period >> 1)) != 0 && (divider & (period >> 1)) == 0 {
-        apu::apu_tick(ctx);
-    } else {
-        let mask = period - 1;
-
-        if divider & mask + tcycles as u16 & mask > period || tcycles > period as u64 {
-            apu::apu_tick(ctx);
+        } else if now > interrupt_at {
+            debug_assert!(
+                now == interrupt_at + 1,
+                "This assumes tick is called every m-cycle"
+            );
+            // We have to wait until the next cycle to clear overflow_timing because we
+            // need to patch some of the timer registers if the CPU does a write in the
+            // same cycle as we reset the counter to the modulus.
+            ctx.timer_mut().overflow_timing = None;
+            // If the CPU wrote to the timer_mod register on the same cycle that we reset
+            // it to the mod, we should take the value written by the CPU.
+            // If the CPU wrote to the timer_counter register on the same cycle that we
+            // reset it to the mod, we should ignore the value written by the CPU and set
+            // to the mod anyway.
+            // Both of these are equivalent to overwriting timer_counter with the
+            // timer_mod the cycle after we queued the interrupt (in addition to doing so
+            // on the same cycle as we queued the interrupt, which we do in case the CPU
+            // is reading the timer_counter that cycle rather than writing).
+            //
+            // As long as tick is called every m-cycle, we don't have to worry about the
+            // timer being incremented in the interum, because this can only happen if the
+            // selected bit from the divider just went to zero and there's no way for it
+            // to become 1 and then 0 again in fewer than 3 m-cycles:
+            //
+            // - The fastest `period` is every-other m-cycle, so since the bit became zero
+            //   on `overflowed_at`, the earliest it can become 1 is interrupt_at + 1
+            //   (which occurs below, so this code executes before that increment anyway).
+            // - The CPU could not be reseting that bit to 0 and changing timer_mod in the
+            //   same cycle. CPU is too slow to do both of those things in the space
+            //   between these timer ticks.
+            ctx.timer_regs_mut().reset_counter_to_mod();
         }
     }
 
-    divider = divider.wrapping_add(tcycles as u16);
-    ctx.timer_mut().old_divider = ctx.timer_regs().divider;
-    ctx.timer_regs_mut().divider = divider;
+    let divider = ctx.timer_regs_mut().divider.update(now);
+    let &TimerRegs {
+        timer_enable,
+        selected_divider_bit,
+        ..
+    } = ctx.timer_regs();
+    let divider_bit = timer_enable && (divider & selected_divider_bit) != 0;
+    let old_divider_bit = mem::replace(&mut ctx.timer_mut().old_divider_bit, divider_bit);
+
+    if old_divider_bit && !divider_bit {
+        if ctx.timer_regs_mut().timer_counter.increment() {
+            ctx.timer_mut().queue_interrupt(now);
+        }
+    }
 }

@@ -1,7 +1,8 @@
 use std::io::{self, Read, Write};
-use std::time::Duration;
+use std::marker::PhantomData;
 
 use crate::apu::{self, ApuContext, ApuRegs, ApuState};
+use crate::clock::{SystemClock, SystemClockContext};
 use crate::gbz80core::direct_executor::DirectExecutor;
 use crate::gbz80core::direct_executor_v2::DirectExecutorV2;
 use crate::gbz80core::executor::{Executor, ExecutorConfig};
@@ -13,7 +14,7 @@ use crate::interrupts::InterruptContext;
 use crate::memdev::{BiosRom, Cartridge, GbMmu, MemContext, Oam, SaveData, Vram};
 use crate::ppu::{self, PpuContext, PpuRegs, PpuState};
 use crate::serial::{self, SerialContext, SerialRegs, SerialState};
-use crate::timer::{self, TimerContext, TimerRegs, TimerState};
+use crate::timer::{self, TimerContext, TimerDivider, TimerRegs, TimerState};
 
 /// Represents a "real" gameboy, by explicitly using the GbMmu for memory.
 #[derive(Clone, Debug)]
@@ -36,9 +37,8 @@ pub struct Gb<E: Executor = DirectExecutor> {
     display_ready: bool,
     /// State of the executor.
     executor_state: E::State,
-    /// Total number of m-cycles that have passed since the Gb started (not saved,
-    /// restarts when starting from a savestate or cartrige ram save).
-    mcycles: u64,
+    /// System clock tracking cycles and real time in the emulator.
+    clock: SystemClock,
 }
 
 impl Gb {
@@ -76,19 +76,25 @@ where
 {
     /// Create a `Gb` with the given bios and cartridge, using the executor specified by
     /// this type. Works for executors with state types that implement `Default`.
+    #[inline]
     pub fn for_executor(bios: BiosRom, cart: Cartridge) -> Self {
-        Gb {
-            cpustate: Gbz80State::new(),
-            mmu: Box::new(GbMmu::new(bios, cart)),
-            button_states: ButtonStates::empty(),
-            serial: SerialState::new(),
-            timer: TimerState::new(),
-            apu: ApuState::new(),
-            ppu: PpuState::new(),
-            display_ready: false,
-            executor_state: E::State::default(),
-            mcycles: 0,
+        struct DefaultConfig<E>(PhantomData<*const E>);
+        impl<E> DefaultConfig<E> {
+            const CONFIG: Self = Self(PhantomData);
         }
+        impl<E> ExecutorConfig for DefaultConfig<E>
+        where
+            E: Executor,
+            E::State: Default,
+        {
+            type Executor = E;
+
+            #[inline]
+            fn create_initial_state(&self) -> <Self::Executor as Executor>::State {
+                E::State::default()
+            }
+        }
+        Self::for_config(bios, cart, &DefaultConfig::<E>::CONFIG)
     }
 }
 
@@ -109,7 +115,7 @@ impl<E: Executor> Gb<E> {
             ppu: PpuState::new(),
             display_ready: false,
             executor_state: config.create_initial_state(),
-            mcycles: 0,
+            clock: SystemClock::new(),
         }
     }
 
@@ -142,21 +148,9 @@ impl<E: Executor> Gb<E> {
         }
     }
 
-    /// Get the total number of mcycles elapsed since emulator start.
-    #[inline]
-    pub fn elapsed_mcycles(&self) -> u64 {
-        self.mcycles
-    }
-
-    /// Get the total duration since the emulator started (based on the number of m-cycles
-    /// elapsed.
-    pub fn elapsed_time(&self) -> Duration {
-        const MCYCLES_PER_SEC: u64 = 1_048_576;
-        const NANOS_SPER_SEC: u64 = 1_000_000_000;
-        let secs = self.mcycles / MCYCLES_PER_SEC;
-        let rem = self.mcycles % MCYCLES_PER_SEC;
-        let nanos = rem * NANOS_SPER_SEC / MCYCLES_PER_SEC;
-        Duration::new(secs, nanos as u32)
+    /// Get a read-only reference to the GameBoy's internal system clock.
+    pub fn clock(&self) -> &SystemClock {
+        &self.clock
     }
 }
 
@@ -188,15 +182,24 @@ impl<E: Executor> ExecutorContext for Gb<E> {
     }
 
     fn yield1m(&mut self) {
-        self.mcycles = self.mcycles.wrapping_add(1);
+        self.mmu.update_if_dirty(self.clock.snapshot());
         // TODO: run background processing while yielded.
         // Continue processing serial while yielded.
         input::update(self);
         serial::tick(self, 4);
         // apu must update before timer to catch falling edges from CPU writes
-        apu::tick(self, 4);
-        timer::tick(self, 4);
+        apu::tick(self);
         ppu::tick(self, 4);
+
+        self.clock.advance1m();
+        // Within each m-cycle, the timer tick must run before the CPU tick.
+        // Timer behavior with simultaneous CPU writes is a bit strange and somewhat
+        // difficult to do correctly, since we have to treat things as sort of happening
+        // at the same time even though we do these two things sequentially. In effect, we
+        // want the timer to tick first so that the CPU will observe the correct state if
+        // it does a read, and then if the CPU did a write, we can patch the timer state
+        // based on the CPU's write on the next tick.
+        timer::tick(self);
     }
 }
 
@@ -246,14 +249,17 @@ impl<E: Executor> InputContext for Gb<E> {
         self.button_states
     }
 
+    #[inline]
     fn set_button_states(&mut self, button_states: ButtonStates) {
         self.button_states = button_states;
     }
 
+    #[inline]
     fn button_reg(&self) -> ButtonRegister {
         self.mmu.io.buttons
     }
 
+    #[inline]
     fn set_button_reg(&mut self, buttons: ButtonRegister) {
         self.mmu.io.buttons = buttons;
     }
@@ -265,14 +271,17 @@ impl<E: Executor> SerialContext for Gb<E> {
         &self.serial
     }
 
+    #[inline]
     fn serial_mut(&mut self) -> &mut SerialState {
         &mut self.serial
     }
 
+    #[inline]
     fn serial_regs(&self) -> &SerialRegs {
         &self.mmu.io.serial_regs
     }
 
+    #[inline]
     fn serial_regs_mut(&mut self) -> &mut SerialRegs {
         &mut self.mmu.io.serial_regs
     }
@@ -284,14 +293,17 @@ impl<E: Executor> TimerContext for Gb<E> {
         &self.timer
     }
 
+    #[inline]
     fn timer_mut(&mut self) -> &mut TimerState {
         &mut self.timer
     }
 
+    #[inline]
     fn timer_regs(&self) -> &TimerRegs {
         &self.mmu.io.timer_regs
     }
 
+    #[inline]
     fn timer_regs_mut(&mut self) -> &mut TimerRegs {
         &mut self.mmu.io.timer_regs
     }
@@ -303,16 +315,23 @@ impl<E: Executor> ApuContext for Gb<E> {
         &self.apu
     }
 
+    #[inline]
     fn apu_mut(&mut self) -> &mut ApuState {
         &mut self.apu
     }
 
+    #[inline]
     fn apu_regs(&self) -> &ApuRegs {
         &self.mmu.io.apu_regs
     }
 
+    #[inline]
     fn apu_regs_mut(&mut self) -> &mut ApuRegs {
         &mut self.mmu.io.apu_regs
+    }
+
+    fn divider(&self) -> &TimerDivider {
+        self.mmu.io.timer_regs.divider()
     }
 }
 
@@ -322,33 +341,48 @@ impl<E: Executor> PpuContext for Gb<E> {
         &self.ppu
     }
 
+    #[inline]
     fn ppu_mut(&mut self) -> &mut PpuState {
         &mut self.ppu
     }
 
+    #[inline]
     fn ppu_regs(&self) -> &PpuRegs {
         &self.mmu.io.ppu_regs
     }
 
+    #[inline]
     fn ppu_regs_mut(&mut self) -> &mut PpuRegs {
         &mut self.mmu.io.ppu_regs
     }
 
+    #[inline]
     fn vram(&self) -> &Vram {
         &self.mmu.vram
     }
+    #[inline]
     fn vram_mut(&mut self) -> &mut Vram {
         &mut self.mmu.vram
     }
 
+    #[inline]
     fn oam(&self) -> &Oam {
         &self.mmu.oam
     }
+    #[inline]
     fn oam_mut(&mut self) -> &mut Oam {
         &mut self.mmu.oam
     }
 
+    #[inline]
     fn display_ready(&mut self) {
         self.display_ready = true;
+    }
+}
+
+impl<E: Executor> SystemClockContext for Gb<E> {
+    #[inline]
+    fn clock(&self) -> &SystemClock {
+        &self.clock
     }
 }

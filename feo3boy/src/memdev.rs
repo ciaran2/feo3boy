@@ -8,6 +8,7 @@ use thiserror::Error;
 pub use feo3boy_memdev_derive::MemDevice;
 
 use crate::apu::ApuRegs;
+use crate::clock::ClockSnapshot;
 use crate::input::ButtonRegister;
 use crate::interrupts::{InterruptContext, InterruptEnable, InterruptFlags, Interrupts};
 use crate::ppu::PpuRegs;
@@ -1008,6 +1009,11 @@ impl MemMappedIo {
     pub fn new() -> Self {
         Default::default()
     }
+
+    pub fn update_if_dirty(&mut self, now: ClockSnapshot) {
+        self.timer_regs.update_if_dirty(now);
+        self.apu_regs.update_if_dirty(now);
+    }
 }
 
 memdev_fields!(MemMappedIo, len: 0x80, {
@@ -1113,6 +1119,11 @@ impl GbMmu {
             zram: [0; 127],
             interrupt_enable: InterruptEnable(InterruptFlags::empty()),
         }
+    }
+
+    /// Update the modified-times of any memory locations that require time-tracking.
+    pub fn update_if_dirty(&mut self, now: ClockSnapshot) {
+        self.io.update_if_dirty(now);
     }
 }
 

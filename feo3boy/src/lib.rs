@@ -3,6 +3,7 @@ mod macros;
 
 pub mod apu;
 pub mod bits;
+pub mod clock;
 pub mod gb;
 pub mod gbz80core;
 pub mod input;

@@ -1,0 +1,329 @@
+//! Implements a type for tracking the internal GB clock in both t-cycles, m-cycles and
+//! Duration units relative to the GameBoy's system startup.
+
+use std::iter::FusedIterator;
+use std::mem;
+use std::ops::{Deref, Range};
+use std::time::Duration;
+
+mod typed_cycles;
+
+pub use typed_cycles::{DCycle, MCycle, TCycle};
+
+/// Enum of possible system clock speeds.
+#[derive(Debug, Default, Copy, Clone, Eq, PartialEq)]
+pub enum ClockSpeed {
+    /// Clock speed is normal (4 MiHz).
+    #[default]
+    Normal = 1,
+    /// Clock is at double speed (8 MiHz).
+    Double = 2,
+}
+
+impl ClockSpeed {
+    /// Amount that systemc clock speed is multiplied by.
+    #[inline]
+    pub const fn speed_multiplier(self) -> u64 {
+        self as u64
+    }
+
+    /// Get the number of dcycles per mcycle at this clock speed.
+    #[inline]
+    pub const fn dcycles_per_mcycle(self) -> u64 {
+        match self {
+            ClockSpeed::Normal => 2,
+            ClockSpeed::Double => 1,
+        }
+    }
+}
+
+/// Provides context access to the system clock.
+pub trait SystemClockContext {
+    /// Access the system clock.
+    fn clock(&self) -> &SystemClock;
+}
+
+/// Represents the system's actual clock.
+#[derive(Debug, Default, Clone)]
+pub struct SystemClock {
+    /// Number of m-cycles elapsed since startup.
+    ///
+    /// This overflows ever ~557 thousand years of game time.
+    mcycle: MCycle,
+    /// Number of d-cycles elapsed since startup.
+    dcycle: DCycle,
+    /// Speed that the clock is currently running at.
+    speed: ClockSpeed,
+}
+
+impl SystemClock {
+    /// Get a new, zeroed system clock.
+    pub const fn new() -> Self {
+        Self {
+            mcycle: MCycle::ZERO,
+            dcycle: DCycle::ZERO,
+            speed: ClockSpeed::Normal,
+        }
+    }
+
+    /// Get a snapshot of the current time in terms of variable m-cycles and fixed
+    /// d-cycles.
+    pub const fn snapshot(&self) -> ClockSnapshot {
+        ClockSnapshot {
+            mcycle: self.mcycle,
+            dcycle: self.dcycle,
+        }
+    }
+
+    /// Gets the number of m-cycles elapsed since system startup.
+    ///
+    /// This will overflow after about 557 thousand years of playtime (or about half that
+    /// in doublespeed mode).
+    #[inline]
+    pub const fn elapsed_cycles(&self) -> MCycle {
+        self.mcycle
+    }
+
+    /// Get the total duration that has elapsed since system startup.
+    #[inline]
+    pub fn elapsed_time(&self) -> Duration {
+        self.dcycle.duration()
+    }
+
+    /// Get the range of durations which the current m-cycle fills.
+    ///
+    /// Note that this assumes that the current cycle occurs at the set speed, if
+    /// set_speed is called and then current_cycle_range is called again without advancing
+    /// the clock, this will yield a different range.
+    ///
+    /// It is unclear how the timing of set-speed should work, i.e. whether the next cycle
+    /// immediately after the current one occurs after a delay equal to the current speed
+    /// or the new speed. However, that can likely be dealt with higher up in the
+    /// eumulator, for example, by only applying a `set_speed` at the start of a cycle
+    /// (which would cause the tick where the speed change occured to proceed at the prior
+    /// speed).
+    pub fn current_cycle_range(&self) -> Range<Duration> {
+        let start = self.elapsed_time();
+        let end = (self.elapsed_fixed_cycles() + MCycle::new(1).as_dcycle(self.speed)).duration();
+        start..end
+    }
+
+    /// Get an iterator over the duration ranges of the 1 or 2 fixed-duration cycles in
+    /// the current M-cycle. If the clock is currently running at normal speed, this will
+    /// be an iterator of 2 ranges, one for each of the D-cycles in this M-cycle. If the
+    /// clock is running at double speed, this will be a single range equivalent to
+    /// current_cycle_range.
+    pub fn current_fixed_cycle_ranges(
+        &self,
+    ) -> impl Iterator<Item = Range<Duration>> + DoubleEndedIterator + FusedIterator {
+        let dcycle = self.dcycle;
+        (0..self.speed.dcycles_per_mcycle()).map(move |i| {
+            let start = (dcycle + i).duration();
+            let end = (dcycle + i + 1).duration();
+            start..end
+        })
+    }
+
+    /// Get the number of cycles elapsed at *fixed* speed to the start of the current
+    /// MCycle.
+    pub const fn elapsed_fixed_cycles(&self) -> DCycle {
+        self.dcycle
+    }
+
+    /// Returns the current clock speed.
+    #[inline]
+    pub const fn speed(&self) -> ClockSpeed {
+        self.speed
+    }
+
+    /// Advance the system clock by 1 m-cycle.
+    pub fn advance1m(&mut self) {
+        // This will never overflow in practical use
+        self.mcycle += 1;
+        self.dcycle += self.speed.dcycles_per_mcycle();
+    }
+
+    /// Sets the new clock speed.
+    pub fn set_speed(&mut self, speed: ClockSpeed) {
+        self.speed = speed;
+    }
+}
+
+/// Type for tracking what clock cycle a value is changed at.
+///
+/// Values with change tracking are considered equal if have the same dirty state and were
+/// updated at the same cycle.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct TimedChangeTracker<T> {
+    /// Snapshot of the clock when the tracked value was last updated.
+    changed_at: ClockSnapshot,
+    /// If the current value has been modified without updating the clock-cycle.
+    is_dirty: bool,
+    /// The value stored.
+    value: T,
+}
+
+impl<T> TimedChangeTracker<T> {
+    /// Create a new TimedChangeTracker with the given initial value, set to last changed
+    /// at time 0.
+    pub const fn new(initial: T) -> Self {
+        Self {
+            changed_at: ClockSnapshot::new(),
+            is_dirty: false,
+            value: initial,
+        }
+    }
+
+    /// Get the currently stored value. This is always the most up-to-date value,
+    /// regardless of whether the time is set correctly.
+    #[inline]
+    pub const fn get(&self) -> &T {
+        &self.value
+    }
+
+    /// Get the clock snapshot from when the value was last changed.
+    pub const fn changed_snapshot(&self) -> &ClockSnapshot {
+        debug_assert!(
+            !self.is_dirty,
+            "Value was changed but changed_cycle was not updated."
+        );
+        &self.changed_at
+    }
+
+    /// Get the m-cycle where the value was last changed. This may not be up to date. In
+    /// debug-mode, this panics if the cycle when the value was changed has not be updated
+    /// since the value last changed.
+    #[inline]
+    pub const fn changed_cycle(&self) -> MCycle {
+        self.changed_snapshot().elapsed_cycles()
+    }
+
+    /// Get the d-cycle where the value was last changed. This may not be up to date. In
+    /// debug-mode, this panics if the cycle when the value was changed has not be updated
+    /// since the value last changed.
+    #[inline]
+    pub const fn changed_fixed_cycle(&self) -> DCycle {
+        self.changed_snapshot().elapsed_fixed_cycles()
+    }
+
+    /// If the value was changed but the `changed_cycle` has not been updated, this sets
+    /// the `changed_cycle`. This should be called whenever the value might have been
+    /// written, before advancing the system clock, otherwise the changed at times will
+    /// become incorrect.
+    pub fn update_if_dirty(&mut self, now: ClockSnapshot) {
+        if self.is_dirty {
+            self.changed_at = now;
+            self.is_dirty = false;
+        }
+    }
+
+    /// Set the value, marking the time as dirty. After this `update_if_dirty` must be
+    /// called to make sure the `changed_cycle` is accurate. Returns the previously stored
+    /// value.
+    ///
+    /// Calling this method always marks the value as dirty regardless of whether the
+    /// value has actually changed or the two values are equal.
+    pub fn set(&mut self, value: T) -> T {
+        self.is_dirty = true;
+        mem::replace(&mut self.value, value)
+    }
+
+    /// Set the value and update the `changed_time` to the given value of `now`.
+    ///
+    /// Calling this method always marks the value as dirty regardless of whether the
+    /// value has actually changed or the two values are equal.
+    pub fn set_now(&mut self, value: T, now: ClockSnapshot) -> T {
+        self.changed_at = now;
+        // We have to clear dirty because its possible this is called after the value was
+        // changed wiht `set` but before `update_if_dirty`.
+        self.is_dirty = false;
+        mem::replace(&mut self.value, value)
+    }
+
+    /// Set the value without updating the change tracker. This allows a new value to be
+    /// set without affecting the time tracking, for example if there are two possible
+    /// sources of changes and you only want to record times for one of them.
+    ///
+    /// In debug mode this will panic if the changed_cycle is dirty.
+    pub fn set_untracked(&mut self, value: T) -> T {
+        debug_assert!(
+            !self.is_dirty,
+            "Value was previously changed without updating last_changed_cycle"
+        );
+        mem::replace(&mut self.value, value)
+    }
+}
+
+// The derived default would result in the correct MCycle::ZERO and is_dirty: false, but
+// doing it this way is more explicit.
+impl<T: Default> Default for TimedChangeTracker<T> {
+    #[inline]
+    fn default() -> Self {
+        Self::new(T::default())
+    }
+}
+
+impl<T> Deref for TimedChangeTracker<T> {
+    type Target = T;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        self.get()
+    }
+}
+
+/// Number of nanoseconds in a second, used when computing Durations from discrete units
+/// with a given frequency.
+const NANOS_PER_SEC: u64 = 1_000_000_000;
+
+/// Converts a count of a number of cycles of some type and the cycle rate in
+/// cycles-per-second to the duration it would take for that number of cycles to elapse.
+#[inline]
+pub const fn cycles_to_duration(num_cycles: u64, cycles_per_second: u64) -> Duration {
+    let secs = num_cycles / cycles_per_second;
+    let rem = num_cycles % cycles_per_second;
+    let nanos = rem * NANOS_PER_SEC / cycles_per_second;
+    Duration::new(secs, nanos as u32)
+}
+
+/// Snapshot of the SystemClock at a particular cycle. This records both the [`MCycle`]
+/// and [`DCycle`], which makes it possible to tell both the number of CPU cycles elapsed
+/// and the realtime duration elapsed.
+#[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Hash)]
+pub struct ClockSnapshot {
+    /// Number of MCycles elapsed up to this snapshot.
+    mcycle: MCycle,
+    /// Number of DCycles elapsed up to this snapshot.
+    dcycle: DCycle,
+}
+
+impl ClockSnapshot {
+    /// Create a new ClockSnapshot set to zero time.
+    pub const fn new() -> Self {
+        Self {
+            mcycle: MCycle::ZERO,
+            dcycle: DCycle::ZERO,
+        }
+    }
+
+    /// Gets the number of m-cycles elapsed since system startup.
+    ///
+    /// This will overflow after about 557 thousand years of playtime (or about half that
+    /// in doublespeed mode).
+    #[inline]
+    pub const fn elapsed_cycles(&self) -> MCycle {
+        self.mcycle
+    }
+
+    /// Get the total duration that has elapsed since system startup.
+    #[inline]
+    pub fn elapsed_time(&self) -> Duration {
+        self.dcycle.duration()
+    }
+
+    /// Get the number of cycles elapsed at *fixed* speed to the start of the current
+    /// MCycle.
+    pub const fn elapsed_fixed_cycles(&self) -> DCycle {
+        self.dcycle
+    }
+}
