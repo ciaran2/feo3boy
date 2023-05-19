@@ -43,8 +43,8 @@ impl BitGroup {
 
     /// Write `val` to the part of `dest` represented by this [`BitGroup`].
     ///
-    /// Shift `val` to the left so that it starts at the same point as this `BitGroup` and
-    /// then apply it to `dest` with a mask.
+    /// Shift `val` to the left so that it starts at the same point as this `BitGroup` and then
+    /// apply it to `dest` with a mask.
     #[inline]
     pub fn apply(self, dest: &mut u8, val: u8) {
         *dest = self.applied(*dest, val);

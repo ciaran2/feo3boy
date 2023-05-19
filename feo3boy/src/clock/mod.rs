@@ -90,38 +90,13 @@ impl SystemClock {
         self.dcycle.duration()
     }
 
-    /// Get the range of durations which the current m-cycle fills.
-    ///
-    /// Note that this assumes that the current cycle occurs at the set speed, if
-    /// set_speed is called and then current_cycle_range is called again without advancing
-    /// the clock, this will yield a different range.
-    ///
-    /// It is unclear how the timing of set-speed should work, i.e. whether the next cycle
-    /// immediately after the current one occurs after a delay equal to the current speed
-    /// or the new speed. However, that can likely be dealt with higher up in the
-    /// eumulator, for example, by only applying a `set_speed` at the start of a cycle
-    /// (which would cause the tick where the speed change occured to proceed at the prior
-    /// speed).
-    pub fn current_cycle_range(&self) -> Range<Duration> {
-        let start = self.elapsed_time();
-        let end = (self.elapsed_fixed_cycles() + MCycle::new(1).as_dcycle(self.speed)).duration();
-        start..end
-    }
-
-    /// Get an iterator over the duration ranges of the 1 or 2 fixed-duration cycles in
-    /// the current M-cycle. If the clock is currently running at normal speed, this will
-    /// be an iterator of 2 ranges, one for each of the D-cycles in this M-cycle. If the
-    /// clock is running at double speed, this will be a single range equivalent to
-    /// current_cycle_range.
-    pub fn current_fixed_cycle_ranges(
-        &self,
-    ) -> impl Iterator<Item = Range<Duration>> + DoubleEndedIterator + FusedIterator {
-        let dcycle = self.dcycle;
-        (0..self.speed.dcycles_per_mcycle()).map(move |i| {
-            let start = (dcycle + i).duration();
-            let end = (dcycle + i + 1).duration();
-            start..end
-        })
+    /// Get an interator over the d-cycles in the current m-cycle. This is either a single
+    /// item (if running in double-speed mode) or a a pair of d-cycles (if running at
+    /// normal speed).
+    pub fn current_cycle_fixed_cycles(&self) -> DCycleIter {
+        DCycleIter {
+            cycles: self.dcycle..self.dcycle + self.speed.dcycles_per_mcycle(),
+        }
     }
 
     /// Get the number of cycles elapsed at *fixed* speed to the start of the current
@@ -148,6 +123,116 @@ impl SystemClock {
         self.speed = speed;
     }
 }
+
+/// An iterator over a range of D-Cycles.
+pub struct DCycleIter {
+    /// The d-cycle values to iterator over.
+    /// Invariant: ensure that end is always greater than or equal to start.
+    cycles: Range<u64>,
+}
+
+impl DCycleIter {
+    /// Get an interator over the time ranges covered by the d-cycles in this iterator,
+    /// assuming the cycles are a count from the start of emulator time.
+    fn time_ranges(self) -> DCycleTimeRanges {
+        let start = DCycle::new(self.cycles.start).duration();
+        DCycleTimeRanges {
+            cycles: self,
+            next_start: start,
+        }
+    }
+}
+
+impl Iterator for DCycleIter {
+    type Item = DCycle;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.cycles.next().map(DCycle::new)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.cycles.size_hint()
+    }
+
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        self.cycles.nth(n).map(DCycle::new)
+    }
+
+    fn last(self) -> Option<Self::Item> {
+        self.cycles.last().map(DCycle::new)
+    }
+
+    fn max(self) -> Option<Self::Item> {
+        self.cycles.max().map(DCycle::new)
+    }
+
+    fn min(self) -> Option<Self::Item> {
+        self.cycles.min().map(DCycle::new)
+    }
+}
+
+impl DoubleEndedIterator for DCycleIter {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.cycles.next_back().map(DCycle::new)
+    }
+
+    fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
+        self.cycles.nth_back(n).map(DCycle::new)
+    }
+}
+
+impl FusedIterator for DCycleIter {}
+
+/// Iterator over DCycles and their corresponding time ranges.
+pub struct DCycleTimeRanges {
+    /// Iterator over the d-cycles.
+    cycles: DCycleIter,
+    /// Start time of the next cycle that will be returned from DCycleIter. Used to avoid
+    /// recomputing the time value unnecessarily.
+    next_start: Duration,
+}
+
+impl Iterator for DCycleTimeRanges {
+    type Item = (DCycle, Range<Duration>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.cycles.next().map(|d| {
+            let end = (d + 1).duration();
+            let start = mem::replace(&mut self.next_start, end);
+            (d, start..end)
+        })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.cycles.size_hint()
+    }
+
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        if n == 0 {
+            self.next()
+        } else {
+            self.cycles.nth(n).map(|d| {
+                let start = d.duration();
+                let end = (d + 1).duration();
+                self.next_start = end;
+                (d, start..end)
+            })
+        }
+    }
+
+    fn last(mut self) -> Option<Self::Item> {
+        self.cycles.last().map(|d| {
+            let start = d.duration();
+            let end = (d + 1).duration();
+            // This is unnecessary since self is consumed but is done to maintain
+            // invariants.
+            self.next_start = end;
+            (d, start..end)
+        })
+    }
+}
+
+impl FusedIterator for DCycleTimeRanges {}
 
 /// Type for tracking what clock cycle a value is changed at.
 ///

@@ -338,6 +338,8 @@ impl EnvelopeControl {
     const INIT_VOL: BitGroup = BitGroup(0b1111_0000);
     const DIRECTION: BitGroup = BitGroup(0b0000_1000);
     const PACE: BitGroup = BitGroup(0b0000_0111);
+    /// Bits which control the DAC enable.
+    const DAC_ENABLE: BitGroup = BitGroup(0b1111_1000);
 
     #[inline]
     fn set(&mut self, val: u8) {
@@ -380,8 +382,9 @@ impl EnvelopeControl {
         Self::PACE.apply(&mut self.0, val);
     }
 
+    /// Returns true if the bits of the dac_enable portion of the register are non-zero.
     pub fn dac_enabled(&self) -> bool {
-        (self.0 & 0xf8) != 0
+        Self::DAC_ENABLE.extract_bool(self.0)
     }
 }
 
@@ -549,6 +552,164 @@ impl ChannelControl {
     }
 }
 
+/// Utility for calculating the phase of a wavelength value at a particular time.
+///
+/// -   `NUM_STEPS` is the number of steps in the counter that the wavelength system is
+///     incrementing, that is 8 for pulse channels and 32 for the wave channel.
+///
+/// -   `PERIOD_MULTIPLIER` is a multiplier to apply to the period (calculated as 2048 -
+///     wavelength) to convert it to a number of D-Cycles. For pulse channels, this is 2,
+///     since they step at fractions of 1 MiHz, while for channel 3 this is 1 since it
+///     steps at fractions of 2 MiHz.
+///
+/// This assumes that wavelength works similarly between channel 1/2 and 3. Specifically,
+/// we assume that writing a new value to wavelength only takes effect when the previous
+/// wavelength step completes. The documentation we have says explicitly that wavelength
+/// changes written to channel 3 only apply the next time wave ram is read, but no such
+/// thing is specified for channels 1 and 2. Reading the description in SameSuite, it says
+/// that channel 1 frequency changes apply 'after the current sample' which sounds like
+/// roughtly the same thing, so I think it is safe to assume that both of these work
+/// similarly.
+///
+/// The way wavelength appears to work is that the wavelength value is used as a reset-to
+/// point for an 11 bit timer/counter register, and the sample is incremented whenever
+/// that counter overflows. After overflow the counter resets to the wavelength value.
+/// This neatly explains why changing the wavelength value doesn't take effect
+/// immediately; the counter probably only resets on overflow or when the channel is
+/// triggered.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+struct WavelengthCalculator<const NUM_STEPS: u64, const PERIOD_MULTIPLIER: u64> {
+    /// The latest wavelength setting.
+    wavelength: u16,
+    /// The d-cycle when the currently-specified wavelength begins to apply. This is
+    /// either the time the channel was triggered or if the wavelength is changed, it is
+    /// the time when the previous wavelength count expires. Note that this might be in
+    /// the future!
+    wavelength_start_time: DCycle,
+    /// Value of the counter being incremented as of `wavelength_start_time`. If
+    /// `wavelength_start_time <= now`, the counter value is `initial_count +
+    /// overflow_count` where `overflow_count` is the number of times the wavelength
+    /// counter would have overflowed. If `wavelength_start_time > now`, the count is
+    /// exactly `initial_count - 1` The later is wrapped back to `NUM_STEPS - 1` in the
+    /// event of an underflow.
+    initial_count: u64,
+
+    /// Triggering dirty tracker. When triggered, initial count and start time are reset.
+    /// Applies on the next update_if_dirty.
+    triggered: bool,
+
+    /// Updated wavelength value. Applies on the next update_if_dirty.
+    new_wavelength: Option<u16>,
+}
+
+impl<const NUM_STEPS: u64, const PERIOD_MULTIPLIER: u64>
+    WavelengthCalculator<NUM_STEPS, PERIOD_MULTIPLIER>
+{
+    /// Set the wavelength: note update_if_dirty is needed for the value to take effect.
+    ///
+    /// Triggering will take precedence over this.
+    #[inline]
+    fn set_wavelength(&mut self, wavelength: u16) {
+        debug_assert!(wavelength & !0x07ff == 0, "wavelength had high-order bits set");
+        self.new_wavelength = Some(wavelength);
+    }
+
+    /// Gets the 16 bit wavelength register. Note: if set_wavelength was called, this will return
+    /// the old wavelength until `update_if_dirty` is called.
+    #[inline]
+    fn wavelength(&self) -> u16 {
+        self.wavelength
+    }
+
+    /// Set the wavelength triggered. `update_if_dirty` is needed for this to take effect.
+    #[inline]
+    fn trigger(&mut self) {
+        self.triggered = true;
+    }
+
+    /// Check if a wavelength update is pending and
+    fn update_if_dirty(&mut self, now: ClockSnapshot) {
+        if self.triggered {
+            // It's fine to reset this to zero because wavelength_start_time is not in the
+            // future, so there is no chance of us needing to subtract.
+            self.initial_count = 0;
+            self.wavelength_start_time = now.elapsed_fixed_cycles();
+            if let Some(new_wavelength) = self.new_wavelength.take() {
+                self.wavelength = new_wavelength;
+            }
+            self.triggered = false;
+        } else if let Some(new_wavelength) = self.new_wavelength.take() {
+            // If the end of the current duty step is in the future, we already changed
+            // the wavelength once and computed the time to change to the new wavelength
+            // value. We don't need to recompute wavelength_start_time or initial_count,
+            // we can just apply the wavelenght value. This also works fine if we are
+            // exactly on the cycle when the wavelength is changing.
+            //
+            // We only need to recompute the changeover cycle if we are in the middle of a
+            // duty step, that is if the start time is in the past.
+            if self.wavelength_start_time < now.elapsed_fixed_cycles() {
+                // The new wavelength_start_time will be the next smallest multiple of the
+                // period greater than or equal to now.
+                let cycles_since_wavelength_started =
+                    now.elapsed_fixed_cycles() - self.wavelength_start_time;
+                let period = self.period();
+                let increments = cycles_since_wavelength_started.as_u64() / period;
+                let current_count = self.initial_count + increments;
+                // The time since the start of the current duty step is the remainder after dividing
+                // by the period. This is the number of ticks left in
+                // `cycles_since_wavelength_started` between when the duty cycle started and `now`.
+                let ticks_since_current_duty_step_started =
+                    cycles_since_wavelength_started.as_u64() % period;
+                // Calculate the number of cycles until the next period start. This is the length of
+                // the periiod minus the number of cycles we've already seen in the period. However,
+                // if ticks_since_current_duty_step_started is zero, we are already on a duty step
+                // boundary right now. We can cover the 'already on a boundary' case by taking this
+                // result mod the period length.
+                let ticks_until_duty_step_ends =
+                    (period - ticks_since_current_duty_step_started) % period;
+                // The start time for the new wavelength is the end of the next duty cycle.
+                self.wavelength_start_time =
+                    now.elapsed_fixed_cycles() + ticks_until_duty_step_ends;
+                // The initial count for the new wavelength is the current count if we are already
+                // at a boundary, otherwise it's one more than the current count. We apply modulus
+                // to keep the initial_count small, though that's probably unnecessary, since we'll
+                // never increment this enough to overflow u64.
+                self.initial_count = if ticks_until_duty_step_ends == 0 {
+                    current_count % NUM_STEPS
+                } else {
+                    // In this case, we may need to subtract 1 if the duty step is requested before
+                    // the new wavelength starts. To make sure we can always subtract 1 without
+                    // underflowing, we apply the `+ 1` *after* doing the `% NUM_STEPS` so the value
+                    // is always at least 1.
+                    current_count % NUM_STEPS + 1
+                };
+            }
+            self.wavelength = new_wavelength;
+        }
+    }
+
+    /// Compute the current duty step for the wavelength.
+    fn duty_step(&self, now: DCycle) -> u64 {
+        if self.wavelength_start_time <= now {
+            let cycles_since_wavelength_started = now - self.wavelength_start_time;
+            // We have effectively incremented the duty step a number of times equivalent
+            // to the number of cycles elapsed divided by the number of cycles per
+            // increment.
+            let increments = cycles_since_wavelength_started.as_u64() / self.period();
+            (self.initial_count + increments) % NUM_STEPS
+        } else {
+            // When subracting, we never need to apply the modulus, since that was done when
+            // calculating initial_count.
+            self.initial_count - 1
+        }
+    }
+
+    /// The period is the time between duty step increments, expressed in D-Cycles.
+    fn period(&self) -> u64 {
+        (2048 - self.wavelength) * PERIOD_MULTIPLIER;
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PulseChannel {
     /// Envelope register. Values here are only picked up when the channel is triggered.
@@ -572,10 +733,7 @@ pub struct PulseChannel {
     /// Table. Essentially, the bit selected in the pulse table increments every time a
     /// counter starting from `wavelength` overflows, if incrementing at 1 MiHz (the
     /// standard-speed m-cycle frequency, or once every 2 d-cycles).
-    wavelength: u16,
-
-    /// When the channel was last triggered.
-    triggered: TimedChangeTracker<()>,
+    wavelength: WavelengthCalculator<8, 2>,
 }
 
 impl PulseChannel {
@@ -603,16 +761,22 @@ impl PulseChannel {
         [1, 0, 0, 0, 0, 0, 0, 1],
     ];
 
+    /// Return true if the channel is active.
+    pub fn active(&self) -> bool {
+        self.active
+    }
+
     /// Get the lower byte of the wavelength.
     pub fn wavelength_low(&self) -> u8 {
-        let [wavelength_low, _] = self.wavelength.to_le_bytes();
+        let [wavelength_low, _] = self.wavelength.wavelength().to_le_bytes();
         wavelength_low
     }
 
-    /// Set the lower byte of the wavelength.
-    pub fn set_wavelength_low(&mut self, wavelength_low: u8) {
-        let [_, wavelength_high] = self.wavelength.to_le_bytes();
-        self.wavelength = u16::from_le_bytes([wavelength_low, wavelength_high]);
+    /// Set the lower byte of the wavelength. This should only be called from a memory access
+    /// through system ram, and generally only via the CPU.
+    fn set_wavelength_low(&mut self, wavelength_low: u8) {
+        let [_, wavelength_high] = self.wavelength.wavelength().to_le_bytes();
+        self.wavelength.set_wavelength(u16::from_le_bytes([wavelength_low, wavelength_high]));
     }
 
     /// Read the wavelength high bits adn readable control bits.
@@ -621,16 +785,19 @@ impl PulseChannel {
         0xff.with_bits(Self::LENGTH_ENABLE, self.length_timer.enabled())
     }
 
-    /// Set the value of the wavelength high and control register.
-    pub fn set_wavelength_high_and_control(&mut self, value: u8) {
+    /// Set the value of the wavelength high and control register. This should only be called from a
+    /// memory access through system ram, and generally only via the CPU.
+    fn set_wavelength_high_and_control(&mut self, value: u8) {
         let trigger = Self::TRIGGER.extract_bool(value);
         let length_enable = Self::LENGTH_ENABLE.extract_bool(value);
         let wavelength_high = Self::WAVELENGTH_HIGH.extract(value);
-        let [wavelength_low, _] = self.wavelength.to_le_bytes();
+        let [wavelength_low, _] = self.wavelength.wavelength().to_le_bytes();
 
-        self.wavelength = u16::from_le_bytes([wavelength_low, wavelength_high]);
+        self.wavelength.set_wavelength(u16::from_le_bytes([wavelength_low, wavelength_high]));
         self.length_timer.set_enabled(length_enable);
-        if trigger {
+        // Channel is turned on if triggered and the DAC is enabled. If the DAC is
+        // disabled, triggering does nothing.
+        if trigger && self.envelope_control.dac_enabled() {
             self.triggered.set(());
             self.active = true;
             self.sweep.start_sweep();
@@ -645,7 +812,7 @@ impl PulseChannel {
     }
 
     /// Set the combined length and duty cycle register.
-    pub fn set_length_and_duty_cycle(&mut self, value: u8) {
+    fn set_length_and_duty_cycle(&mut self, value: u8) {
         let duty_cycle = Self::DUTY_CYCLE.extract(value);
         let length = Self::LENGTH_TIMER.extract(value);
         self.duty_cycle = duty_cycle as usize;
@@ -673,29 +840,21 @@ impl PulseChannel {
 
     /// Update any time-tracking fields with the current clock snapshot.
     fn update_if_dirty(&mut self, now: ClockSnapshot) {
-        self.triggered.update_if_dirty(now);
+        self.wavelength.update_if_dirty(now);
     }
 
     /// Get the index into the pulse table for the current time based on when the channel
     /// was last triggered.
     fn pulse_step(&self, now: DCycle) -> usize {
-        let cycles_since_triggered = now - self.triggered.changed_fixed_cycle();
-        // The period is the time between increments of the index in the pulse table. It
-        // is in terms of number of 1 MiHz cycles between increments. Each such cycle is
-        // effectively 2 d-cycles. We multiply by 2 to put this in terms of D-cycles.
-        let period = (2048 - self.wavelength as u64) * 2;
-        // We have effectively incremented the pulse table index a number of times
-        // equivalent to the number of cycles elapsed divided by the number of cycles per
-        // increment.
-        let increments = cycles_since_triggered.as_u64() / period;
-        // The pulse table has 8 entries, so we wrap around to 8.
-        let index = increments % 8;
-        index as usize
+        self.wavelength.duty_step(now) as usize
     }
 
     /// Get a sample from this channel.
     fn get_sample(&self, now: DCycle) -> f32 {
-        if self.envelope_control.dac_enabled() && self.active {
+        // We don't check the DAC here because anytime a memory write disables the DAC, we
+        // turn the channel active to false as well, and don't allow a write to turn the
+        // channel on unless the DAC is active.
+        if self.active {
             let pulse_step = self.pulse_step(now);
             debug!(
                 "Sampling pulse channel from step {} of duty cycle {}",
@@ -726,7 +885,13 @@ impl MemDevice for PulseChannel {
         dispatch_memdev_byte!(PulseChannel, addr, |addr| {
             0x00 => self.sweep.write_byte_relative(addr, val),
             0x01 => self.set_length_and_duty_cycle(val),
-            0x02 => self.envelope_control.write_byte_relative(addr, val),
+            0x02 => {
+                self.envelope_control.write_byte_relative(addr, val);
+                if !self.envelope_control.dac_enabled() {
+                    // Disabling the DAC disables the channel.
+                    self.active = false;
+                }
+            },
             0x03 => self.set_wavelength_low(val),
             0x04 => self.set_wavelength_high_and_control(val),
         })
@@ -735,19 +900,41 @@ impl MemDevice for PulseChannel {
     memdev_bytes_from_byte!(PulseChannel);
 }
 
+/// Provides the state of the wavetable channel (Channel 3).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WavetableChannel {
+    /// Whether the DAC is enabled. Unlike other channels, this is controlled directly
+    /// rather than via some of the envelope bits.
+    dac_enable: bool,
+    /// Whether the channel is active. The channel can be disabled with the dac still
+    /// active, but not the other way around.
+    active: bool,
+
+    /// Length timer for the channel. On Channel 3, the length timer is 8 bits long,
+    /// however we (currently) treat it as still just 6 bits. It is unclear what happens
+    /// if you write a length greater than 64 to the length register on channel 3. Does
+    /// that disable it immediately, since the length is already above 64? Or does the
+    /// value get truncated and we count up to 64 from there?
+    ///
+    /// In the current setup we assume the value is truncated to 6 bits.
+    length_timer: LengthTimer,
+
+    /// Output level setting (this is the register which would have the envelope function, but
+    /// channel 3 has no envelope functionality).
+    output_level: u8,
+
+    /// Wavelength position calculator for the location in the sample table.
+    wavelength: WavelengthCalculator<32, 1>,
+
+    /// Sample to emit when first triggered.
+    initial_sample: u8,
+
     period: u32,
     phase_offset: u32,
-    enabled: bool,
-    active: bool,
     triggered: bool,
     sample_cursor: u32,
     wavelength: u16,
     level_shift: u8,
-    length_enable: bool,
-    length_acc: u8,
-    length_aticks: u8,
     /// Contains sample values which have been split in half to allow nybbles to be
     /// efficiently indexed when sampling.
     sample_table: [u8; 32],
