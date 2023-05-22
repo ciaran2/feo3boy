@@ -1,18 +1,17 @@
 use std::f32::consts::PI;
-use std::mem;
 use std::ops::{Mul, MulAssign};
 use std::time::Duration;
+use std::{fmt, mem};
 
 use bitflags::bitflags;
-use log::{debug, info, trace};
+use log::{debug, warn};
 
 use crate::bits::{ApplyBitGroup, BitGroup};
-use crate::clock::{
-    cycles_to_duration, ClockSnapshot, ClockSpeed, DCycle, SystemClock, SystemClockContext,
-    TimedChangeTracker,
-};
-use crate::memdev::{MemDevice, RelativeAddr};
+use crate::clock::{cycles_to_duration, ClockSpeed, DCycle, SystemClockContext};
+use crate::memdev::{MemDevice, ReadCtx, RelativeAddr, WriteCtx};
 use crate::timer::TimerDivider;
+
+mod lfsr;
 
 bitflags! {
     #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash, MemDevice)]
@@ -39,6 +38,24 @@ bitflags! {
     }
 }
 
+impl ChannelMix {
+    /// Return the channel mix multiplier for the specified channel. Returns 0.25 if `self` contains
+    /// the specified channel, otherwise returns 0.0.
+    fn get_channel_mix_multiplier(self, channel: ChannelMix) -> f32 {
+        if self.contains(channel) {
+            0.25
+        } else {
+            0.0
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+enum SoundSide {
+    Left,
+    Right,
+}
+
 bitflags! {
     #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash, MemDevice)]
     #[memdev(bitflags)]
@@ -52,6 +69,15 @@ bitflags! {
         const CH3_RIGHT = 0b00000100;
         const CH2_RIGHT = 0b00000010;
         const CH1_RIGHT = 0b00000001;
+    }
+}
+
+impl SoundPan {
+    fn channel_mix(&self, side: SoundSide) -> ChannelMix {
+        ChannelMix::from_bits_truncate(match side {
+            SoundSide::Left => self.bits() >> 4,
+            SoundSide::Right => self.bits(),
+        })
     }
 }
 
@@ -116,14 +142,6 @@ impl ApuDiv {
     }
 }
 
-impl SoundPan {
-    fn channel_mix(&self, right: bool) -> ChannelMix {
-        let shift = if right { 0 } else { 4 };
-
-        ChannelMix::from_bits_truncate(self.bits() >> shift)
-    }
-}
-
 /// Represents sound and volume settings.
 #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash, MemDevice)]
 #[memdev(bits)]
@@ -184,10 +202,12 @@ impl SoundVolume {
         Self::VOL_RIGHT.apply(&mut self.0, val);
     }
 
-    fn vol_multiplier(&self, right: bool) -> f32 {
-        let shift = if right { 0 } else { 4 };
-        let vol_digital = (self.0 >> shift) & 0x7;
-
+    /// Get the volumen multiplier.
+    fn vol_multiplier(&self, side: SoundSide) -> f32 {
+        let vol_digital = match side {
+            SoundSide::Left => self.vol_left(),
+            SoundSide::Right => self.vol_right(),
+        };
         (0.125 * (vol_digital as f32 + 1.0)).max(1.0)
     }
 }
@@ -426,132 +446,6 @@ impl Envelope {
     }
 }
 
-#[derive(Default, Debug, Clone, Eq, PartialEq, Hash, MemDevice)]
-#[memdev(bits, readable = WavetableLevel::RW_BITS, writable = WavetableLevel::RW_BITS)]
-#[repr(transparent)]
-pub struct WavetableLevel(u8);
-
-impl WavetableLevel {
-    const LEVEL: BitGroup = BitGroup(0b0110_0000);
-    const RW_BITS: u8 = 0b0110_1000;
-
-    /// Get the level.
-    #[inline]
-    pub fn level(self) -> u8 {
-        Self::LEVEL.extract(self.0)
-    }
-
-    /// Set the level.
-    #[inline]
-    pub fn set_level(&mut self, val: u8) {
-        Self::LEVEL.apply(&mut self.0, val);
-    }
-}
-
-#[derive(Default, Debug, Clone, Eq, PartialEq, Hash, MemDevice)]
-#[memdev(bits)]
-#[repr(transparent)]
-pub struct NoiseControl(u8);
-
-impl NoiseControl {
-    const CLOCK_SHIFT: BitGroup = BitGroup(0b1111_0000);
-    const LFSR_WIDTH: BitGroup = BitGroup(0b0000_1000);
-    const CLOCK_DIV: BitGroup = BitGroup(0b0000_0111);
-
-    fn set(&mut self, val: u8) {
-        self.0 = val;
-    }
-
-    /// Get the clock shift.
-    #[inline]
-    pub fn clock_shift(&self) -> u8 {
-        Self::CLOCK_SHIFT.extract(self.0)
-    }
-
-    /// Set the clock shift.
-    #[inline]
-    pub fn set_clock_shift(&mut self, val: u8) {
-        Self::CLOCK_SHIFT.apply(&mut self.0, val);
-    }
-
-    /// Get the LFSR width bit.
-    #[inline]
-    pub fn lfsr_width(&self) -> bool {
-        Self::LFSR_WIDTH.extract_bool(self.0)
-    }
-
-    /// Get the LFSR mask based on whether the LFSR bit is set.
-    fn lfsr_mask(&self) -> u16 {
-        if self.lfsr_width() {
-            0x4080
-        } else {
-            0x4000
-        }
-    }
-
-    /// Set the LFSR width bit.
-    #[inline]
-    pub fn set_lfsr_width(&mut self, val: bool) {
-        Self::LFSR_WIDTH.apply(&mut self.0, val as u8);
-    }
-
-    /// Get the clock div.
-    #[inline]
-    pub fn clock_div(&self) -> u8 {
-        Self::CLOCK_DIV.extract(self.0)
-    }
-
-    /// Set the clock div.
-    #[inline]
-    pub fn set_clock_div(&mut self, val: u8) {
-        Self::CLOCK_DIV.apply(&mut self.0, val);
-    }
-
-    fn period(&self) -> u32 {
-        let r = self.clock_div() as u32;
-        let s = self.clock_shift() as u32;
-
-        trace!("r: {}, s: {}", r, s);
-
-        if r == 0 {
-            1 << (s + 3)
-        } else {
-            r << (s + 4)
-        }
-    }
-}
-
-bitflags! {
-    #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, MemDevice)]
-    #[memdev(bitflags, readable = ChannelControl::READABLE)]
-    pub struct ChannelControl : u8 {
-        const TRIGGER            = 0b1000_0000;
-        const LENGTH_ENABLE      = 0b0100_0000;
-        /// Bit 0 of `WAVELENGTH_HIGH`. This pseudo-flag allows `from_bits_truncate` to
-        /// set this bit independently of the rest of the wavelength bits.
-        const WAVELENGTH_HIGH_B0 = 0b0000_0001;
-        /// Bit 1 of `WAVELENGTH_HIGH`. This pseudo-flag allows `from_bits_truncate` to
-        /// set this bit independently of the rest of the wavelength bits.
-        const WAVELENGTH_HIGH_B1 = 0b0000_0010;
-        /// Bit 2 of `WAVELENGTH_HIGH`. This pseudo-flag allows `from_bits_truncate` to
-        /// set this bit independently of the rest of the wavelength bits.
-        const WAVELENGTH_HIGH_B2 = 0b0000_0100;
-        const READABLE           = 0b0100_0000;
-    }
-}
-
-impl ChannelControl {
-    const WAVELENGTH_HIGH: BitGroup = BitGroup(0b0000_0111);
-
-    pub fn wavelength_high(self) -> u8 {
-        Self::WAVELENGTH_HIGH.extract(self.bits())
-    }
-
-    pub fn set_wavelength_high(&mut self, val: u8) {
-        Self::WAVELENGTH_HIGH.apply_bits(self, val);
-    }
-}
-
 /// Utility for calculating the phase of a wavelength value at a particular time.
 ///
 /// -   `NUM_STEPS` is the number of steps in the counter that the wavelength system is
@@ -577,7 +471,7 @@ impl ChannelControl {
 /// This neatly explains why changing the wavelength value doesn't take effect
 /// immediately; the counter probably only resets on overflow or when the channel is
 /// triggered.
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Default, Debug, Eq, PartialEq, Hash)]
 struct WavelengthCalculator<const NUM_STEPS: u64, const PERIOD_MULTIPLIER: u64> {
     /// The latest wavelength setting.
     wavelength: u16,
@@ -593,99 +487,89 @@ struct WavelengthCalculator<const NUM_STEPS: u64, const PERIOD_MULTIPLIER: u64> 
     /// exactly `initial_count - 1` The later is wrapped back to `NUM_STEPS - 1` in the
     /// event of an underflow.
     initial_count: u64,
-
-    /// Triggering dirty tracker. When triggered, initial count and start time are reset.
-    /// Applies on the next update_if_dirty.
-    triggered: bool,
-
-    /// Updated wavelength value. Applies on the next update_if_dirty.
-    new_wavelength: Option<u16>,
+    /// Last time the wavelength was triggered. This is used to tell if we are currently in the
+    /// first cycle.
+    triggered_time: DCycle,
+    /// Length of the initial period in d-cycles.
+    initial_period: DCycle,
 }
 
 impl<const NUM_STEPS: u64, const PERIOD_MULTIPLIER: u64>
     WavelengthCalculator<NUM_STEPS, PERIOD_MULTIPLIER>
 {
-    /// Set the wavelength: note update_if_dirty is needed for the value to take effect.
-    ///
-    /// Triggering will take precedence over this.
+    /// Set the wavelength, recalcuating the start time and initial count.
     #[inline]
-    fn set_wavelength(&mut self, wavelength: u16) {
-        debug_assert!(wavelength & !0x07ff == 0, "wavelength had high-order bits set");
-        self.new_wavelength = Some(wavelength);
+    fn set_wavelength(&mut self, now: DCycle, wavelength: u16) {
+        debug_assert!(
+            wavelength & !0x07ff == 0,
+            "wavelength had high-order bits set"
+        );
+
+        // If the end of the current duty step is in the future, we already changed
+        // the wavelength once and computed the time to change to the new wavelength
+        // value. We don't need to recompute wavelength_start_time or initial_count,
+        // we can just apply the wavelenght value. This also works fine if we are
+        // exactly on the cycle when the wavelength is changing.
+        //
+        // We only need to recompute the changeover cycle if we are in the middle of a
+        // duty step, that is if the start time is in the past.
+        if self.wavelength_start_time < now {
+            // The new wavelength_start_time will be the next smallest multiple of the
+            // period greater than or equal to now.
+            let cycles_since_wavelength_started = now - self.wavelength_start_time;
+            let period = self.period();
+            let increments = cycles_since_wavelength_started.as_u64() / period.as_u64();
+            let current_count = self.initial_count + increments;
+            // The time since the start of the current duty step is the remainder after dividing
+            // by the period. This is the number of ticks left in
+            // `cycles_since_wavelength_started` between when the duty cycle started and `now`.
+            let ticks_since_current_duty_step_started =
+                cycles_since_wavelength_started.as_u64() % period.as_u64();
+            // Calculate the number of cycles until the next period start. This is the length of
+            // the periiod minus the number of cycles we've already seen in the period. However,
+            // if ticks_since_current_duty_step_started is zero, we are already on a duty step
+            // boundary right now. We can cover the 'already on a boundary' case by taking this
+            // result mod the period length.
+            let ticks_until_duty_step_ends =
+                (period - ticks_since_current_duty_step_started).as_u64() % period.as_u64();
+            // The start time for the new wavelength is the end of the next duty cycle.
+            self.wavelength_start_time = now + ticks_until_duty_step_ends;
+            // The initial count for the new wavelength is the current count if we are already
+            // at a boundary, otherwise it's one more than the current count. We apply modulus
+            // to keep the initial_count small, though that's probably unnecessary, since we'll
+            // never increment this enough to overflow u64.
+            self.initial_count = if ticks_until_duty_step_ends == 0 {
+                current_count % NUM_STEPS
+            } else {
+                // In this case, we may need to subtract 1 if the duty step is requested before
+                // the new wavelength starts. To make sure we can always subtract 1 without
+                // underflowing, we apply the `+ 1` *after* doing the `% NUM_STEPS` so the value
+                // is always at least 1.
+                current_count % NUM_STEPS + 1
+            };
+        }
+        self.wavelength = wavelength;
+
+        // If we updated the wavelength at the same time that the wavelength was triggered, we
+        // should change the initial_period, which is used to tell if we are still on the first
+        // cycle.
+        if self.triggered_time == now {
+            self.initial_period = self.period();
+        }
     }
 
-    /// Gets the 16 bit wavelength register. Note: if set_wavelength was called, this will return
-    /// the old wavelength until `update_if_dirty` is called.
+    /// Gets the 16 bit wavelength register.
     #[inline]
     fn wavelength(&self) -> u16 {
         self.wavelength
     }
 
-    /// Set the wavelength triggered. `update_if_dirty` is needed for this to take effect.
+    /// Set the wavelength triggered.
     #[inline]
-    fn trigger(&mut self) {
-        self.triggered = true;
-    }
-
-    /// Check if a wavelength update is pending and
-    fn update_if_dirty(&mut self, now: ClockSnapshot) {
-        if self.triggered {
-            // It's fine to reset this to zero because wavelength_start_time is not in the
-            // future, so there is no chance of us needing to subtract.
-            self.initial_count = 0;
-            self.wavelength_start_time = now.elapsed_fixed_cycles();
-            if let Some(new_wavelength) = self.new_wavelength.take() {
-                self.wavelength = new_wavelength;
-            }
-            self.triggered = false;
-        } else if let Some(new_wavelength) = self.new_wavelength.take() {
-            // If the end of the current duty step is in the future, we already changed
-            // the wavelength once and computed the time to change to the new wavelength
-            // value. We don't need to recompute wavelength_start_time or initial_count,
-            // we can just apply the wavelenght value. This also works fine if we are
-            // exactly on the cycle when the wavelength is changing.
-            //
-            // We only need to recompute the changeover cycle if we are in the middle of a
-            // duty step, that is if the start time is in the past.
-            if self.wavelength_start_time < now.elapsed_fixed_cycles() {
-                // The new wavelength_start_time will be the next smallest multiple of the
-                // period greater than or equal to now.
-                let cycles_since_wavelength_started =
-                    now.elapsed_fixed_cycles() - self.wavelength_start_time;
-                let period = self.period();
-                let increments = cycles_since_wavelength_started.as_u64() / period;
-                let current_count = self.initial_count + increments;
-                // The time since the start of the current duty step is the remainder after dividing
-                // by the period. This is the number of ticks left in
-                // `cycles_since_wavelength_started` between when the duty cycle started and `now`.
-                let ticks_since_current_duty_step_started =
-                    cycles_since_wavelength_started.as_u64() % period;
-                // Calculate the number of cycles until the next period start. This is the length of
-                // the periiod minus the number of cycles we've already seen in the period. However,
-                // if ticks_since_current_duty_step_started is zero, we are already on a duty step
-                // boundary right now. We can cover the 'already on a boundary' case by taking this
-                // result mod the period length.
-                let ticks_until_duty_step_ends =
-                    (period - ticks_since_current_duty_step_started) % period;
-                // The start time for the new wavelength is the end of the next duty cycle.
-                self.wavelength_start_time =
-                    now.elapsed_fixed_cycles() + ticks_until_duty_step_ends;
-                // The initial count for the new wavelength is the current count if we are already
-                // at a boundary, otherwise it's one more than the current count. We apply modulus
-                // to keep the initial_count small, though that's probably unnecessary, since we'll
-                // never increment this enough to overflow u64.
-                self.initial_count = if ticks_until_duty_step_ends == 0 {
-                    current_count % NUM_STEPS
-                } else {
-                    // In this case, we may need to subtract 1 if the duty step is requested before
-                    // the new wavelength starts. To make sure we can always subtract 1 without
-                    // underflowing, we apply the `+ 1` *after* doing the `% NUM_STEPS` so the value
-                    // is always at least 1.
-                    current_count % NUM_STEPS + 1
-                };
-            }
-            self.wavelength = new_wavelength;
-        }
+    fn trigger(&mut self, now: DCycle) {
+        self.initial_count = 0;
+        self.wavelength_start_time = now;
+        self.triggered_time = now;
     }
 
     /// Compute the current duty step for the wavelength.
@@ -695,7 +579,7 @@ impl<const NUM_STEPS: u64, const PERIOD_MULTIPLIER: u64>
             // We have effectively incremented the duty step a number of times equivalent
             // to the number of cycles elapsed divided by the number of cycles per
             // increment.
-            let increments = cycles_since_wavelength_started.as_u64() / self.period();
+            let increments = cycles_since_wavelength_started.as_u64() / self.period().as_u64();
             (self.initial_count + increments) % NUM_STEPS
         } else {
             // When subracting, we never need to apply the modulus, since that was done when
@@ -705,15 +589,42 @@ impl<const NUM_STEPS: u64, const PERIOD_MULTIPLIER: u64>
     }
 
     /// The period is the time between duty step increments, expressed in D-Cycles.
-    fn period(&self) -> u64 {
-        (2048 - self.wavelength) * PERIOD_MULTIPLIER;
+    fn period(&self) -> DCycle {
+        DCycle::new((2048 - self.wavelength as u64) * PERIOD_MULTIPLIER)
+    }
+
+    /// Return true if we are in the first cycle. This is used by Channel 3 to determine if it
+    /// should emit its old initial sample.
+    fn is_first_duty_cycle(&self, now: DCycle) -> bool {
+        self.triggered_time + self.initial_period < now
+    }
+
+    /// Get the duty step as-of 1 d-cycle ago, or none if we are in the first duty cycle.
+    ///
+    /// This is used by channel 3 to set `initial_step` when it is being shut down so that it plays
+    /// the correct initial sample the next time it is triggered.
+    ///
+    /// Important! This should never be used on the same cycle as `set_wavelength`. If that happens,
+    /// it may return an incorrect duty step value because `duty_step()` assumes that time never
+    /// runs backwards. As long as wavelength is only written through memory, that should never
+    /// happen in practice, as turning off the channel (disabling the dac or the whole audio system)
+    /// requires a write to a different memory location than the wavelength, so that should be
+    /// sufficient to guarantee that there is at least one cycle between those.
+    fn get_last_duty_step(&self, now: DCycle) -> Option<u64> {
+        if self.is_first_duty_cycle(now) {
+            // There is no previous duty step if we are on the first step.  In this case, channel 3
+            // should not update its initial_step, since no new sample has been read.
+            None
+        } else {
+            Some(self.duty_step(now - 1))
+        }
     }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PulseChannel {
     /// Envelope register. Values here are only picked up when the channel is triggered.
-    pub envelope_control: EnvelopeControl,
+    envelope_control: EnvelopeControl,
     /// Currently active envelope.
     envelope: Envelope,
     /// Sweep register and currently active sweep settings.
@@ -766,39 +677,35 @@ impl PulseChannel {
         self.active
     }
 
-    /// Get the lower byte of the wavelength.
-    pub fn wavelength_low(&self) -> u8 {
-        let [wavelength_low, _] = self.wavelength.wavelength().to_le_bytes();
-        wavelength_low
-    }
-
     /// Set the lower byte of the wavelength. This should only be called from a memory access
     /// through system ram, and generally only via the CPU.
-    fn set_wavelength_low(&mut self, wavelength_low: u8) {
+    fn set_wavelength_low(&mut self, now: DCycle, wavelength_low: u8) {
         let [_, wavelength_high] = self.wavelength.wavelength().to_le_bytes();
-        self.wavelength.set_wavelength(u16::from_le_bytes([wavelength_low, wavelength_high]));
+        self.wavelength
+            .set_wavelength(now, u16::from_le_bytes([wavelength_low, wavelength_high]));
     }
 
-    /// Read the wavelength high bits adn readable control bits.
-    pub fn wavelength_high_and_control(&self) -> u8 {
+    /// Only the length bit is readable, so this is only intended for implementing memdev.
+    fn wavelength_high_and_control(&self) -> u8 {
         // length_enable is the only readable bit.
-        0xff.with_bits(Self::LENGTH_ENABLE, self.length_timer.enabled())
+        0xff.with_bits(Self::LENGTH_ENABLE, self.length_timer.enabled() as u8)
     }
 
     /// Set the value of the wavelength high and control register. This should only be called from a
     /// memory access through system ram, and generally only via the CPU.
-    fn set_wavelength_high_and_control(&mut self, value: u8) {
+    fn set_wavelength_high_and_control(&mut self, now: DCycle, value: u8) {
         let trigger = Self::TRIGGER.extract_bool(value);
         let length_enable = Self::LENGTH_ENABLE.extract_bool(value);
         let wavelength_high = Self::WAVELENGTH_HIGH.extract(value);
         let [wavelength_low, _] = self.wavelength.wavelength().to_le_bytes();
 
-        self.wavelength.set_wavelength(u16::from_le_bytes([wavelength_low, wavelength_high]));
+        self.wavelength
+            .set_wavelength(now, u16::from_le_bytes([wavelength_low, wavelength_high]));
         self.length_timer.set_enabled(length_enable);
         // Channel is turned on if triggered and the DAC is enabled. If the DAC is
         // disabled, triggering does nothing.
         if trigger && self.envelope_control.dac_enabled() {
-            self.triggered.set(());
+            self.wavelength.trigger(now);
             self.active = true;
             self.sweep.start_sweep();
             self.envelope.reload_register(&self.envelope_control);
@@ -807,7 +714,7 @@ impl PulseChannel {
 
     /// Reads out the value of the combined length and duty-cycle register. Since the
     /// length register is write-only, this only allows viewing the duty cycle.
-    pub fn length_and_duty_cycle(&self) -> u8 {
+    fn length_and_duty_cycle(&self) -> u8 {
         0xff.with_bits(Self::DUTY_CYCLE, self.duty_cycle as u8)
     }
 
@@ -820,33 +727,22 @@ impl PulseChannel {
     }
 
     /// Run one tick at the APU-DIV clock rate.
-    fn tick_apu_div(&mut self, apu_div: ApuDiv) {
+    fn tick_apu_div(&mut self, now: DCycle, apu_div: ApuDiv) {
         if self.length_timer.tick_apu_div(apu_div) {
             self.active = false;
         }
 
         if self.sweep.tick_apu_div(apu_div) {
-            let (wavelength, overflowed) = self.sweep.next_wavelength(self.wavelength);
+            let (wavelength, overflowed) = self.sweep.next_wavelength(self.wavelength.wavelength());
             if overflowed {
-                self.wavelength = 0;
+                self.wavelength.set_wavelength(now, 0);
                 self.active = false;
             } else {
-                self.wavelength = wavelength;
+                self.wavelength.set_wavelength(now, wavelength);
                 self.sweep.start_sweep();
             }
         }
         self.envelope.tick_apu_div(apu_div);
-    }
-
-    /// Update any time-tracking fields with the current clock snapshot.
-    fn update_if_dirty(&mut self, now: ClockSnapshot) {
-        self.wavelength.update_if_dirty(now);
-    }
-
-    /// Get the index into the pulse table for the current time based on when the channel
-    /// was last triggered.
-    fn pulse_step(&self, now: DCycle) -> usize {
-        self.wavelength.duty_step(now) as usize
     }
 
     /// Get a sample from this channel.
@@ -855,7 +751,7 @@ impl PulseChannel {
         // turn the channel active to false as well, and don't allow a write to turn the
         // channel on unless the DAC is active.
         if self.active {
-            let pulse_step = self.pulse_step(now);
+            let pulse_step = self.wavelength.duty_step(now) as usize;
             debug!(
                 "Sampling pulse channel from step {} of duty cycle {}",
                 pulse_step, self.duty_cycle,
@@ -871,29 +767,29 @@ impl PulseChannel {
 impl MemDevice for PulseChannel {
     const LEN: usize = 5;
 
-    fn read_byte_relative(&self, addr: RelativeAddr) -> u8 {
+    fn read_byte_relative(&self, ctx: &ReadCtx, addr: RelativeAddr) -> u8 {
         dispatch_memdev_byte!(PulseChannel, addr, |addr| {
-            0x00 => self.sweep.read_byte_relative(addr),
+            0x00 => self.sweep.read_byte_relative(ctx, addr),
             0x01 => self.length_and_duty_cycle(),
-            0x02 => self.envelope_control.read_byte_relative(addr),
-            0x03 => self.wavelength_low(),
+            0x02 => self.envelope_control.read_byte_relative(ctx, addr),
+            0x03 => 0xff, // wavelength is write-only.
             0x04 => self.wavelength_high_and_control(),
         })
     }
 
-    fn write_byte_relative(&mut self, addr: RelativeAddr, val: u8) {
+    fn write_byte_relative(&mut self, ctx: &WriteCtx, addr: RelativeAddr, val: u8) {
         dispatch_memdev_byte!(PulseChannel, addr, |addr| {
-            0x00 => self.sweep.write_byte_relative(addr, val),
+            0x00 => self.sweep.write_byte_relative(ctx, addr, val),
             0x01 => self.set_length_and_duty_cycle(val),
             0x02 => {
-                self.envelope_control.write_byte_relative(addr, val);
+                self.envelope_control.write_byte_relative(ctx, addr, val);
                 if !self.envelope_control.dac_enabled() {
                     // Disabling the DAC disables the channel.
                     self.active = false;
                 }
             },
-            0x03 => self.set_wavelength_low(val),
-            0x04 => self.set_wavelength_high_and_control(val),
+            0x03 => self.set_wavelength_low(ctx.atime().elapsed_fixed_cycles(), val),
+            0x04 => self.set_wavelength_high_and_control(ctx.atime().elapsed_fixed_cycles(),val),
         })
     }
 
@@ -905,7 +801,7 @@ impl MemDevice for PulseChannel {
 pub struct WavetableChannel {
     /// Whether the DAC is enabled. Unlike other channels, this is controlled directly
     /// rather than via some of the envelope bits.
-    dac_enable: bool,
+    dac_enabled: bool,
     /// Whether the channel is active. The channel can be disabled with the dac still
     /// active, but not the other way around.
     active: bool,
@@ -921,7 +817,10 @@ pub struct WavetableChannel {
 
     /// Output level setting (this is the register which would have the envelope function, but
     /// channel 3 has no envelope functionality).
-    output_level: u8,
+    ///
+    /// The supported levels are mute, 100%, 50%, and 25%, so this is stored as a right-shift (mute
+    /// is implemented by a shift of 4, which works since samples are at most 4 bits).
+    output_level: u32,
 
     /// Wavelength position calculator for the location in the sample table.
     wavelength: WavelengthCalculator<32, 1>,
@@ -929,117 +828,148 @@ pub struct WavetableChannel {
     /// Sample to emit when first triggered.
     initial_sample: u8,
 
-    period: u32,
-    phase_offset: u32,
-    triggered: bool,
-    sample_cursor: u32,
-    wavelength: u16,
-    level_shift: u8,
     /// Contains sample values which have been split in half to allow nybbles to be
     /// efficiently indexed when sampling.
     sample_table: [u8; 32],
 }
 
 impl WavetableChannel {
-    pub fn wavelength_low(&self) -> u8 {
-        (self.wavelength & 0xff) as u8
+    /// Bit of the dac enable register which is actually used to control the DAC.
+    const DAC_ENABLED: BitGroup = BitGroup(0b1000_0000);
+
+    /// Level selection. (Would be envelope in other channels).
+    const LEVEL: BitGroup = BitGroup(0b0110_0000);
+
+    // The Wavelength high and control register:
+    /// Trigger bit of the wavelength-high/control register.
+    const TRIGGER: BitGroup = BitGroup(0b1000_0000);
+    /// The length enable portion of the wavelength-high/control register.
+    const LENGTH_ENABLE: BitGroup = BitGroup(0b0100_0000);
+    /// Wavelength-high portion of the wavelength-high/control register.
+    const WAVELENGTH_HIGH: BitGroup = BitGroup(0b0000_0111);
+
+    /// Read the value of the DAC enable register for a memory read.
+    fn dac_enabled_reg(&self) -> u8 {
+        0xff.with_bits(Self::DAC_ENABLED, self.dac_enabled as u8)
     }
 
-    pub fn set_wavelength_low(&mut self, low_byte: u8) {
-        self.wavelength = (self.wavelength & 0x700) | low_byte as u16;
-        self.generate_period();
+    /// Update the dac_enabled value.
+    fn set_dac_enabled(&self, now: DCycle, val: u8) {
+        let dac_enabled = Self::DAC_ENABLED.extract_bool(val);
+        // If we are now turning off the dac (and the channel was active), we need to capture the
+        // last-read sample into initial_sample for next time.
+        if !dac_enabled {
+            if self.dac_enabled && self.active {
+                // If no index is returned, we haven't read a new sample since the last time we
+                // started, so we shouldn't update the initial_sample.
+                if let Some(index) = self.wavelength.get_last_duty_step(now) {
+                    self.initial_sample = self.sample_table[index as usize];
+                }
+            }
+            self.active = false;
+        }
+        self.dac_enabled = dac_enabled;
     }
 
-    pub fn get_samples(&self, samples: usize) -> u8 {
-        let base = samples * 2;
-        (self.sample_table[base] << 4) + self.sample_table[base + 1]
+    /// Get the value of the level register.
+    fn level_reg(&self) -> u8 {
+        // Unsure what the other bits should read as. Since most things seem to default to 1 if not
+        // connected, we're using 0xff like most other places.
+        0xff.with_bits(Self::LEVEL, match self.output_level {
+            4 => 0b00,
+            0 => 0b01,
+            1 => 0b10,
+            2 => 0b11,
+            _ => panic!("Invalid level setting, allowed values are 4 (mute), 0 (100%), 1 (50%), and 2 (25%)."),
+        })
     }
 
-    pub fn set_enable(&mut self, value: u8) {
-        self.enabled = (value & 0x80) != 0;
+    /// Set the level value.
+    fn set_level(&mut self, val: u8) {
+        self.output_level = match Self::LEVEL.extract(val) {
+            0b00 => 4,
+            0b01 => 0,
+            0b10 => 1,
+            0b11 => 2,
+            _ => unreachable!(),
+        };
     }
 
-    pub fn set_samples(&mut self, samples: usize, value: u8) {
-        let base = samples * 2;
+    /// Set the lower byte of the wavelength. This should only be called from a memory access
+    /// through system ram, and generally only via the CPU.
+    fn set_wavelength_low(&mut self, now: DCycle, wavelength_low: u8) {
+        let [_, wavelength_high] = self.wavelength.wavelength().to_le_bytes();
+        self.wavelength
+            .set_wavelength(now, u16::from_le_bytes([wavelength_low, wavelength_high]));
+    }
+
+    /// Read the wavelength high bits and readable control bits. Note: only the length enable bit is
+    /// readable. This is only intended for implementing memdev.
+    fn wavelength_high_and_control(&self) -> u8 {
+        // length_enable is the only readable bit.
+        0xff.with_bits(Self::LENGTH_ENABLE, self.length_timer.enabled() as u8)
+    }
+
+    /// Set the value of the wavelength high and control register. This should only be called from a
+    /// memory access through system ram, and generally only via the CPU.
+    fn set_wavelength_high_and_control(&mut self, now: DCycle, value: u8) {
+        let trigger = Self::TRIGGER.extract_bool(value);
+        let length_enable = Self::LENGTH_ENABLE.extract_bool(value);
+        let wavelength_high = Self::WAVELENGTH_HIGH.extract(value);
+        let [wavelength_low, _] = self.wavelength.wavelength().to_le_bytes();
+
+        self.wavelength
+            .set_wavelength(now, u16::from_le_bytes([wavelength_low, wavelength_high]));
+        self.length_timer.set_enabled(length_enable);
+        // Channel is turned on if triggered and the DAC is enabled. If the DAC is
+        // disabled, triggering does nothing.
+        if trigger && self.dac_enabled {
+            self.wavelength.trigger(now);
+            self.active = true;
+        }
+    }
+
+    /// Read the sample pair at the given address relative to the start of the sample table.
+    fn get_sample_pair(&self, samples: RelativeAddr) -> u8 {
+        let base = samples.index() * 2;
+        (self.sample_table[base] << 4) | self.sample_table[base + 1]
+    }
+
+    /// Set the sample pair at the given address relative to the start of the sample table.
+    fn set_sample_pair(&mut self, samples: RelativeAddr, value: u8) {
+        let base = samples.index() * 2;
         self.sample_table[base] = (value & 0xf0) >> 4;
         self.sample_table[base + 1] = value & 0xf;
     }
 
-    pub fn set_level(&mut self, value: u8) {
-        let value = (value >> 5) & 0x3;
-        self.level_shift = if value == 0 { 4 } else { value - 1 };
-    }
+    /// Run one tick at the APU-DIV clock rate.
+    fn tick_apu_div(&mut self, now: DCycle, apu_div: ApuDiv) {
+        if self.length_timer.tick_apu_div(apu_div) {
+            // When we stop the channel due to length expired, we need to update the initial_sample
+            // for next time the channel is triggered.
 
-    pub fn generate_period(&mut self) {
-        self.period = 64 * (2048 - self.wavelength as u32);
-    }
-
-    pub fn tick(&mut self, tcycles: u32) {
-        if self.period > 0 {
-            self.sample_cursor = (self.sample_cursor + tcycles) % self.period;
+            // If no index is returned, we haven't read a new sample since the last time we started,
+            // so we shouldn't update the initial_sample.
+            if let Some(index) = self.wavelength.get_last_duty_step(now) {
+                self.initial_sample = self.sample_table[index as usize];
+            }
+            self.active = false;
         }
     }
-}
 
-impl Channel for WavetableChannel {
-    fn get_sample(&self) -> f32 {
-        if self.enabled && self.active {
-            let wavetable_step = (((self.sample_cursor as u32 + self.phase_offset) % self.period)
-                / (self.period / 32)) as usize;
-            debug!(
-                "Sampling wavetable channel from step {} of sample table.",
-                wavetable_step
-            );
-            let dac_input = (self.sample_table[wavetable_step] as u16) >> self.level_shift;
+    /// Get a sample from this channel.
+    fn get_sample(&self, now: DCycle) -> f32 {
+        // When dac gets disabled, we also deactivate the channel, so no need to check dac_enable.
+        if self.active {
+            let dac_input = if self.wavelength.is_first_duty_cycle(now) {
+                self.initial_sample
+            } else {
+                let wavetable_step = self.wavelength.duty_step(now) as usize;
+                self.sample_table[wavetable_step]
+            };
             1.0 - (dac_input as f32 / 15.0 * 2.0)
         } else {
             0.0
-        }
-    }
-
-    fn read_control(&self) -> u8 {
-        if self.length_enable {
-            ChannelControl::LENGTH_ENABLE.bits()
-        } else {
-            0
-        }
-    }
-
-    fn set_control(&mut self, value: u8) {
-        let control = ChannelControl::from_bits_truncate(value);
-
-        self.triggered = control.contains(ChannelControl::TRIGGER);
-
-        self.length_enable = control.contains(ChannelControl::LENGTH_ENABLE);
-        self.wavelength = (self.wavelength & 0xff) | (control.wavelength_high() as u16) << 8;
-        self.generate_period();
-    }
-
-    fn set_length(&mut self, value: u8) {
-        self.length_acc = value;
-    }
-
-    fn check_trigger(&mut self) {
-        if self.triggered {
-            info!("Wavetable channel triggered");
-            info!("  Wavetable sample table: {:?}", self.sample_table);
-
-            self.active = true;
-            self.triggered = false;
-        }
-    }
-
-    fn apu_tick(&mut self) {
-        self.length_aticks += 1;
-
-        if self.length_aticks == 2 {
-            self.length_aticks = 0;
-            if self.length_enable {
-                self.length_acc = self.length_acc.wrapping_add(1);
-                if self.length_acc == 64 {
-                    self.active = false;
-                }
-            }
         }
     }
 }
@@ -1047,166 +977,501 @@ impl Channel for WavetableChannel {
 impl MemDevice for WavetableChannel {
     const LEN: usize = 0x15;
 
-    fn read_byte_relative(&self, addr: RelativeAddr) -> u8 {
-        match addr.relative() {
-            // Channel settings block.
-            0x00..=0x04 => 0xff,
+    fn read_byte_relative(&self, ctx: &ReadCtx, addr: RelativeAddr) -> u8 {
+        dispatch_memdev_byte!(WavetableChannel, addr, |addr| {
+            0x00 => self.dac_enabled_reg(),
+            0x01 => 0xff, // length timer is write-only.
+            0x02 => self.level_reg(),
+            0x03 => 0xff, // wavelength is write-only.
+            0x04 => self.wavelength_high_and_control(),
             // Channel "samples" block. ApuRegs will remap this portion to the correct
             // offset.
-            0x05..=0x14 => self.get_samples(addr.offset_by(0x05).index()),
-            _ => panic!("Address {addr}  out of range for WavetableChannel"),
-        }
+            0x05..=0x14 => self.get_sample_pair(addr),
+        })
     }
 
-    fn write_byte_relative(&mut self, addr: RelativeAddr, val: u8) {
-        match addr.relative() {
-            // Channel settings block.
-            0x00 => self.set_enable(val),
-            0x01 => self.set_length(val),
+    fn write_byte_relative(&mut self, ctx: &WriteCtx, addr: RelativeAddr, val: u8) {
+        dispatch_memdev_byte!(WavetableChannel, addr, |addr| {
+            0x00 => self.set_dac_enabled(ctx.atime().elapsed_fixed_cycles(), val),
+            0x01 => self.length_timer.set_counter(val),
             0x02 => self.set_level(val),
-            0x03 => self.set_wavelength_low(val),
-            0x04 => self.set_control(val),
+            0x03 => self.set_wavelength_low(ctx.atime().elapsed_fixed_cycles(), val),
+            0x04 => self.set_wavelength_high_and_control(ctx.atime().elapsed_fixed_cycles(), val),
             // Channel "samples" block. ApuRegs will remap this portion to the correct
             // offset.
-            0x05..=0x14 => self.set_samples(addr.offset_by(0x05).index(), val),
-            _ => panic!("Address {addr}  out of range for WavetableChannel"),
-        }
+            0x05 => self.set_sample_pair(addr, val),
+        })
     }
 
     memdev_bytes_from_byte!(WavetableChannel);
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct NoiseChannel {
-    phase_offset: u32,
-    enabled: bool,
-    active: bool,
-    triggered: bool,
-    noise_control: NoiseControl,
-    lfsr: u16,
-    envelope_control: EnvelopeControl,
-    envelope: Envelope,
-    length_enable: bool,
-    length_acc: u8,
-    length_aticks: u8,
-    envelope_aticks: u8,
-    lfsr_ticks: u32,
+/// A trait for types which implement the LFSR used in the noise channel.
+trait LinearFeedbackShiftRegister: Clone + fmt::Debug + Default + PartialEq + Eq {
+    /// Apply the 'increment/shift' operation of the LFSR the given number of times and return bit 0
+    /// at the end of the operation. The output is always either 0 or 1.
+    fn increment_by_and_get_output(&mut self, increments: u64) -> u16;
+
+    /// Return true if the LFSR is using short mode.
+    fn short(&self) -> bool;
+
+    /// Set the width mode of the LFSR.
+    fn set_short(&mut self, short_width: bool);
+
+    /// Reset the LFSR.
+    fn reset(&mut self);
 }
 
-impl NoiseChannel {
-    pub fn set_noise_control(&mut self, value: u8) {
-        self.noise_control.set(value);
+/// Directly implements the LFSR by doing the actual shifts.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct DirectLinearFeedbackShiftRegister {
+    /// Whether to use the shorter width (7 bits) instead of 15 bits.
+    short_width: bool,
+
+    /// The contents of the LFSR register.
+    value: u16,
+}
+
+impl LinearFeedbackShiftRegister for DirectLinearFeedbackShiftRegister {
+    fn increment_by_and_get_output(&mut self, increments: u64) -> u16 {
+        /// Take an applier function and initial value and return the final value after n
+        /// increments.
+        ///
+        /// The applier function should only set the relevant bits, not shift the result down.
+        #[inline]
+        fn do_increments<F: Fn(u16, u16) -> u16>(apply: F, mut value: u16, increments: u64) -> u16 {
+            for _ in 0..increments {
+                // the bit is the nxor of the last two bits.
+                let bit = (!(((value & 0b10) >> 1) ^ (value & 0b01))) & 1;
+                // Apply the bit and shift down.
+                value = apply(value, bit) >> 1;
+            }
+            value
+        }
+
+        #[inline(always)]
+        fn apply_long(value: u16, bit: u16) -> u16 {
+            (value & 0x7fff) | (bit << 15)
+        }
+
+        #[inline(always)]
+        fn apply_short(value: u16, bit: u16) -> u16 {
+            (value & 0x7f7f) | (bit << 15) | (bit << 7)
+        }
+
+        // This ensures the conditional is not applied within a tight loop.
+        self.value = if self.short_width {
+            do_increments(apply_short, self.value, increments)
+        } else {
+            do_increments(apply_long, self.value, increments)
+        };
+        self.value & 1
     }
 
-    pub fn set_envelope(&mut self, value: u8) {
-        self.envelope_control.set(value);
-        //set an envelope phase offset?
-        //needs retrigger to take
+    fn short(&self) -> bool {
+        self.short_width
     }
 
-    // Unlike the other channels noise has state updates that
-    //  need to be updated faster than the div-apu tick
-    pub fn tick(&mut self, tcycles: u32) {
-        self.lfsr_ticks += tcycles;
-        if self.lfsr_ticks > self.noise_control.period() {
-            self.lfsr_ticks -= self.noise_control.period();
+    fn set_short(&mut self, short_width: bool) {
+        self.short_width = short_width;
+    }
 
-            let feedback_bits = if (self.lfsr & 0x1) ^ ((self.lfsr >> 1) & 0x1) == 0 {
-                0x4080
-            } else {
-                0x0
-            };
+    fn reset(&mut self) {
+        self.value = 0;
+    }
+}
 
-            let lfsr_mask = self.noise_control.lfsr_mask();
-            self.lfsr = ((self.lfsr & !lfsr_mask) | (feedback_bits & lfsr_mask)) >> 1;
+/// Represents the LFSR used in the Noise channel.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct TabledLinearFeedbackShiftRegister {
+    /// Whether to use the shorter width (7 bits) instead of 15 bits.
+    short_width: bool,
+
+    /// Bits from the upper portion of the LFSR which need to be reapplied when switching from 7
+    /// bits to 15 bits, if we haven't gone enough steps for them to all be shifted away.
+    saved_high_bits: u16,
+    /// Increment during which we changed from wide to short. This is used only to determine how
+    /// many bits from `saved_high_bits` should be reapplied when changing from 7 bit mode back to
+    /// 15 bit mode.
+    changed_increment: u64,
+
+    /// Offset applied to elapsed_increments before indexing into the LFSR table. This is used to
+    /// adjust for changes between 15 bit mode and 7 bit mode.
+    index_offset: u64,
+    /// Number of increments that have elapsed.
+    elapsed_increments: u64,
+
+    /// If locked, the LFSR is in a state where it can only emit 1 (which is not covered by the LFSR
+    /// table).
+    locked: bool,
+}
+
+impl TabledLinearFeedbackShiftRegister {
+    /// Get the current LFSR15 index.
+    fn idx15(&self) -> usize {
+        ((self.elapsed_increments + self.index_offset) % lfsr::LFSR15_PATTERN.len() as u64) as usize
+    }
+
+    /// Get the current LFSR7 index.
+    fn idx7(&self) -> usize {
+        ((self.elapsed_increments + self.index_offset) % lfsr::LFSR7_PATTERN.len() as u64) as usize
+    }
+}
+
+impl LinearFeedbackShiftRegister for TabledLinearFeedbackShiftRegister {
+    /// Increment the LFSR `increments` number of times.
+    ///
+    /// The return value will be either 0 or 1.
+    fn increment_by_and_get_output(&mut self, increments: u64) -> u16 {
+        self.elapsed_increments += increments;
+        if self.locked {
+            1
+        } else if self.short_width {
+            lfsr::LFSR7_PATTERN[self.idx7()] & 0x01
+        } else {
+            lfsr::LFSR15_PATTERN[self.idx15()] & 0x01
         }
     }
+
+    fn short(&self) -> bool {
+        self.short_width
+    }
+
+    fn set_short(&mut self, short_width: bool) {
+        if short_width != self.short_width {
+            if short_width {
+                if self.locked {
+                    // If we were locked at 15 bits, we are still going to be locked at 7 bits, and
+                    // don't need to change anything, but to be sure we convert back correctly
+                    // later, we'll store the locked bit pattern in saved_high_bits and update the
+                    // changed_increment.
+                    self.changed_increment = self.elapsed_increments;
+                    self.saved_high_bits = 0x7f80;
+                } else {
+                    // Changing from wide to short, so we need to recalculate the index_offset such
+                    // that the current value of `elapsed_increments` has the same value for the
+                    // 7-bit secton as we have for the 15-bit section.
+
+                    // Get the current 15 bit value.
+                    let value = lfsr::LFSR15_PATTERN[self.idx15()];
+
+                    // Store information about the high bits from the 15 bit register so we can
+                    // restore them later if needed.
+                    self.changed_increment = self.elapsed_increments;
+                    self.saved_high_bits = value & 0x7f80;
+
+                    // Get just the last bits of the 7-bit portion. This is the relevant part and is
+                    // used in the reverse lookup table to figure out where we are in the 7-bit
+                    // sequence.
+                    let masked_lower_bits = value & 0x007f;
+
+                    match lfsr::LFSR7_REVERSE_LOOKUP.get(masked_lower_bits as usize) {
+                        // If the index is out of bounds, the value is all 1 and will cause us to be
+                        // locked in 7 bit mode.
+                        None => {
+                            self.locked = true;
+                        }
+                        Some(&idx7) => {
+                            let pat_len = lfsr::LFSR7_PATTERN.len() as u64;
+                            let idx7 = idx7 as u64;
+                            // Find an index_offset which, when added to the current increment
+                            // produces the correct current index into the LFSR7_PATTERN.
+                            //
+                            // Basically, we're trying to solve `index = elapsed + offset` but mod
+                            // pat_len, which is `index - elapsed = offset`. Since `index` and
+                            // `offset` are `% pat_len`, we adjust the formula to avoid underflow.
+                            //
+                            // Essentially, we add pat_len to idx7 to make sure it is large enough
+                            // to subtract from, and then mod elapsed by `pat_len` to ensure it is
+                            // smaller than `idx7 + pat_len`. This produces an index_offset which is
+                            // somewhere in the range `1..(2 * pat_len)`.
+                            //
+                            // Since mod will be applied again when calculating the final index, we
+                            // don't need to apply mod to index_offset again here.
+                            self.index_offset =
+                                idx7 + pat_len - (self.elapsed_increments % pat_len);
+                        }
+                    };
+                }
+            } else {
+                // Changing from 7 to 15 can result in unlocking if done soon enough!
+
+                // Get the current value of the LFSR assuming we have shifted enough times that bits
+                // from 15 bit mode have all been shifted away. We will later reapply bits from 15
+                // bit mode if necessary.
+                let base_value = if self.locked {
+                    0x7fff
+                } else {
+                    lfsr::LFSR7_PATTERN[self.idx7()]
+                };
+
+                // Amount that saved_high_bits have been shifted down.
+                let amount_shifted = self.elapsed_increments - self.changed_increment;
+                // Figure out the actual value of the LFSR by reapplying the saved_high_bits.
+                let value = if amount_shifted < 8 {
+                    let reapplied = (self.saved_high_bits >> amount_shifted) & 0x7f8;
+                    let reapply_mask = (0x7f8 >> amount_shifted) & 0x7f8;
+                    (base_value & !reapply_mask) | (reapplied & reapply_mask)
+                } else {
+                    base_value
+                };
+
+                match lfsr::LFSR15_REVERSE_LOOKUP.get(value as usize) {
+                    None => {
+                        self.locked = true;
+                    }
+                    Some(&idx15) => {
+                        let pat_len = lfsr::LFSR15_PATTERN.len() as u64;
+                        let idx15 = idx15 as u64;
+                        // Find an index_offset which, when added to the current increment
+                        // produces the correct current index into the LFSR15_PATTERN.
+                        //
+                        // The math here works exactly the same as for 7 bit mode.
+                        self.index_offset = idx15 + pat_len - (self.elapsed_increments % pat_len);
+                    }
+                }
+            }
+        }
+    }
+
+    fn reset(&mut self) {
+        // We don't change the long/short setting but do reset all the fields used in calculating
+        // the current value (to set the output back to 0).
+
+        // The changed_increment and saved_high_bits need to be reset in case we are in 7 bit mode
+        // and switch back to 15 bit mode on the firs cycle, so the zeroes from 15 bit mode will be
+        // reapplied.
+        self.changed_increment = 0;
+        self.saved_high_bits = 0;
+        self.elapsed_increments = 0;
+        self.index_offset = 0;
+        self.locked = false;
+    }
 }
 
-impl Channel for NoiseChannel {
-    fn get_sample(&self) -> f32 {
-        if self.envelope_control.dac_enabled() && self.active {
-            let dac_input = (self.lfsr & 0x1) * self.envelope.level();
+/// The noise channel (Channel 4).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NoiseChannel<LFSR> {
+    /// Timer that controls turning off the noise channel.
+    length_timer: LengthTimer,
+
+    /// Envelope register. Values here are only picked up when the channel is triggered.
+    envelope_control: EnvelopeControl,
+    /// Currently active envelope.
+    envelope: Envelope,
+
+    /// The LFSR which determines the actual output of the channel.
+    lfsr: LFSR,
+
+    /// Shift applied when determining the period.
+    clock_shift: u8,
+    /// Divider used when determining the period.
+    clock_divider: u8,
+
+    /// DCycle when the currently set period (based on clock shift and divider) should take/took
+    /// effect. Note that many periods at this period length may have elapsed since this time, this
+    /// is just the time used as the basis for calculing how many steps have elapsed.
+    period_start_time: DCycle,
+    /// Value of the counter as of `period_start_time`. If `period_start_time <= now`, the counter
+    /// value is `initial_increments + times_incremented`, where `times_incremented` is the number
+    /// of times the counter would have incremented since `period_start_time` at the current period
+    /// length. If `period_start_time > now`, the count is exactly `initial_increments - 1`.
+    initial_increments: u64,
+    /// This is the number of increments passed to the LFSR. This is used to control how much the
+    /// LFSR is advanced whenever a sample is read.
+    consumed_increments: u64,
+
+    /// Whether the channel is currently active.
+    active: bool,
+}
+
+impl<LFSR: LinearFeedbackShiftRegister> NoiseChannel<LFSR> {
+    // Noise Control Register Fields.
+    /// Clock shift field of the noise control register.
+    const CLOCK_SHIFT: BitGroup = BitGroup(0b1111_0000);
+    /// LFSR width field of the noise control register.
+    const LFSR_WIDTH: BitGroup = BitGroup(0b0000_1000);
+    /// Clock div field of the noise control register.
+    const CLOCK_DIV: BitGroup = BitGroup(0b0000_0111);
+
+    // The control register:
+    /// Trigger bit of the control register.
+    const TRIGGER: BitGroup = BitGroup(0b1000_0000);
+    /// The length enable portion of the control register.
+    const LENGTH_ENABLE: BitGroup = BitGroup(0b0100_0000);
+
+    /// Get the value of the noise control register.
+    ///
+    /// Only intended for implementing memory access.
+    fn noise_control(&self) -> u8 {
+        0xff.with_bits(Self::CLOCK_SHIFT, self.clock_shift)
+            .with_bits(Self::LFSR_WIDTH, self.lfsr.short() as u8)
+            .with_bits(Self::CLOCK_DIV, self.clock_divider)
+    }
+
+    /// Set the value of the noise control register.
+    ///
+    /// Only intended for implementing memory access.
+    fn set_noise_control(&mut self, now: DCycle, value: u8) {
+        let clock_shift = Self::CLOCK_SHIFT.extract(value);
+        let short = Self::LFSR_WIDTH.extract_bool(value);
+        let clock_div = Self::CLOCK_DIV.extract(value);
+
+        self.lfsr.set_short(short);
+
+        // We need to recalculate the period start time and initial number of increments for the new
+        // shift/div.
+        // The logic here is very similar to what is used in WavelengthCalculator, just the way we
+        // compute the period is different.
+        //
+        // If the end of the current period is in the future, we already changed the period once and
+        // computed the time to switch over, so we just need to update to the new period. This is
+        // also fine if we are exactly on the cycle when the period is changing.
+        //
+        // We only need to recompute the changeover cycle if we are in the middle of a period, that
+        // is if the start time for the current period is in the past.
+        if self.period_start_time < now {
+            // The new period_start_time will be the next smallest multiple of the period greater
+            // than or equal to now.
+            let cycles_since_period_started = now - self.period_start_time;
+            let period = self.period();
+            let increments = cycles_since_period_started.as_u64() / period.as_u64();
+            let current_increments = self.initial_increments + increments;
+
+            // The time since the start of the current increment is the remainder after dividing
+            // by the period. This is the number of ticks left in
+            // `cycles_since_period_started` between when the last increment happened and `now`.
+            let ticks_since_current_increment_started =
+                cycles_since_period_started.as_u64() % period.as_u64();
+            // Calculate the number of cycles until the next period start. This is the length of
+            // the periiod minus the number of cycles we've already seen in the period. However,
+            // if ticks_since_current_increment_started is zero, we are already on an increment
+            // boundary right now. We can cover the 'already on a boundary' case by taking this
+            // result mod the period length.
+            let ticks_until_increment_ends =
+                (period - ticks_since_current_increment_started).as_u64() % period.as_u64();
+
+            // The start time for the new period is the end of the current increment.
+            self.period_start_time = now + ticks_until_increment_ends;
+
+            // The initial number of increments for the new period is the current value if this
+            // happens on a period boundary, otherwise it is one more than the current nubmer of
+            // increments if the new period starts in the future. If the number of increments is
+            // requested before the new period starts, the value will be `initial_increments - 1`.
+            self.initial_increments = current_increments;
+            if ticks_until_increment_ends > 0 {
+                self.initial_increments += 1;
+            }
+        }
+        self.clock_shift = clock_shift;
+        self.clock_divider = clock_div;
+        // We don't update consumed increments until those increments are actually sent to the LFSR.
+    }
+
+    /// Get the readable portion of the control register.
+    ///
+    /// Only intended for implementing memory access.
+    fn control(&self) -> u8 {
+        // Only length_enable is readable.
+        0xff.with_bits(Self::LENGTH_ENABLE, self.length_timer.enabled() as u8)
+    }
+
+    /// Set the control register.
+    ///
+    /// Only intended for implementing memory access.
+    fn set_control(&mut self, now: DCycle, value: u8) {
+        let trigger = Self::TRIGGER.extract_bool(value);
+        let length_enable = Self::LENGTH_ENABLE.extract_bool(value);
+
+        self.length_timer.set_enabled(length_enable);
+
+        // Channel is turned on if triggered and the DAC is enabled. If the DAC is
+        // disabled, triggering does nothing.
+        if trigger && self.envelope_control.dac_enabled() {
+            self.active = true;
+            self.envelope.reload_register(&self.envelope_control);
+            self.lfsr.reset();
+            self.consumed_increments = 0;
+            self.initial_increments = 0;
+            self.period_start_time = now;
+        }
+    }
+
+    /// Calculate the length of the period in d-cycles.
+    fn period(&self) -> DCycle {
+        DCycle::new(if self.clock_divider == 0 {
+            1 << (self.clock_shift + 2)
+        } else {
+            (self.clock_divider as u64) << (self.clock_shift + 3)
+        })
+    }
+
+    /// Get the current number of increments at a given time. Assumes time doesn't move backwards
+    /// from when the period is updated.
+    fn increments(&self, now: DCycle) -> u64 {
+        if self.period_start_time <= now {
+            let cycles_since_period_start = now - self.period_start_time;
+            let increments = cycles_since_period_start.as_u64() / self.period().as_u64();
+            self.initial_increments + increments
+        } else {
+            self.initial_increments - 1
+        }
+    }
+
+    /// Update the LFSR and get the current sample.
+    ///
+    /// Mut is needed so the LFSR can be updated.
+    fn get_sample(&mut self, now: DCycle) -> f32 {
+        // If the DAC is off, we always set active to false, so we don't need to check the DAC here.
+        if self.active {
+            let increments = self.increments(now);
+            let new_increments = increments - self.consumed_increments;
+            self.consumed_increments = increments;
+            let dac_input =
+                self.lfsr.increment_by_and_get_output(new_increments) * self.envelope.level();
             1.0 - (dac_input as f32 / 15.0 * 2.0)
         } else {
             0.0
         }
     }
 
-    fn read_control(&self) -> u8 {
-        if self.length_enable {
-            ChannelControl::LENGTH_ENABLE.bits()
-        } else {
-            0
+    /// Apply the APU-DIV ticks.
+    fn tick_apu_div(&mut self, apu_div: ApuDiv) {
+        if self.length_timer.tick_apu_div(apu_div) {
+            self.active = false;
         }
-    }
-
-    fn set_control(&mut self, value: u8) {
-        let control = ChannelControl::from_bits_truncate(value);
-
-        self.triggered = control.contains(ChannelControl::TRIGGER);
-
-        self.length_enable = control.contains(ChannelControl::LENGTH_ENABLE);
-    }
-
-    fn set_length(&mut self, value: u8) {
-        self.length_acc = value & 0x1f;
-    }
-
-    fn check_trigger(&mut self) {
-        if self.triggered {
-            self.active = true;
-            self.triggered = false;
-            self.lfsr = 0;
-            self.envelope = self.envelope_control.new_envelope();
-            info!(
-                "Noise channel triggered with envelope {:?}, length_enable {}, length_acc {}",
-                self.envelope, self.length_enable, self.length_acc
-            );
-        }
-    }
-
-    fn apu_tick(&mut self) {
-        self.length_aticks += 1;
-        self.envelope_aticks += 1;
-
-        if self.length_aticks == 2 {
-            self.length_aticks = 0;
-            if self.length_enable {
-                self.length_acc = self.length_acc.wrapping_add(1);
-                if self.length_acc == 64 {
-                    self.active = false;
-                }
-            }
-        }
-        if self.envelope_aticks == 8 {
-            self.envelope_aticks = 0;
-            self.envelope.tick();
-        }
+        self.envelope.tick_apu_div(apu_div);
     }
 }
 
-impl MemDevice for NoiseChannel {
+impl<LFSR: LinearFeedbackShiftRegister> MemDevice for NoiseChannel<LFSR> {
     const LEN: usize = 4;
 
-    fn read_byte_relative(&self, addr: RelativeAddr) -> u8 {
-        match addr.relative() {
-            0x00..=0x03 => 0xff,
-            _ => panic!("Address {addr} out of range for NoiseChannel"),
-        }
+    fn read_byte_relative(&self, ctx: &ReadCtx, addr: RelativeAddr) -> u8 {
+        dispatch_memdev_byte!(NoiseChannel<LFSR>, addr, |addr| {
+            0x00 => 0xff,
+            0x01 => self.envelope_control.read_byte_relative(ctx, addr),
+            0x02 => self.noise_control(),
+            0x03 => self.control(),
+        })
     }
 
-    fn write_byte_relative(&mut self, addr: RelativeAddr, val: u8) {
-        match addr.relative() {
-            0x00 => self.set_length(val),
-            0x01 => self.set_envelope(val),
-            0x02 => self.set_noise_control(val),
-            0x03 => self.set_control(val),
-            _ => panic!("Address {addr} out of range for NoiseChannel"),
-        }
+    fn write_byte_relative(&mut self, ctx: &WriteCtx, addr: RelativeAddr, val: u8) {
+        dispatch_memdev_byte!(NoiseChannel<LFSR>, addr, |addr| {
+            0x00 => self.length_timer.set_counter(val),
+            0x01 => {
+                self.envelope_control.write_byte_relative(ctx, addr, val);
+                if !self.envelope_control.dac_enabled() {
+                    // Disabling the DAC disables the channel.
+                    self.active = false;
+                }
+            },
+            0x02 => self.set_noise_control(ctx.atime().elapsed_fixed_cycles(), val),
+            0x03 => self.set_control(ctx.atime().elapsed_fixed_cycles(), val),
+        })
     }
 
-    memdev_bytes_from_byte!(NoiseChannel);
+    memdev_bytes_from_byte!(NoiseChannel<LFSR>);
 }
 
 const HIGH_PASS_CUTOFF: f32 = 200.0;
@@ -1282,7 +1547,7 @@ pub struct ApuRegs {
     pub ch1: PulseChannel,
     pub ch2: PulseChannel,
     pub ch3: WavetableChannel,
-    pub ch4: NoiseChannel,
+    pub ch4: NoiseChannel<TabledLinearFeedbackShiftRegister>,
     pub sound_volume: SoundVolume,
     pub sound_pan: SoundPan,
     pub sound_enable: SoundEnable,
@@ -1305,15 +1570,11 @@ memdev_fields!(ApuRegs, len: 0x30, {
 impl ApuRegs {
     /// Tick the APU-DIV given the status of the APU-DIV register as of this apu-div tick
     /// cycle. Should only be called on the cycle when ApuDiv was incremented.
-    fn tick_apu_div(&mut self, apu_div: ApuDiv) {
-        self.ch1.tick_apu_div(apu_div);
-        self.ch2.tick_apu_div(apu_div);
-    }
-
-    /// Update any time-tracking registers with the current clock snapshot.
-    pub fn update_if_dirty(&mut self, now: ClockSnapshot) {
-        self.ch1.update_if_dirty(now);
-        self.ch2.update_if_dirty(now);
+    fn tick_apu_div(&mut self, now: DCycle, apu_div: ApuDiv) {
+        self.ch1.tick_apu_div(now, apu_div);
+        self.ch2.tick_apu_div(now, apu_div);
+        self.ch3.tick_apu_div(now, apu_div);
+        self.ch4.tick_apu_div(apu_div);
     }
 }
 
@@ -1327,9 +1588,10 @@ pub struct ApuState {
     /// from the last time the sample rate was changed.
     sample: u64,
     /// Time that the sample rate was last changed. When the sample rate is changed, this
-    /// gets reset to the SystemClock time for the next cycle after the cycle when the
-    /// rate was changed.
-    sample_rate_changed_at: Option<Duration>,
+    /// gets reset to the SystemClock time.
+    sample_rate_changed_at: Duration,
+    /// Cached time that the next sample should be taken at.
+    next_sample_time: Duration,
     /// Previous value of the bit selected from the DIV register that drives the sound
     /// clock. The sound clock triggers whenever this hits a falling edge. This bit is
     /// slected from divider bit 13 or 14 depending on whether the system is running at
@@ -1348,39 +1610,32 @@ impl ApuState {
             output_sample: None,
             sample_rate: 0,
             sample: 0,
-            sample_rate_changed_at: Some(Duration::ZERO),
+            sample_rate_changed_at: Duration::ZERO,
+            next_sample_time: Duration::ZERO,
             prev_divider_bit: false,
             apu_div: ApuDiv::default(),
             hpf: HighPassFilter::default(),
         }
     }
 
-    pub fn set_output_sample_rate(&mut self, sample_rate: u32) {
+    /// Set the output sample rate. The current clock snapshot should be provided.
+    pub(crate) fn set_output_sample_rate(&mut self, now: DCycle, sample_rate: u32) {
         self.sample_rate = sample_rate as u64;
         self.sample = 0;
-        self.sample_rate_changed_at = None;
+        self.sample_rate_changed_at = now.duration();
+        self.next_sample_time = self.sample_rate_changed_at;
         self.hpf.set_sample_rate(sample_rate);
     }
 
-    pub fn consume_output_sample(&mut self) -> Option<Sample> {
+    pub(crate) fn consume_output_sample(&mut self) -> Option<Sample> {
         self.output_sample.take()
     }
 
-    /// Calculate the time at which the next sample should be generated.
-    fn next_sample_time(&self) -> Duration {
+    /// Increments the number of samples by 1 and updates the time for the next sample.
+    fn increment_sample_count(&mut self) {
+        self.sample += 1;
         let time_since_changed = cycles_to_duration(self.sample, self.sample_rate);
-        let changed_at = self
-            .sample_rate_changed_at
-            .expect("sample rate change time was not set");
-        changed_at + time_since_changed
-    }
-
-    /// Update the `sample_rate_changed_at` to be the time of the next sample at the
-    /// current sample rate, if it isn't set.
-    fn recompute_sample_time_if_needed(&mut self, clock: &SystemClock) {
-        if self.sample_rate_changed_at.is_none() {
-            self.sample_rate_changed_at = Some(clock.elapsed_time());
-        }
+        self.next_sample_time = self.sample_rate_changed_at + time_since_changed
     }
 }
 
@@ -1395,33 +1650,11 @@ pub trait ApuContext: SystemClockContext {
     fn divider(&self) -> &TimerDivider;
 }
 
-fn get_stereo_sample(ctx: &impl ApuContext, right: bool) -> f32 {
-    let channel_mix = ctx.apu_regs().sound_pan.channel_mix(right);
-
-    ctx.apu_regs().sound_volume.vol_multiplier(right)
-        * (if channel_mix.contains(ChannelMix::CH1) {
-            0.25 * ctx.apu_regs().ch1.get_sample()
-        } else {
-            0.0
-        } + if channel_mix.contains(ChannelMix::CH2) {
-            0.25 * ctx.apu_regs().ch2.get_sample()
-        } else {
-            0.0
-        } + if channel_mix.contains(ChannelMix::CH3) {
-            0.25 * ctx.apu_regs().ch3.get_sample()
-        } else {
-            0.0
-        } + if channel_mix.contains(ChannelMix::CH4) {
-            0.25 * ctx.apu_regs().ch4.get_sample()
-        } else {
-            0.0
-        })
-}
-
 /// to be called on divider bit 4 (5 double speed) falling edge
 pub fn tick_apu_div(ctx: &mut impl ApuContext) {
+    let now = ctx.clock().elapsed_fixed_cycles();
     let apu_div = ctx.apu_mut().apu_div.tick_apu_div();
-    ctx.apu_regs_mut().tick_apu_div(apu_div);
+    ctx.apu_regs_mut().tick_apu_div(now, apu_div);
 }
 
 pub fn tick(ctx: &mut impl ApuContext) {
@@ -1429,50 +1662,61 @@ pub fn tick(ctx: &mut impl ApuContext) {
         ClockSpeed::Normal => 0x2000,
         ClockSpeed::Double => 0x4000,
     };
-    let divider_bit = ctx.divider().value() & divider_bit_selector != 0;
+    let divider_bit = ctx.divider().value(ctx.clock().elapsed_cycles()) & divider_bit_selector != 0;
     let prev_divider_bit = mem::replace(&mut ctx.apu_mut().prev_divider_bit, divider_bit);
     if prev_divider_bit && !divider_bit {
         tick_apu_div(ctx);
     }
 
-    ctx.apu_regs_mut().ch1.check_trigger();
-    ctx.apu_regs_mut().ch2.check_trigger();
-    ctx.apu_regs_mut().ch3.check_trigger();
-    ctx.apu_regs_mut().ch4.check_trigger();
-
     if ctx.apu().sample_rate > 0 {
-        let next_sample_time = ctx.apu().next_sample_time();
-        let next_sample = ctx.apu().output_period - sample_cursor;
-        if tcycles as f32 > next_sample {
-            ctx.apu_regs_mut().ch1.tick(next_sample as u32);
-            ctx.apu_regs_mut().ch2.tick(next_sample as u32);
-            ctx.apu_regs_mut().ch3.tick(next_sample as u32);
-            ctx.apu_regs_mut().ch4.tick(next_sample as u32);
+        let now = ctx.clock().elapsed_time();
+        if ctx.apu().next_sample_time < now {
+            // Sample output has fallen behind the system clock somehow, we will reset the next
+            // sample time to the current time and then emit samples from then.
+            //
+            // This should only be possible if the sample rate is faster than the d-cycle rate.
+            warn!("Sample output behind, resetting to now");
+            ctx.apu_mut().sample = 0;
+            ctx.apu_mut().sample_rate_changed_at = now;
+            ctx.apu_mut().next_sample_time = now;
+        }
+        for (cycle, time_range) in ctx.clock().current_cycle_fixed_cycles().time_ranges() {
+            if time_range.start <= ctx.apu().next_sample_time
+                && ctx.apu().next_sample_time < time_range.end
+            {
+                ctx.apu_mut().increment_sample_count();
 
-            let sample = Sample {
-                left: get_stereo_sample(ctx, false),
-                right: get_stereo_sample(ctx, true),
-            };
-            let stereo_sample = ctx.apu_mut().hpf.filter_sample(sample);
-            ctx.apu_mut().output_sample = Some(stereo_sample);
+                let channel_mix_left = ctx.apu_regs().sound_pan.channel_mix(SoundSide::Left);
+                let vol_mul_left = ctx.apu_regs().sound_volume.vol_multiplier(SoundSide::Left);
 
-            ctx.apu_regs_mut()
-                .ch1
-                .tick(tcycles as u32 - next_sample as u32);
-            ctx.apu_regs_mut()
-                .ch2
-                .tick(tcycles as u32 - next_sample as u32);
-            ctx.apu_regs_mut()
-                .ch3
-                .tick(tcycles as u32 - next_sample as u32);
-            ctx.apu_regs_mut()
-                .ch4
-                .tick(tcycles as u32 - next_sample as u32);
-        } else {
-            ctx.apu_regs_mut().ch1.tick(tcycles as u32);
-            ctx.apu_regs_mut().ch2.tick(tcycles as u32);
-            ctx.apu_regs_mut().ch3.tick(tcycles as u32);
-            ctx.apu_regs_mut().ch4.tick(tcycles as u32);
+                let channel_mix_right = ctx.apu_regs().sound_pan.channel_mix(SoundSide::Right);
+                let vol_mul_right = ctx.apu_regs().sound_volume.vol_multiplier(SoundSide::Left);
+
+                let ch1 = ctx.apu_regs().ch1.get_sample(cycle);
+                let ch2 = ctx.apu_regs().ch2.get_sample(cycle);
+                let ch3 = ctx.apu_regs().ch3.get_sample(cycle);
+                let ch4 = ctx.apu_regs_mut().ch4.get_sample(cycle);
+
+                fn blend_samples(
+                    mix: ChannelMix,
+                    vol_mul: f32,
+                    ch1: f32,
+                    ch2: f32,
+                    ch3: f32,
+                    ch4: f32,
+                ) -> f32 {
+                    vol_mul
+                        * (mix.get_channel_mix_multiplier(ChannelMix::CH1) * ch1
+                            + mix.get_channel_mix_multiplier(ChannelMix::CH2) * ch2
+                            + mix.get_channel_mix_multiplier(ChannelMix::CH3) * ch3
+                            + mix.get_channel_mix_multiplier(ChannelMix::CH4) * ch4)
+                }
+
+                ctx.apu_mut().output_sample = Some(Sample {
+                    left: blend_samples(channel_mix_left, vol_mul_left, ch1, ch2, ch3, ch4),
+                    right: blend_samples(channel_mix_right, vol_mul_right, ch1, ch2, ch3, ch4),
+                })
+            }
         }
     }
 }

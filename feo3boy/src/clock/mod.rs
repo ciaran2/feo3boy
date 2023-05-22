@@ -95,7 +95,7 @@ impl SystemClock {
     /// normal speed).
     pub fn current_cycle_fixed_cycles(&self) -> DCycleIter {
         DCycleIter {
-            cycles: self.dcycle..self.dcycle + self.speed.dcycles_per_mcycle(),
+            cycles: self.dcycle.as_u64()..self.dcycle.as_u64() + self.speed.dcycles_per_mcycle(),
         }
     }
 
@@ -134,7 +134,7 @@ pub struct DCycleIter {
 impl DCycleIter {
     /// Get an interator over the time ranges covered by the d-cycles in this iterator,
     /// assuming the cycles are a count from the start of emulator time.
-    fn time_ranges(self) -> DCycleTimeRanges {
+    pub fn time_ranges(self) -> DCycleTimeRanges {
         let start = DCycle::new(self.cycles.start).duration();
         DCycleTimeRanges {
             cycles: self,
@@ -236,14 +236,12 @@ impl FusedIterator for DCycleTimeRanges {}
 
 /// Type for tracking what clock cycle a value is changed at.
 ///
-/// Values with change tracking are considered equal if have the same dirty state and were
-/// updated at the same cycle.
+/// Values with change tracking are considered equal if have the same value and were updated at the
+/// same cycle.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct TimedChangeTracker<T> {
     /// Snapshot of the clock when the tracked value was last updated.
     changed_at: ClockSnapshot,
-    /// If the current value has been modified without updating the clock-cycle.
-    is_dirty: bool,
     /// The value stored.
     value: T,
 }
@@ -254,7 +252,6 @@ impl<T> TimedChangeTracker<T> {
     pub const fn new(initial: T) -> Self {
         Self {
             changed_at: ClockSnapshot::new(),
-            is_dirty: false,
             value: initial,
         }
     }
@@ -268,10 +265,6 @@ impl<T> TimedChangeTracker<T> {
 
     /// Get the clock snapshot from when the value was last changed.
     pub const fn changed_snapshot(&self) -> &ClockSnapshot {
-        debug_assert!(
-            !self.is_dirty,
-            "Value was changed but changed_cycle was not updated."
-        );
         &self.changed_at
     }
 
@@ -291,56 +284,22 @@ impl<T> TimedChangeTracker<T> {
         self.changed_snapshot().elapsed_fixed_cycles()
     }
 
-    /// If the value was changed but the `changed_cycle` has not been updated, this sets
-    /// the `changed_cycle`. This should be called whenever the value might have been
-    /// written, before advancing the system clock, otherwise the changed at times will
-    /// become incorrect.
-    pub fn update_if_dirty(&mut self, now: ClockSnapshot) {
-        if self.is_dirty {
-            self.changed_at = now;
-            self.is_dirty = false;
-        }
-    }
-
-    /// Set the value, marking the time as dirty. After this `update_if_dirty` must be
-    /// called to make sure the `changed_cycle` is accurate. Returns the previously stored
-    /// value.
-    ///
-    /// Calling this method always marks the value as dirty regardless of whether the
-    /// value has actually changed or the two values are equal.
-    pub fn set(&mut self, value: T) -> T {
-        self.is_dirty = true;
-        mem::replace(&mut self.value, value)
-    }
-
-    /// Set the value and update the `changed_time` to the given value of `now`.
-    ///
-    /// Calling this method always marks the value as dirty regardless of whether the
-    /// value has actually changed or the two values are equal.
-    pub fn set_now(&mut self, value: T, now: ClockSnapshot) -> T {
+    /// Set the value, with the given modification time.
+    pub fn set(&mut self, now: ClockSnapshot, value: T) -> T {
         self.changed_at = now;
-        // We have to clear dirty because its possible this is called after the value was
-        // changed wiht `set` but before `update_if_dirty`.
-        self.is_dirty = false;
         mem::replace(&mut self.value, value)
     }
 
     /// Set the value without updating the change tracker. This allows a new value to be
     /// set without affecting the time tracking, for example if there are two possible
     /// sources of changes and you only want to record times for one of them.
-    ///
-    /// In debug mode this will panic if the changed_cycle is dirty.
     pub fn set_untracked(&mut self, value: T) -> T {
-        debug_assert!(
-            !self.is_dirty,
-            "Value was previously changed without updating last_changed_cycle"
-        );
         mem::replace(&mut self.value, value)
     }
 }
 
-// The derived default would result in the correct MCycle::ZERO and is_dirty: false, but
-// doing it this way is more explicit.
+// The derived default would result in the correct MCycle::ZERO, but doing it this way is more
+// explicit.
 impl<T: Default> Default for TimedChangeTracker<T> {
     #[inline]
     fn default() -> Self {

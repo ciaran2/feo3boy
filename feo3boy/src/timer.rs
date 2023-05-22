@@ -3,7 +3,7 @@ use std::mem;
 use crate::bits::BitGroup;
 use crate::clock::{ClockSnapshot, MCycle, SystemClockContext, TimedChangeTracker};
 use crate::interrupts::{InterruptContext, InterruptFlags, Interrupts};
-use crate::memdev::{MemDevice, RelativeAddr};
+use crate::memdev::{MemDevice, ReadCtx, RelativeAddr, WriteCtx};
 
 /// Represends sound and volume settings.
 #[derive(Default, Debug, Clone, Eq, PartialEq, Hash, MemDevice)]
@@ -79,34 +79,27 @@ impl TimerCounter {
 }
 
 #[derive(Default, Debug, Clone, Eq, PartialEq)]
-pub struct TimerDivider(TimedChangeTracker<u16>);
+pub struct TimerDivider(TimedChangeTracker<()>);
 
 impl TimerDivider {
-    /// Update the timer divider based on the current m-cycle, and return the current
-    /// value.
-    fn update(&mut self, now: MCycle) -> u16 {
-        let ticks_since_update = now - self.0.changed_cycle();
-        let new_divider = *self.0 as u64 + ticks_since_update.as_tcycle().as_u64();
-        self.0.set_untracked(new_divider as u16);
-        *self.0
-    }
-
-    /// Clear the divider to zero and reset the modification time (mark dirty).
-    fn reset(&mut self) {
-        self.0.set(0);
+    /// Clear the divider to zero and reset the modification time.
+    fn reset(&mut self, now: ClockSnapshot) {
+        self.0.set(now, ());
     }
 
     /// Get the portion of the divider register that is visible to the CPU.
-    fn cpu_visible_portion(&self) -> u8 {
+    fn cpu_visible_portion(&self, ctx: &ReadCtx) -> u8 {
         // Is this faster than using a shift or division? Do all those options optimize to
         // the same thing? No idea!
-        let [_, high] = self.0.to_le_bytes();
+        let [_, high] = self.value(ctx.atime().elapsed_cycles()).to_le_bytes();
         high
     }
 
-    /// Get the raw value of the divider.
-    pub fn value(&self) -> u16 {
-        *self.0
+    /// Get the raw value of the divider at the specified time. The time must be after the time when
+    /// the divider was last reset.
+    pub fn value(&self, now: MCycle) -> u16 {
+        debug_assert!(self.0.changed_cycle() <= now);
+        (now - self.0.changed_cycle()).as_u64() as u16
     }
 
     /// Get the clock cycle when the divider was last reset by the CPU.
@@ -138,13 +131,6 @@ pub struct TimerRegs {
 }
 
 impl TimerRegs {
-    /// Update the divider and counter if they were written since the last time their
-    /// changed_times were updated.
-    pub fn update_if_dirty(&mut self, now: ClockSnapshot) {
-        self.divider.0.update_if_dirty(now);
-        self.timer_counter.0.update_if_dirty(now);
-    }
-
     /// Set the value in the counter to the value in the `timer_mod`.
     fn reset_counter_to_mod(&mut self) {
         self.timer_counter.0.set_untracked(self.timer_mod);
@@ -175,26 +161,28 @@ impl Default for TimerRegs {
 impl MemDevice for TimerRegs {
     const LEN: usize = 4;
 
-    fn read_byte_relative(&self, addr: RelativeAddr) -> u8 {
+    fn read_byte_relative(&self, ctx: &ReadCtx, addr: RelativeAddr) -> u8 {
         match addr.relative() {
-            0x00 => self.divider.cpu_visible_portion(),
+            0x00 => self.divider.cpu_visible_portion(ctx),
             0x01 => *self.timer_counter.0,
             0x02 => self.timer_mod,
-            0x03 => self.timer_control.read_byte_relative(addr.offset_by(0x03)),
+            0x03 => self
+                .timer_control
+                .read_byte_relative(ctx, addr.offset_by(0x03)),
             _ => panic!("Address {} out of range for TimerRegs", addr),
         }
     }
 
-    fn write_byte_relative(&mut self, addr: RelativeAddr, val: u8) {
+    fn write_byte_relative(&mut self, ctx: &WriteCtx, addr: RelativeAddr, val: u8) {
         match addr.relative() {
-            0x00 => self.divider.reset(),
+            0x00 => self.divider.reset(*ctx.atime()),
             0x01 => {
-                self.timer_counter.0.set(val);
+                self.timer_counter.0.set(*ctx.atime(), val);
             }
             0x02 => self.timer_mod = val,
             0x03 => {
                 self.timer_control
-                    .write_byte_relative(addr.offset_by(0x03), val);
+                    .write_byte_relative(ctx, addr.offset_by(0x03), val);
                 self.timer_enable = self.timer_control.timer_enable();
                 self.selected_divider_bit = self.timer_control.divider_bit();
             }
@@ -308,13 +296,15 @@ pub fn tick(ctx: &mut impl TimerContext) {
         }
     }
 
-    let divider = ctx.timer_regs_mut().divider.update(now);
-    let &TimerRegs {
-        timer_enable,
-        selected_divider_bit,
-        ..
-    } = ctx.timer_regs();
-    let divider_bit = timer_enable && (divider & selected_divider_bit) != 0;
+    let divider_bit = {
+        let &TimerRegs {
+            timer_enable,
+            selected_divider_bit,
+            ref divider,
+            ..
+        } = ctx.timer_regs();
+        timer_enable && (divider.value(now) & selected_divider_bit) != 0
+    };
     let old_divider_bit = mem::replace(&mut ctx.timer_mut().old_divider_bit, divider_bit);
 
     if old_divider_bit && !divider_bit {

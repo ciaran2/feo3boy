@@ -72,19 +72,19 @@ pub fn build_bits_wrapper(item: &DeriveInput, wrapper: &BitsWrapper) -> Result<T
         impl #feo3boy::memdev::MemDevice for #ty {
             const LEN: usize = 1;
 
-            fn read_byte_relative(&self, addr: #feo3boy::memdev::RelativeAddr) -> u8 {
+            fn read_byte_relative(&self, _ctx: &#feo3boy::memdev::ReadCtx, addr: #feo3boy::memdev::RelativeAddr) -> u8 {
                 const READABLE_BITS: u8 = #readable;
                 #feo3boy::check_addr!(#ty, addr);
                 #read
             }
 
-            fn write_byte_relative(&mut self, addr: #feo3boy::memdev::RelativeAddr, val: u8) {
+            fn write_byte_relative(&mut self, _ctx: &#feo3boy::memdev::WriteCtx, addr: #feo3boy::memdev::RelativeAddr, val: u8) {
                 const WRITABLE_BITS: u8 = #writable;
                 #feo3boy::check_addr!(#ty, addr);
                 #write;
             }
 
-            fn read_bytes_relative(&self, addr: #feo3boy::memdev::RelativeAddr, data: &mut [u8]) {
+            fn read_bytes_relative(&self, _ctx: &#feo3boy::memdev::ReadCtx, addr: #feo3boy::memdev::RelativeAddr, data: &mut [u8]) {
                 const READABLE_BITS: u8 = #readable;
                 #feo3boy::check_addr!(#ty, addr, data.len());
                 match data.first_mut() {
@@ -93,7 +93,7 @@ pub fn build_bits_wrapper(item: &DeriveInput, wrapper: &BitsWrapper) -> Result<T
                 }
             }
 
-            fn write_bytes_relative(&mut self, addr: #feo3boy::memdev::RelativeAddr, data: &[u8]) {
+            fn write_bytes_relative(&mut self, _ctx: &#feo3boy::memdev::WriteCtx, addr: #feo3boy::memdev::RelativeAddr, data: &[u8]) {
                 const WRITABLE_BITS: u8 = #writable;
                 #feo3boy::check_addr!(#ty, addr, data.len());
                 match data.first().copied() {

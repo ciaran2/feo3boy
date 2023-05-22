@@ -8,7 +8,7 @@ use thiserror::Error;
 pub use feo3boy_memdev_derive::MemDevice;
 
 use crate::apu::ApuRegs;
-use crate::clock::ClockSnapshot;
+use crate::clock::{ClockSnapshot, SystemClockContext};
 use crate::input::ButtonRegister;
 use crate::interrupts::{InterruptContext, InterruptEnable, InterruptFlags, Interrupts};
 use crate::ppu::PpuRegs;
@@ -153,6 +153,56 @@ impl fmt::Display for RelativeAddr {
     }
 }
 
+/// Context about a memory read.
+///
+/// Currently, this contains only the time that the read occurs at, which allows memory to implement
+/// some lazy-evaluation features.
+///
+/// In the future, it may also contain information such as the device that caused the read, which
+/// could be used to help implement certain "simultaneous" read operations.
+#[derive(Debug, Clone)]
+pub struct ReadCtx {
+    /// Access time. The clock snapshot where the read is occurring.
+    atime: ClockSnapshot,
+}
+
+impl ReadCtx {
+    /// Create a new [`ReadCtx`] with the given access time.
+    pub const fn new(atime: ClockSnapshot) -> Self {
+        Self { atime }
+    }
+
+    /// Get the time of the memory access.
+    pub const fn atime(&self) -> &ClockSnapshot {
+        &self.atime
+    }
+}
+
+/// Context about a memory write.
+///
+/// Currently, this contains only the time that the write occurs at, which allows memory to
+/// implement some lazy-evaluation features.
+///
+/// In the future, it may also contain information such as the device that caused the write, which
+/// could be used to help implement certain "simultaneous" write operations.
+#[derive(Debug, Clone)]
+pub struct WriteCtx {
+    /// Access time. The clock snapshot where the read is occurring.
+    atime: ClockSnapshot,
+}
+
+impl WriteCtx {
+    /// Create a new [`WriteCtx`] with the given access time.
+    pub const fn new(atime: ClockSnapshot) -> Self {
+        Self { atime }
+    }
+
+    /// Get the time of the memory access.
+    pub const fn atime(&self) -> &ClockSnapshot {
+        &self.atime
+    }
+}
+
 /// Provides access to system memory.
 pub trait MemDevice {
     /// Length of this MemDevice in bytes. Reads and writes must always be within the device.
@@ -161,73 +211,83 @@ pub trait MemDevice {
     /// Read a typed value from this MemDevice. The value must be fully contained within
     /// this device.
     #[inline]
-    fn read_relative_into<V>(&self, addr: RelativeAddr, dest: &mut V)
+    fn read_relative_into<V>(&self, ctx: &ReadCtx, addr: RelativeAddr, dest: &mut V)
     where
         V: MemValue,
     {
         struct Reader<'a, M: ?Sized> {
+            ctx: &'a ReadCtx,
             addr: RelativeAddr,
             device: &'a M,
         }
         impl<'a, M: MemDevice + ?Sized> MemSource for Reader<'a, M> {
             #[inline(always)]
             fn get_byte(self) -> u8 {
-                self.device.read_byte_relative(self.addr)
+                self.device.read_byte_relative(self.ctx, self.addr)
             }
             #[inline(always)]
             fn get_bytes(self, data: &mut [u8]) {
-                self.device.read_bytes_relative(self.addr, data)
+                self.device.read_bytes_relative(self.ctx, self.addr, data)
             }
         }
 
-        dest.copy_from_mem(Reader { addr, device: self })
+        dest.copy_from_mem(Reader {
+            ctx,
+            addr,
+            device: self,
+        })
     }
 
     /// Read a typed value from this MemDevice. The value must be fully contained within
     /// this device.
     #[inline]
-    fn read_relative<V>(&self, addr: RelativeAddr) -> V
+    fn read_relative<V>(&self, ctx: &ReadCtx, addr: RelativeAddr) -> V
     where
         V: MemValue + Default,
     {
         let mut val = V::default();
-        self.read_relative_into(addr, &mut val);
+        self.read_relative_into(ctx, addr, &mut val);
         val
     }
 
     /// Write a typed value into this MemDevice. The value must fit fully within the
     /// device.
     #[inline]
-    fn write_relative_from<V>(&mut self, addr: RelativeAddr, source: &V)
+    fn write_relative_from<V>(&mut self, ctx: &WriteCtx, addr: RelativeAddr, source: &V)
     where
         V: MemValue,
     {
         struct Writer<'a, M: ?Sized> {
+            ctx: &'a WriteCtx,
             addr: RelativeAddr,
             device: &'a mut M,
         }
         impl<'a, M: MemDevice + ?Sized> MemDest for Writer<'a, M> {
             #[inline(always)]
             fn set_byte(self, val: u8) {
-                self.device.write_byte_relative(self.addr, val)
+                self.device.write_byte_relative(self.ctx, self.addr, val)
             }
             #[inline(always)]
             fn set_bytes(self, data: &[u8]) {
-                self.device.write_bytes_relative(self.addr, data)
+                self.device.write_bytes_relative(self.ctx, self.addr, data)
             }
         }
 
-        source.copy_to_mem(Writer { addr, device: self })
+        source.copy_to_mem(Writer {
+            ctx,
+            addr,
+            device: self,
+        })
     }
 
     /// Write a typed value into this MemDevice. The value must fit fully within the
     /// device.
     #[inline]
-    fn write_relative<V>(&mut self, addr: RelativeAddr, val: V)
+    fn write_relative<V>(&mut self, ctx: &WriteCtx, addr: RelativeAddr, val: V)
     where
         V: MemValue,
     {
-        self.write_relative_from(addr, &val)
+        self.write_relative_from(ctx, addr, &val)
     }
 
     /// Read the byte at the specified address.
@@ -236,15 +296,15 @@ pub trait MemDevice {
     /// slice. A mem device may override this method if it can provide a more efficient
     /// single-byte read.
     #[inline]
-    fn read_byte_relative(&self, addr: RelativeAddr) -> u8 {
+    fn read_byte_relative(&self, ctx: &ReadCtx, addr: RelativeAddr) -> u8 {
         let mut out = 0;
-        self.read_bytes_relative(addr, slice::from_mut(&mut out));
+        self.read_bytes_relative(ctx, addr, slice::from_mut(&mut out));
         out
     }
 
     /// Read a range of bytes into a slice. The read bytes must not wrap past the end of
     /// the device.
-    fn read_bytes_relative(&self, addr: RelativeAddr, data: &mut [u8]);
+    fn read_bytes_relative(&self, ctx: &ReadCtx, addr: RelativeAddr, data: &mut [u8]);
 
     /// Write the byte at the sepcified address.
     ///
@@ -252,13 +312,13 @@ pub trait MemDevice {
     /// slice. A mem device may override this method if it can provide a more efficient
     /// single-byte write.
     #[inline]
-    fn write_byte_relative(&mut self, addr: RelativeAddr, data: u8) {
-        self.write_bytes_relative(addr, slice::from_ref(&data));
+    fn write_byte_relative(&mut self, ctx: &WriteCtx, addr: RelativeAddr, data: u8) {
+        self.write_bytes_relative(ctx, addr, slice::from_ref(&data));
     }
 
     /// Write a range of bytes into memory from a slice. The slice must not exceed the
     /// length of the MemDevice.
-    fn write_bytes_relative(&mut self, addr: RelativeAddr, data: &[u8]);
+    fn write_bytes_relative(&mut self, ctx: &WriteCtx, addr: RelativeAddr, data: &[u8]);
 }
 
 /// A [`MemDevice`] which exists at the root. Root MemDevices can read ranges that wrap
@@ -274,93 +334,103 @@ pub trait RootMemDevice: MemDevice {
     /// Read a typed value from this MemDevice. The value must be fully contained within
     /// this device.
     #[inline]
-    fn read_into<V>(&self, addr: u16, dest: &mut V)
+    fn read_into<V>(&self, ctx: &ReadCtx, addr: u16, dest: &mut V)
     where
         V: MemValue,
     {
         struct Reader<'a, M: ?Sized> {
+            ctx: &'a ReadCtx,
             addr: u16,
             device: &'a M,
         }
         impl<'a, M: RootMemDevice + ?Sized> MemSource for Reader<'a, M> {
             #[inline(always)]
             fn get_byte(self) -> u8 {
-                self.device.read_byte(self.addr)
+                self.device.read_byte(self.ctx, self.addr)
             }
             #[inline(always)]
             fn get_bytes(self, data: &mut [u8]) {
-                self.device.read_bytes(self.addr, data)
+                self.device.read_bytes(self.ctx, self.addr, data)
             }
         }
 
-        dest.copy_from_mem(Reader { addr, device: self })
+        dest.copy_from_mem(Reader {
+            ctx,
+            addr,
+            device: self,
+        })
     }
 
     /// Read a typed value from this MemDevice. The value must be fully contained within
     /// this device.
     #[inline]
-    fn read<V>(&self, addr: u16) -> V
+    fn read<V>(&self, ctx: &ReadCtx, addr: u16) -> V
     where
         V: MemValue + Default,
     {
         let mut val = V::default();
-        self.read_into(addr, &mut val);
+        self.read_into(ctx, addr, &mut val);
         val
     }
 
     /// Write a typed value into this MemDevice. The value must fit fully within the
     /// device.
     #[inline]
-    fn write_from<V>(&mut self, addr: u16, source: &V)
+    fn write_from<V>(&mut self, ctx: &WriteCtx, addr: u16, source: &V)
     where
         V: MemValue,
     {
         struct Writer<'a, M: ?Sized> {
+            ctx: &'a WriteCtx,
             addr: u16,
             device: &'a mut M,
         }
         impl<'a, M: RootMemDevice + ?Sized> MemDest for Writer<'a, M> {
             #[inline(always)]
             fn set_byte(self, val: u8) {
-                self.device.write_byte(self.addr, val)
+                self.device.write_byte(self.ctx, self.addr, val)
             }
             #[inline(always)]
             fn set_bytes(self, data: &[u8]) {
-                self.device.write_bytes(self.addr, data)
+                self.device.write_bytes(self.ctx, self.addr, data)
             }
         }
 
-        source.copy_to_mem(Writer { addr, device: self })
+        source.copy_to_mem(Writer {
+            ctx,
+            addr,
+            device: self,
+        })
     }
 
     /// Write a typed value into this MemDevice. The value must fit fully within the
     /// device.
     #[inline]
-    fn write<V>(&mut self, addr: u16, val: V)
+    fn write<V>(&mut self, ctx: &WriteCtx, addr: u16, val: V)
     where
         V: MemValue,
     {
-        self.write_from(addr, &val)
+        self.write_from(ctx, addr, &val)
     }
 
     /// Read a single byte from memory.
     #[inline]
-    fn read_byte(&self, addr: u16) -> u8 {
-        self.read_byte_relative(addr.into())
+    fn read_byte(&self, ctx: &ReadCtx, addr: u16) -> u8 {
+        self.read_byte_relative(ctx, addr.into())
     }
 
     /// Read a range of bytes, wrapping at the ends of memory.
-    fn read_bytes(&self, mut addr: u16, mut data: &mut [u8]) {
+    fn read_bytes(&self, ctx: &ReadCtx, mut addr: u16, mut data: &mut [u8]) {
         const SIZE: usize = u16::MAX as usize + 1;
         loop {
             let len = SIZE - addr as usize;
             if len < data.len() {
                 let (current, rest) = data.split_at_mut(len);
-                self.read_bytes_relative(addr.into(), current);
+                self.read_bytes_relative(ctx, addr.into(), current);
                 data = rest;
                 addr = 0;
             } else {
-                self.read_bytes_relative(addr.into(), data);
+                self.read_bytes_relative(ctx, addr.into(), data);
                 break;
             }
         }
@@ -368,22 +438,22 @@ pub trait RootMemDevice: MemDevice {
 
     /// Write a single byte to memory.
     #[inline]
-    fn write_byte(&mut self, addr: u16, val: u8) {
-        self.write_byte_relative(addr.into(), val);
+    fn write_byte(&mut self, ctx: &WriteCtx, addr: u16, val: u8) {
+        self.write_byte_relative(ctx, addr.into(), val);
     }
 
     /// Write a range of bytes, wrapping at the ends of memory.
-    fn write_bytes(&mut self, mut addr: u16, mut data: &[u8]) {
+    fn write_bytes(&mut self, ctx: &WriteCtx, mut addr: u16, mut data: &[u8]) {
         const SIZE: usize = u16::MAX as usize + 1;
         loop {
             let len = SIZE - addr as usize;
             if len < data.len() {
                 let (current, rest) = data.split_at(len);
-                self.write_bytes_relative(addr.into(), current);
+                self.write_bytes_relative(ctx, addr.into(), current);
                 data = rest;
                 addr = 0;
             } else {
-                self.write_bytes_relative(addr.into(), data);
+                self.write_bytes_relative(ctx, addr.into(), data);
                 break;
             }
         }
@@ -474,7 +544,9 @@ impl MemValue for u16 {
 }
 
 /// Context trait for accessing memory.
-pub trait MemContext {
+///
+/// Extends SystemClockContext because memory reads and writes require a clock.
+pub trait MemContext: SystemClockContext {
     /// Type of MemDevice in this context.
     type Mem: RootMemDevice;
 
@@ -507,6 +579,10 @@ impl<M> RootExtend<M> {
         // RootExtend has the same memory representation (`repr(transparent)`) as `M` so
         // it is safe to transmute the reference with the same lifetime while preserving
         // mutability.
+        //
+        // Since RootExtend also has no difference in drop behavior from `M`, this is even safe if
+        // the resulting reference is used to replace the value stored in the original location, as
+        // such a replacement will effectively just wrap one mem device and unwrap the other.
         unsafe { mem::transmute(m) }
     }
 }
@@ -514,21 +590,21 @@ impl<M> RootExtend<M> {
 impl<M: MemDevice> MemDevice for RootExtend<M> {
     const LEN: usize = u16::MAX as usize + 1;
 
-    fn read_byte_relative(&self, addr: RelativeAddr) -> u8 {
+    fn read_byte_relative(&self, ctx: &ReadCtx, addr: RelativeAddr) -> u8 {
         assert!(
             addr.relative() == addr.raw(),
             "Using RootExtend with offset address {}",
             addr
         );
         if addr.index() < M::LEN {
-            self.0.read_byte_relative(addr)
+            self.0.read_byte_relative(ctx, addr)
         } else {
             check_addr!(RootExtend<M>, addr);
             0xff
         }
     }
 
-    fn read_bytes_relative(&self, addr: RelativeAddr, mut data: &mut [u8]) {
+    fn read_bytes_relative(&self, ctx: &ReadCtx, addr: RelativeAddr, mut data: &mut [u8]) {
         assert!(
             addr.relative() == addr.raw(),
             "Using RootExtend with offset address {}",
@@ -537,7 +613,7 @@ impl<M: MemDevice> MemDevice for RootExtend<M> {
         check_addr!(RootExtend<M>, addr, data.len());
         if addr.index() < M::LEN {
             let num_read = (M::LEN - addr.index()).min(data.len());
-            self.0.read_bytes_relative(addr, &mut data[..num_read]);
+            self.0.read_bytes_relative(ctx, addr, &mut data[..num_read]);
             data = &mut data[num_read..];
         }
         // Fill any bytes not covered by the actuall data with 0xff. check_addr ensures
@@ -545,20 +621,20 @@ impl<M: MemDevice> MemDevice for RootExtend<M> {
         data.fill(0xff);
     }
 
-    fn write_byte_relative(&mut self, addr: RelativeAddr, data: u8) {
+    fn write_byte_relative(&mut self, ctx: &WriteCtx, addr: RelativeAddr, data: u8) {
         assert!(
             addr.relative() == addr.raw(),
             "Using RootExtend with offset address {}",
             addr
         );
         if addr.index() < M::LEN {
-            self.0.write_byte_relative(addr, data)
+            self.0.write_byte_relative(ctx, addr, data)
         } else {
             check_addr!(RootExtend<M>, addr);
         }
     }
 
-    fn write_bytes_relative(&mut self, addr: RelativeAddr, data: &[u8]) {
+    fn write_bytes_relative(&mut self, ctx: &WriteCtx, addr: RelativeAddr, data: &[u8]) {
         assert!(
             addr.relative() == addr.raw(),
             "Using RootExtend with offset address {}",
@@ -567,7 +643,7 @@ impl<M: MemDevice> MemDevice for RootExtend<M> {
         check_addr!(RootExtend<M>, addr, data.len());
         if addr.index() < M::LEN {
             let num_written = (M::LEN - addr.index()).min(data.len());
-            self.0.write_bytes_relative(addr, &data[..num_written]);
+            self.0.write_bytes_relative(ctx, addr, &data[..num_written]);
         }
     }
 }
@@ -603,38 +679,38 @@ impl<M: MemDevice> MemDevice for ReadOnly<M> {
     const LEN: usize = M::LEN;
 
     #[inline]
-    fn read_bytes_relative(&self, addr: RelativeAddr, data: &mut [u8]) {
-        self.0.read_bytes_relative(addr, data);
+    fn read_bytes_relative(&self, ctx: &ReadCtx, addr: RelativeAddr, data: &mut [u8]) {
+        self.0.read_bytes_relative(ctx, addr, data);
     }
 
     #[inline]
-    fn read_byte_relative(&self, addr: RelativeAddr) -> u8 {
-        self.0.read_byte_relative(addr)
+    fn read_byte_relative(&self, ctx: &ReadCtx, addr: RelativeAddr) -> u8 {
+        self.0.read_byte_relative(ctx, addr)
     }
 
     #[inline]
-    fn write_bytes_relative(&mut self, addr: RelativeAddr, data: &[u8]) {
+    fn write_bytes_relative(&mut self, _ctx: &WriteCtx, addr: RelativeAddr, data: &[u8]) {
         check_addr!(ReadOnly<M>, addr, data.len());
     }
 
     #[inline]
-    fn write_byte_relative(&mut self, addr: RelativeAddr, _data: u8) {
+    fn write_byte_relative(&mut self, _ctx: &WriteCtx, addr: RelativeAddr, _data: u8) {
         check_addr!(ReadOnly<M>, addr);
     }
 }
 
 impl<M: RootMemDevice> RootMemDevice for ReadOnly<M> {
-    fn read_byte(&self, addr: u16) -> u8 {
-        self.0.read_byte(addr)
+    fn read_byte(&self, ctx: &ReadCtx, addr: u16) -> u8 {
+        self.0.read_byte(ctx, addr)
     }
 
-    fn read_bytes(&self, addr: u16, data: &mut [u8]) {
-        self.0.read_bytes(addr, data)
+    fn read_bytes(&self, ctx: &ReadCtx, addr: u16, data: &mut [u8]) {
+        self.0.read_bytes(ctx, addr, data)
     }
 
-    fn write_byte(&mut self, _addr: u16, _val: u8) {}
+    fn write_byte(&mut self, _ctx: &WriteCtx, _addr: u16, _val: u8) {}
 
-    fn write_bytes(&mut self, _addr: u16, _data: &[u8]) {}
+    fn write_bytes(&mut self, _ctx: &WriteCtx, _addr: u16, _data: &[u8]) {}
 }
 
 /// A rom which does bounds checks, but contains no actual memory (always returns 0xff,
@@ -644,12 +720,12 @@ pub struct NullRom<const N: usize>;
 impl<const N: usize> MemDevice for NullRom<N> {
     const LEN: usize = N;
 
-    fn read_bytes_relative(&self, addr: RelativeAddr, data: &mut [u8]) {
+    fn read_bytes_relative(&self, _ctx: &ReadCtx, addr: RelativeAddr, data: &mut [u8]) {
         check_addr!(NullRom<N>, addr, data.len());
         data.fill(0xff);
     }
 
-    fn write_bytes_relative(&mut self, addr: RelativeAddr, data: &[u8]) {
+    fn write_bytes_relative(&mut self, _ctx: &WriteCtx, addr: RelativeAddr, data: &[u8]) {
         check_addr!(NullRom<N>, addr, data.len());
     }
 }
@@ -749,21 +825,21 @@ impl Default for BiosEnable {
 impl<const N: usize> MemDevice for [u8; N] {
     const LEN: usize = N;
 
-    fn read_byte_relative(&self, addr: RelativeAddr) -> u8 {
+    fn read_byte_relative(&self, _ctx: &ReadCtx, addr: RelativeAddr) -> u8 {
         match self.get(addr.index()) {
             Some(val) => *val,
             None => panic!("Address {}  out of range for {} byte memory array", addr, N),
         }
     }
 
-    fn write_byte_relative(&mut self, addr: RelativeAddr, value: u8) {
+    fn write_byte_relative(&mut self, _ctx: &WriteCtx, addr: RelativeAddr, value: u8) {
         match self.get_mut(addr.index()) {
             Some(val) => *val = value,
             None => panic!("Address {}  out of range for {} byte memory array", addr, N),
         }
     }
 
-    fn read_bytes_relative(&self, addr: RelativeAddr, data: &mut [u8]) {
+    fn read_bytes_relative(&self, _ctx: &ReadCtx, addr: RelativeAddr, data: &mut [u8]) {
         match self.get(addr.range(data.len())) {
             Some(vals) => data.copy_from_slice(vals),
             None => panic!(
@@ -775,7 +851,7 @@ impl<const N: usize> MemDevice for [u8; N] {
         }
     }
 
-    fn write_bytes_relative(&mut self, addr: RelativeAddr, data: &[u8]) {
+    fn write_bytes_relative(&mut self, _ctx: &WriteCtx, addr: RelativeAddr, data: &[u8]) {
         match self.get_mut(addr.range(data.len())) {
             Some(vals) => vals.copy_from_slice(data),
             None => panic!(
@@ -789,11 +865,11 @@ impl<const N: usize> MemDevice for [u8; N] {
 }
 
 impl RootMemDevice for [u8; 0x10000] {
-    fn read_byte(&self, addr: u16) -> u8 {
+    fn read_byte(&self, _ctx: &ReadCtx, addr: u16) -> u8 {
         self[addr as usize]
     }
 
-    fn write_byte(&mut self, addr: u16, val: u8) {
+    fn write_byte(&mut self, _ctx: &WriteCtx, addr: u16, val: u8) {
         self[addr as usize] = val;
     }
 }
@@ -854,35 +930,35 @@ impl<M: CustomDefault> CustomDefault for MaskableMem<M> {
 impl<M: MemDevice> MemDevice for MaskableMem<M> {
     const LEN: usize = M::LEN;
 
-    fn read_byte_relative(&self, addr: RelativeAddr) -> u8 {
+    fn read_byte_relative(&self, ctx: &ReadCtx, addr: RelativeAddr) -> u8 {
         if !self.masked {
-            self.device.read_byte_relative(addr)
+            self.device.read_byte_relative(ctx, addr)
         } else {
             check_addr!(MaskableMem<M>, addr);
             0xff
         }
     }
 
-    fn write_byte_relative(&mut self, addr: RelativeAddr, value: u8) {
+    fn write_byte_relative(&mut self, ctx: &WriteCtx, addr: RelativeAddr, value: u8) {
         if !self.masked {
-            self.device.write_byte_relative(addr, value)
+            self.device.write_byte_relative(ctx, addr, value)
         } else {
             check_addr!(MaskableMem<M>, addr);
         }
     }
 
-    fn read_bytes_relative(&self, addr: RelativeAddr, data: &mut [u8]) {
+    fn read_bytes_relative(&self, ctx: &ReadCtx, addr: RelativeAddr, data: &mut [u8]) {
         if !self.masked {
-            self.device.read_bytes_relative(addr, data)
+            self.device.read_bytes_relative(ctx, addr, data)
         } else {
             check_addr!(MaskableMem<M>, addr, data.len());
             data.fill(0xff);
         }
     }
 
-    fn write_bytes_relative(&mut self, addr: RelativeAddr, data: &[u8]) {
+    fn write_bytes_relative(&mut self, ctx: &WriteCtx, addr: RelativeAddr, data: &[u8]) {
         if !self.masked {
-            self.device.write_bytes_relative(addr, data)
+            self.device.write_bytes_relative(ctx, addr, data)
         } else {
             check_addr!(MaskableMem<M>, addr, data.len());
         }
@@ -909,19 +985,19 @@ impl MemDevice for u8 {
     const LEN: usize = 1;
 
     #[inline]
-    fn read_byte_relative(&self, addr: RelativeAddr) -> u8 {
+    fn read_byte_relative(&self, _ctx: &ReadCtx, addr: RelativeAddr) -> u8 {
         check_addr!(u8, addr);
         *self
     }
 
     #[inline]
-    fn write_byte_relative(&mut self, addr: RelativeAddr, val: u8) {
+    fn write_byte_relative(&mut self, _ctx: &WriteCtx, addr: RelativeAddr, val: u8) {
         check_addr!(u8, addr);
         *self = val;
     }
 
     #[inline]
-    fn read_bytes_relative(&self, addr: RelativeAddr, data: &mut [u8]) {
+    fn read_bytes_relative(&self, _ctx: &ReadCtx, addr: RelativeAddr, data: &mut [u8]) {
         check_addr!(u8, addr, data.len());
         match data.first_mut() {
             Some(out) => *out = *self,
@@ -930,7 +1006,7 @@ impl MemDevice for u8 {
     }
 
     #[inline]
-    fn write_bytes_relative(&mut self, addr: RelativeAddr, data: &[u8]) {
+    fn write_bytes_relative(&mut self, _ctx: &WriteCtx, addr: RelativeAddr, data: &[u8]) {
         check_addr!(u8, addr, data.len());
         match data.first() {
             Some(val) => *self = *val,
@@ -945,45 +1021,45 @@ impl<D: MemDevice> MemDevice for Box<D> {
     const LEN: usize = D::LEN;
 
     #[inline]
-    fn read_byte_relative(&self, addr: RelativeAddr) -> u8 {
-        (**self).read_byte_relative(addr)
+    fn read_byte_relative(&self, ctx: &ReadCtx, addr: RelativeAddr) -> u8 {
+        (**self).read_byte_relative(ctx, addr)
     }
 
     #[inline]
-    fn write_byte_relative(&mut self, addr: RelativeAddr, value: u8) {
-        (**self).write_byte_relative(addr, value)
+    fn write_byte_relative(&mut self, ctx: &WriteCtx, addr: RelativeAddr, value: u8) {
+        (**self).write_byte_relative(ctx, addr, value)
     }
 
     #[inline]
-    fn read_bytes_relative(&self, addr: RelativeAddr, data: &mut [u8]) {
-        (**self).read_bytes_relative(addr, data)
+    fn read_bytes_relative(&self, ctx: &ReadCtx, addr: RelativeAddr, data: &mut [u8]) {
+        (**self).read_bytes_relative(ctx, addr, data)
     }
 
     #[inline]
-    fn write_bytes_relative(&mut self, addr: RelativeAddr, data: &[u8]) {
-        (**self).write_bytes_relative(addr, data)
+    fn write_bytes_relative(&mut self, ctx: &WriteCtx, addr: RelativeAddr, data: &[u8]) {
+        (**self).write_bytes_relative(ctx, addr, data)
     }
 }
 
 impl<D: RootMemDevice> RootMemDevice for Box<D> {
     #[inline]
-    fn read_byte(&self, addr: u16) -> u8 {
-        (**self).read_byte(addr)
+    fn read_byte(&self, ctx: &ReadCtx, addr: u16) -> u8 {
+        (**self).read_byte(ctx, addr)
     }
 
     #[inline]
-    fn read_bytes(&self, addr: u16, data: &mut [u8]) {
-        (**self).read_bytes(addr, data)
+    fn read_bytes(&self, ctx: &ReadCtx, addr: u16, data: &mut [u8]) {
+        (**self).read_bytes(ctx, addr, data)
     }
 
     #[inline]
-    fn write_byte(&mut self, addr: u16, data: u8) {
-        (**self).write_byte(addr, data)
+    fn write_byte(&mut self, ctx: &WriteCtx, addr: u16, data: u8) {
+        (**self).write_byte(ctx, addr, data)
     }
 
     #[inline]
-    fn write_bytes(&mut self, addr: u16, data: &[u8]) {
-        (**self).write_bytes(addr, data)
+    fn write_bytes(&mut self, ctx: &WriteCtx, addr: u16, data: &[u8]) {
+        (**self).write_bytes(ctx, addr, data)
     }
 }
 
@@ -1008,11 +1084,6 @@ impl MemMappedIo {
     /// Construct new memory-mapped IO manager.
     pub fn new() -> Self {
         Default::default()
-    }
-
-    pub fn update_if_dirty(&mut self, now: ClockSnapshot) {
-        self.timer_regs.update_if_dirty(now);
-        self.apu_regs.update_if_dirty(now);
     }
 }
 
@@ -1044,23 +1115,23 @@ pub struct AllRam(Box<[u8; 0x10000]>);
 
 impl RootMemDevice for AllRam {
     #[inline]
-    fn read_byte(&self, addr: u16) -> u8 {
-        self.0.read_byte(addr)
+    fn read_byte(&self, ctx: &ReadCtx, addr: u16) -> u8 {
+        self.0.read_byte(ctx, addr)
     }
 
     #[inline]
-    fn read_bytes(&self, addr: u16, data: &mut [u8]) {
-        self.0.read_bytes(addr, data)
+    fn read_bytes(&self, ctx: &ReadCtx, addr: u16, data: &mut [u8]) {
+        self.0.read_bytes(ctx, addr, data)
     }
 
     #[inline]
-    fn write_byte(&mut self, addr: u16, val: u8) {
-        self.0.write_byte(addr, val);
+    fn write_byte(&mut self, ctx: &WriteCtx, addr: u16, val: u8) {
+        self.0.write_byte(ctx, addr, val);
     }
 
     #[inline]
-    fn write_bytes(&mut self, addr: u16, data: &[u8]) {
-        self.0.write_bytes(addr, data)
+    fn write_bytes(&mut self, ctx: &WriteCtx, addr: u16, data: &[u8]) {
+        self.0.write_bytes(ctx, addr, data)
     }
 }
 
@@ -1120,11 +1191,6 @@ impl GbMmu {
             interrupt_enable: InterruptEnable(InterruptFlags::empty()),
         }
     }
-
-    /// Update the modified-times of any memory locations that require time-tracking.
-    pub fn update_if_dirty(&mut self, now: ClockSnapshot) {
-        self.io.update_if_dirty(now);
-    }
 }
 
 impl Default for GbMmu {
@@ -1136,7 +1202,7 @@ impl Default for GbMmu {
 impl MemDevice for GbMmu {
     const LEN: usize = u16::MAX as usize + 1;
 
-    fn read_byte_relative(&self, addr: RelativeAddr) -> u8 {
+    fn read_byte_relative(&self, ctx: &ReadCtx, addr: RelativeAddr) -> u8 {
         assert!(
             addr.relative() == addr.raw(),
             "Using Root MMU with offset address {}",
@@ -1144,24 +1210,24 @@ impl MemDevice for GbMmu {
         );
         trace!("Read from MMU address {:#x}", addr.raw);
         dispatch_memdev_byte!(GbMmu, addr, |addr| {
-            0x0..=0xff if self.io.bios_enable.enabled() => self.bios.read_byte_relative(addr),
-            0x0..=0x7fff => self.cart.read_byte_relative(addr),
-            0x8000..=0x9fff => self.vram.read_byte_relative(addr),
+            0x0..=0xff if self.io.bios_enable.enabled() => self.bios.read_byte_relative(ctx, addr),
+            0x0..=0x7fff => self.cart.read_byte_relative(ctx, addr),
+            0x8000..=0x9fff => self.vram.read_byte_relative(ctx, addr),
             // Cartridge ram uses the same device as cartridge rom, so skip over the
             // number of bytes in Cart ROM when reading from Cart RAM.
-            0xa000..=0xbfff => self.cart.read_byte_relative(addr.skip_over(0x8000)),
-            0xc000..=0xdfff => self.wram.read_byte_relative(addr),
-            0xe000..=0xfdff => self.wram.read_byte_relative(addr),
-            0xfe00..=0xfe9f => self.oam.read_byte_relative(addr),
+            0xa000..=0xbfff => self.cart.read_byte_relative(ctx, addr.skip_over(0x8000)),
+            0xc000..=0xdfff => self.wram.read_byte_relative(ctx, addr),
+            0xe000..=0xfdff => self.wram.read_byte_relative(ctx, addr),
+            0xfe00..=0xfe9f => self.oam.read_byte_relative(ctx, addr),
             // Unmapped portion above sprite information, always returns 0xff.
             0xfea0..=0xfeff => 0xff,
-            0xff00..=0xff7f => self.io.read_byte_relative(addr),
-            0xff80..=0xfffe => self.zram.read_byte_relative(addr),
-            0xffff => self.interrupt_enable.read_byte_relative(addr),
+            0xff00..=0xff7f => self.io.read_byte_relative(ctx, addr),
+            0xff80..=0xfffe => self.zram.read_byte_relative(ctx, addr),
+            0xffff => self.interrupt_enable.read_byte_relative(ctx, addr),
         })
     }
 
-    fn read_bytes_relative(&self, addr: RelativeAddr, data: &mut [u8]) {
+    fn read_bytes_relative(&self, ctx: &ReadCtx, addr: RelativeAddr, data: &mut [u8]) {
         assert!(
             addr.relative() == addr.raw(),
             "Using Root MMU with offset address {}",
@@ -1169,24 +1235,24 @@ impl MemDevice for GbMmu {
         );
         trace!("Read {} bytes from MMU address {:#x}", data.len(), addr.raw);
         dispatch_memdev_bytes!(GbMmu, addr, data, |addr, mut data| {
-            0x0..=0xff if self.io.bios_enable.enabled() => self.bios.read_bytes_relative(addr, data),
-            0x0..=0x7fff => self.cart.read_bytes_relative(addr, data),
-            0x8000..=0x9fff => self.vram.read_bytes_relative(addr, data),
+            0x0..=0xff if self.io.bios_enable.enabled() => self.bios.read_bytes_relative(ctx, addr, data),
+            0x0..=0x7fff => self.cart.read_bytes_relative(ctx, addr, data),
+            0x8000..=0x9fff => self.vram.read_bytes_relative(ctx, addr, data),
             // Cartridge ram uses the same device as cartridge rom, so skip over the
             // number of bytes in Cart ROM when reading from Cart RAM.
-            0xa000..=0xbfff => self.cart.read_bytes_relative(addr.skip_over(0x8000), data),
-            0xc000..=0xdfff => self.wram.read_bytes_relative(addr, data),
-            0xe000..=0xfdff => self.wram.read_bytes_relative(addr, data),
-            0xfe00..=0xfe9f => self.oam.read_bytes_relative(addr, data),
+            0xa000..=0xbfff => self.cart.read_bytes_relative(ctx, addr.skip_over(0x8000), data),
+            0xc000..=0xdfff => self.wram.read_bytes_relative(ctx, addr, data),
+            0xe000..=0xfdff => self.wram.read_bytes_relative(ctx, addr, data),
+            0xfe00..=0xfe9f => self.oam.read_bytes_relative(ctx, addr, data),
             // Unmapped portion above sprite information, always returns 0xff.
             0xfea0..=0xfeff => data.fill(0xff),
-            0xff00..=0xff7f => self.io.read_bytes_relative(addr, data),
-            0xff80..=0xfffe => self.zram.read_bytes_relative(addr, data),
-            0xffff => self.interrupt_enable.read_bytes_relative(addr, data),
+            0xff00..=0xff7f => self.io.read_bytes_relative(ctx, addr, data),
+            0xff80..=0xfffe => self.zram.read_bytes_relative(ctx, addr, data),
+            0xffff => self.interrupt_enable.read_bytes_relative(ctx, addr, data),
         });
     }
 
-    fn write_byte_relative(&mut self, addr: RelativeAddr, value: u8) {
+    fn write_byte_relative(&mut self, ctx: &WriteCtx, addr: RelativeAddr, value: u8) {
         assert!(
             addr.relative() == addr.raw(),
             "Using Root MMU with offset address {}",
@@ -1195,24 +1261,24 @@ impl MemDevice for GbMmu {
         trace!("Write at MMU address {:#x}", addr.raw);
         // Address guaranteed to be in range since we cover the whole memory space.
         dispatch_memdev_byte!(GbMmu, addr, |addr| {
-            0x0..=0xff if self.io.bios_enable.enabled() => self.bios.write_byte_relative(addr, value),
-            0x0..=0x7fff => self.cart.write_byte_relative(addr, value),
-            0x8000..=0x9fff => self.vram.write_byte_relative(addr, value),
+            0x0..=0xff if self.io.bios_enable.enabled() => self.bios.write_byte_relative(ctx, addr, value),
+            0x0..=0x7fff => self.cart.write_byte_relative(ctx, addr, value),
+            0x8000..=0x9fff => self.vram.write_byte_relative(ctx, addr, value),
             // Cartridge ram uses the same device as cartridge rom, so skip over the
             // number of bytes in Cart ROM when reading from Cart RAM.
-            0xa000..=0xbfff => self.cart.write_byte_relative(addr.skip_over(0x8000), value),
-            0xc000..=0xdfff => self.wram.write_byte_relative(addr, value),
-            0xe000..=0xfdff => self.wram.write_byte_relative(addr, value),
-            0xfe00..=0xfe9f => self.oam.write_byte_relative(addr, value),
+            0xa000..=0xbfff => self.cart.write_byte_relative(ctx, addr.skip_over(0x8000), value),
+            0xc000..=0xdfff => self.wram.write_byte_relative(ctx, addr, value),
+            0xe000..=0xfdff => self.wram.write_byte_relative(ctx, addr, value),
+            0xfe00..=0xfe9f => self.oam.write_byte_relative(ctx, addr, value),
             // Unmapped portion above sprite information.
             0xfea0..=0xfeff => (),
-            0xff00..=0xff7f => self.io.write_byte_relative(addr, value),
-            0xff80..=0xfffe => self.zram.write_byte_relative(addr, value),
-            0xffff => self.interrupt_enable.write_byte_relative(addr, value),
+            0xff00..=0xff7f => self.io.write_byte_relative(ctx, addr, value),
+            0xff80..=0xfffe => self.zram.write_byte_relative(ctx, addr, value),
+            0xffff => self.interrupt_enable.write_byte_relative(ctx, addr, value),
         })
     }
 
-    fn write_bytes_relative(&mut self, addr: RelativeAddr, data: &[u8]) {
+    fn write_bytes_relative(&mut self, ctx: &WriteCtx, addr: RelativeAddr, data: &[u8]) {
         assert!(
             addr.relative() == addr.raw(),
             "Using Root MMU with offset address {}",
@@ -1220,37 +1286,25 @@ impl MemDevice for GbMmu {
         );
         trace!("Write {} bytes at MMU address {:#x}", data.len(), addr.raw);
         dispatch_memdev_bytes!(GbMmu, addr, data, |addr, ref data| {
-            0x0..=0xff if self.io.bios_enable.enabled() => self.bios.write_bytes_relative(addr, data),
-            0x0..=0x7fff => self.cart.write_bytes_relative(addr, data),
-            0x8000..=0x9fff => self.vram.write_bytes_relative(addr, data),
+            0x0..=0xff if self.io.bios_enable.enabled() => self.bios.write_bytes_relative(ctx, addr, data),
+            0x0..=0x7fff => self.cart.write_bytes_relative(ctx, addr, data),
+            0x8000..=0x9fff => self.vram.write_bytes_relative(ctx, addr, data),
             // Cartridge ram uses the same device as cartridge rom, so skip over the
             // number of bytes in Cart ROM when reading from Cart RAM.
-            0xa000..=0xbfff => self.cart.write_bytes_relative(addr.skip_over(0x8000), data),
-            0xc000..=0xdfff => self.wram.write_bytes_relative(addr, data),
-            0xe000..=0xfdff => self.wram.write_bytes_relative(addr, data),
-            0xfe00..=0xfe9f => self.oam.write_bytes_relative(addr, data),
+            0xa000..=0xbfff => self.cart.write_bytes_relative(ctx, addr.skip_over(0x8000), data),
+            0xc000..=0xdfff => self.wram.write_bytes_relative(ctx, addr, data),
+            0xe000..=0xfdff => self.wram.write_bytes_relative(ctx, addr, data),
+            0xfe00..=0xfe9f => self.oam.write_bytes_relative(ctx, addr, data),
             // Unmapped portion above sprite information, always returns 0.
             0xfea0..=0xfeff => {},
-            0xff00..=0xff7f => self.io.write_bytes_relative(addr, data),
-            0xff80..=0xfffe => self.zram.write_bytes_relative(addr, data),
-            0xffff => self.interrupt_enable.write_bytes_relative(addr, data),
+            0xff00..=0xff7f => self.io.write_bytes_relative(ctx, addr, data),
+            0xff80..=0xfffe => self.zram.write_bytes_relative(ctx, addr, data),
+            0xffff => self.interrupt_enable.write_bytes_relative(ctx, addr, data),
         });
     }
 }
 
 impl RootMemDevice for GbMmu {}
-
-impl MemContext for GbMmu {
-    type Mem = Self;
-
-    fn mem(&self) -> &Self::Mem {
-        self
-    }
-
-    fn mem_mut(&mut self) -> &mut Self::Mem {
-        self
-    }
-}
 
 impl InterruptContext for GbMmu {
     type Interrupts = Self;
@@ -1324,18 +1378,20 @@ mod tests {
             let len = rng.sample(&len_dist);
             input_buf.resize(len, 0u8);
             rng.fill(&mut input_buf[..]);
+            let readctx = ReadCtx::new(ClockSnapshot::default());
+            let writectx = WriteCtx::new(ClockSnapshot::default());
 
             for (i, &val) in input_buf.iter().enumerate() {
-                mmu_individual.write_byte(addr.wrapping_add(i as u16), val);
+                mmu_individual.write_byte(&writectx, addr.wrapping_add(i as u16), val);
             }
-            mmu_slice.write_bytes(addr, &input_buf);
+            mmu_slice.write_bytes(&writectx, addr, &input_buf);
 
             output_buf_individual.resize(len, 0u8);
             for (i, res) in output_buf_individual.iter_mut().enumerate() {
-                *res = mmu_individual.read_byte(addr.wrapping_add(i as u16));
+                *res = mmu_individual.read_byte(&readctx, addr.wrapping_add(i as u16));
             }
             output_buf_slice.resize(len, 0u8);
-            mmu_slice.read_bytes(addr, &mut output_buf_slice);
+            mmu_slice.read_bytes(&readctx, addr, &mut output_buf_slice);
 
             assert_eq!(output_buf_individual, output_buf_slice);
         }

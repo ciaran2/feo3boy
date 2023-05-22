@@ -3,6 +3,7 @@
 use std::mem;
 
 use crate::gbz80core::ExecutorContext;
+use crate::memdev::{ReadCtx, WriteCtx};
 use crate::{interrupts::Interrupts, memdev::RootMemDevice};
 
 use feo3boy_opcodes::{
@@ -68,14 +69,16 @@ pub(super) fn write_reg16(ctx: &mut impl ExecutorContext, reg: Reg16, val: u16) 
 /// stack.
 #[inline]
 pub(super) fn read_mem(ctx: &mut impl ExecutorContext, addr: u16) -> u8 {
-    ctx.mem().read(addr)
+    let readctx = ReadCtx::new(ctx.clock().snapshot());
+    ctx.mem().read(&readctx, addr)
 }
 
 /// Pop a 16 bit value from the stack and use it as the address, then pop an 8 bit
 /// value from the stack and wite it to that address.
 #[inline]
 pub(super) fn write_mem(ctx: &mut impl ExecutorContext, addr: u16, val: u8) {
-    ctx.mem_mut().write(addr, val)
+    let writectx = WriteCtx::new(ctx.clock().snapshot());
+    ctx.mem_mut().write(&writectx, addr, val)
 }
 
 /// Fetches the flags register onto the microcode stack,

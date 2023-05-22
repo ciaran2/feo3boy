@@ -53,20 +53,20 @@ pub fn build_passthrough(item: &DeriveInput) -> Result<TokenStream> {
         impl #feo3boy::memdev::MemDevice for #ty {
             const LEN: usize = <#field_ty as #feo3boy::memdev::MemDevice>::LEN;
 
-            fn read_byte_relative(&self, addr: #feo3boy::memdev::RelativeAddr) -> u8 {
-                #feo3boy::memdev::MemDevice::read_byte_relative(&self.#field, addr)
+            fn read_byte_relative(&self, ctx: &#feo3boy::memdev::ReadCtx, addr: #feo3boy::memdev::RelativeAddr) -> u8 {
+                #feo3boy::memdev::MemDevice::read_byte_relative(&self.#field, ctx, addr)
             }
 
-            fn read_bytes_relative(&self, addr: #feo3boy::memdev::RelativeAddr, data: &mut [u8]) {
-                #feo3boy::memdev::MemDevice::read_bytes_relative(&self.#field, addr, data)
+            fn read_bytes_relative(&self, ctx: &#feo3boy::memdev::ReadCtx, addr: #feo3boy::memdev::RelativeAddr, data: &mut [u8]) {
+                #feo3boy::memdev::MemDevice::read_bytes_relative(&self.#field, ctx, addr, data)
             }
 
-            fn write_byte_relative(&mut self, addr: #feo3boy::memdev::RelativeAddr, val: u8) {
-                #feo3boy::memdev::MemDevice::write_byte_relative(&mut self.#field, addr, val)
+            fn write_byte_relative(&mut self, ctx: &#feo3boy::memdev::WriteCtx, addr: #feo3boy::memdev::RelativeAddr, val: u8) {
+                #feo3boy::memdev::MemDevice::write_byte_relative(&mut self.#field, ctx, addr, val)
             }
 
-            fn write_bytes_relative(&mut self, addr: #feo3boy::memdev::RelativeAddr, data: &[u8]) {
-                #feo3boy::memdev::MemDevice::write_bytes_relative(&mut self.#field, addr, data)
+            fn write_bytes_relative(&mut self, ctx: &#feo3boy::memdev::WriteCtx, addr: #feo3boy::memdev::RelativeAddr, data: &[u8]) {
+                #feo3boy::memdev::MemDevice::write_bytes_relative(&mut self.#field, ctx, addr, data)
             }
         }
     })

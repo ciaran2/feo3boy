@@ -1,7 +1,7 @@
 use std::io::{self, Read, Write};
 use std::marker::PhantomData;
 
-use crate::apu::{self, ApuContext, ApuRegs, ApuState};
+use crate::apu::{self, ApuContext, ApuRegs, ApuState, Sample};
 use crate::clock::{SystemClock, SystemClockContext};
 use crate::gbz80core::direct_executor::DirectExecutor;
 use crate::gbz80core::direct_executor_v2::DirectExecutorV2;
@@ -129,7 +129,13 @@ impl<E: Executor> Gb<E> {
     /// Set the sample rate for the APU.
     #[inline]
     pub fn set_sample_rate(&mut self, sample_rate: u32) {
-        self.apu.set_output_sample_rate(sample_rate);
+        self.apu
+            .set_output_sample_rate(self.clock.elapsed_fixed_cycles(), sample_rate);
+    }
+
+    /// Take the next audio sample if available.
+    pub fn consume_audio_sample(&mut self) -> Option<Sample> {
+        self.apu.consume_output_sample()
     }
 
     /// Returns true if the PPU finished a frame this tick and the display is ready to be
@@ -182,14 +188,13 @@ impl<E: Executor> ExecutorContext for Gb<E> {
     }
 
     fn yield1m(&mut self) {
-        self.mmu.update_if_dirty(self.clock.snapshot());
         // TODO: run background processing while yielded.
         // Continue processing serial while yielded.
         input::update(self);
         serial::tick(self, 4);
         // apu must update before timer to catch falling edges from CPU writes
         apu::tick(self);
-        ppu::tick(self, 4);
+        ppu::tick(self);
 
         self.clock.advance1m();
         // Within each m-cycle, the timer tick must run before the CPU tick.
