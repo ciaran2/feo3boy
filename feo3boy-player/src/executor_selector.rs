@@ -3,6 +3,7 @@ use std::marker::PhantomData;
 use std::mem;
 
 use clap::ValueEnum;
+use feo3boy::clock::{SystemClock, SystemClockContext};
 use feo3boy::gbz80core::direct_executor::DirectExecutor;
 use feo3boy::gbz80core::direct_executor_v2::DirectExecutorV2;
 use feo3boy::gbz80core::executor::{Executor, ExecutorConfig, ExecutorState};
@@ -190,5 +191,15 @@ where
     #[inline]
     fn interrupts_mut(&mut self) -> &mut Self::Interrupts {
         self.ctx.interrupts_mut()
+    }
+}
+
+impl<C, E> SystemClockContext for MultiExecutorWrapperContext<C, E>
+where
+    C: SystemClockContext,
+{
+    #[inline]
+    fn clock(&self) -> &SystemClock {
+        self.ctx.clock()
     }
 }

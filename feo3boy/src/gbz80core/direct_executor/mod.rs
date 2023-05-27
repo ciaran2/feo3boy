@@ -12,10 +12,8 @@ use log::{debug, trace, warn};
 use crate::gbz80core::executor::Executor;
 use crate::gbz80core::{externdefs, ExecutorContext};
 use crate::interrupts::Interrupts;
-use crate::memdev::RootMemDevice;
 
 mod args;
-mod tests;
 
 /// Executor which evaluates GB Opcodes by decoding them, then matching on them and
 /// calling a function which implements them. This executor is not capable of pausing
@@ -359,12 +357,12 @@ fn push_helper(ctx: &mut impl Ctx, val: u16) {
     ctx.yield1m();
     let addr = ctx.cpu().regs.sp.wrapping_sub(1);
     ctx.cpu_mut().regs.sp = addr;
-    ctx.mem_mut().write_byte(addr, high);
+    externdefs::write_mem(ctx, addr, high);
 
     ctx.yield1m();
     let addr = ctx.cpu().regs.sp.wrapping_sub(1);
     ctx.cpu_mut().regs.sp = addr;
-    ctx.mem_mut().write_byte(addr, low);
+    externdefs::write_mem(ctx, addr, low);
 }
 
 /// Pop helper, shared between pop and ret. Pops value from the stack, waiting 1m between each byte
@@ -373,12 +371,12 @@ fn pop_helper(ctx: &mut impl Ctx) -> u16 {
     ctx.yield1m();
     let addr = ctx.cpu().regs.sp;
     ctx.cpu_mut().regs.sp = addr.wrapping_add(1);
-    let low = ctx.mem().read_byte(addr);
+    let low = externdefs::read_mem(ctx, addr);
 
     ctx.yield1m();
     let addr = ctx.cpu().regs.sp;
     ctx.cpu_mut().regs.sp = addr.wrapping_add(1);
-    let high = ctx.mem().read_byte(addr);
+    let high = externdefs::read_mem(ctx, addr);
 
     u16::from_le_bytes([low, high])
 }
@@ -498,4 +496,10 @@ impl Run<CBOpcode> {
             }
         }
     }
+}
+
+executor_tests! {
+    tests,
+    crate::gbz80core::direct_executor::DirectExecutor,
+    crate::gbz80core::TestGb<Box<[u8; 0x10000]>, ()>
 }

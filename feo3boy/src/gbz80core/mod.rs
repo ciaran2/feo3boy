@@ -5,6 +5,9 @@ use crate::gbz80core::executor::ExecutorState;
 use crate::interrupts::{InterruptContext, InterruptFlags, Interrupts};
 use crate::memdev::{MemContext, MemDevice, ReadCtx, RootExtend, RootMemDevice, WriteCtx};
 
+#[macro_use]
+mod executor_testing;
+
 pub mod direct_executor;
 pub mod direct_executor_v2;
 pub mod executor;
@@ -179,9 +182,9 @@ pub trait CpuContext {
 // Utility implementations of CpuContext.
 /////////////////////////////////////////
 
-/// A Gb for testing which takes arbitrary memory using RootExtend.
-#[derive(Default, Clone)]
-pub(crate) struct TestGb<M, S = ()> {
+/// A GameBoy that provides only a CPU and Memory. Intended primarily for testing
+#[derive(Default, Clone, Debug, Eq, PartialEq)]
+pub struct TestGb<M, S = ()> {
     pub cpu: Gbz80State,
     pub state: S,
     pub clock: SystemClock,
@@ -190,12 +193,42 @@ pub(crate) struct TestGb<M, S = ()> {
 
 impl<M, S> TestGb<M, S> {
     /// Create a new `TestGb` with the given memory and executor state.
-    fn new(mem: M, state: S) -> Self {
+    pub fn new(mem: M, state: S) -> Self {
         Self {
             cpu: Gbz80State::default(),
             state,
             clock: SystemClock::new(),
             mem,
+        }
+    }
+}
+
+impl<const N: usize, S: Default> TestGb<[u8; N], S> {
+    /// Create a default `TestGb` with the given memory and executor state.
+    ///
+    /// Not all [u8; N] implement default, so this allows `::default` to work even in cases where it
+    /// otherwise wouldn't. In cases where default does exist, this shadows the trait method.
+    pub fn default() -> Self {
+        Self {
+            cpu: Gbz80State::default(),
+            state: S::default(),
+            clock: SystemClock::new(),
+            mem: [0u8; N],
+        }
+    }
+}
+
+impl<const N: usize, S: Default> TestGb<Box<[u8; N]>, S> {
+    /// Create a default `TestGb` with the given memory and executor state.
+    ///
+    /// Not all [u8; N] implement default, so this allows `::default` to work even in cases where it
+    /// otherwise wouldn't. In cases where default does exist, this shadows the trait method.
+    pub fn default() -> Self {
+        Self {
+            cpu: Gbz80State::default(),
+            state: S::default(),
+            clock: SystemClock::new(),
+            mem: Box::new([0u8; N]),
         }
     }
 }

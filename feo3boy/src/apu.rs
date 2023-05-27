@@ -104,7 +104,8 @@ impl ApuDiv {
     /// This method modifies the APU-DIV in-place, but also returns a copy of the updated
     /// value of `self` for convenience.
     fn tick_apu_div(&mut self) -> Self {
-        self.prev_counter = mem::replace(&mut self.counter, self.counter.wrapping_add(1));
+        self.prev_counter = self.counter;
+        self.counter = self.counter.wrapping_add(1);
         *self
     }
 
@@ -362,7 +363,7 @@ impl EnvelopeControl {
     const DAC_ENABLE: BitGroup = BitGroup(0b1111_1000);
 
     #[inline]
-    fn set(&mut self, val: u8) {
+    pub fn set(&mut self, val: u8) {
         self.0 = val;
     }
 
@@ -854,7 +855,7 @@ impl WavetableChannel {
     }
 
     /// Update the dac_enabled value.
-    fn set_dac_enabled(&self, now: DCycle, val: u8) {
+    fn set_dac_enabled(&mut self, now: DCycle, val: u8) {
         let dac_enabled = Self::DAC_ENABLED.extract_bool(val);
         // If we are now turning off the dac (and the channel was active), we need to capture the
         // last-read sample into initial_sample for next time.
@@ -977,7 +978,7 @@ impl WavetableChannel {
 impl MemDevice for WavetableChannel {
     const LEN: usize = 0x15;
 
-    fn read_byte_relative(&self, ctx: &ReadCtx, addr: RelativeAddr) -> u8 {
+    fn read_byte_relative(&self, _ctx: &ReadCtx, addr: RelativeAddr) -> u8 {
         dispatch_memdev_byte!(WavetableChannel, addr, |addr| {
             0x00 => self.dac_enabled_reg(),
             0x01 => 0xff, // length timer is write-only.
@@ -1007,7 +1008,7 @@ impl MemDevice for WavetableChannel {
 }
 
 /// A trait for types which implement the LFSR used in the noise channel.
-trait LinearFeedbackShiftRegister: Clone + fmt::Debug + Default + PartialEq + Eq {
+pub trait LinearFeedbackShiftRegister: Clone + fmt::Debug + Default + PartialEq + Eq {
     /// Apply the 'increment/shift' operation of the LFSR the given number of times and return bit 0
     /// at the end of the operation. The output is always either 0 or 1.
     fn increment_by_and_get_output(&mut self, increments: u64) -> u16;
@@ -1024,7 +1025,7 @@ trait LinearFeedbackShiftRegister: Clone + fmt::Debug + Default + PartialEq + Eq
 
 /// Directly implements the LFSR by doing the actual shifts.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct DirectLinearFeedbackShiftRegister {
+pub struct DirectLinearFeedbackShiftRegister {
     /// Whether to use the shorter width (7 bits) instead of 15 bits.
     short_width: bool,
 
@@ -1083,7 +1084,7 @@ impl LinearFeedbackShiftRegister for DirectLinearFeedbackShiftRegister {
 
 /// Represents the LFSR used in the Noise channel.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct TabledLinearFeedbackShiftRegister {
+pub struct TabledLinearFeedbackShiftRegister {
     /// Whether to use the shorter width (7 bits) instead of 15 bits.
     short_width: bool,
 
@@ -1712,10 +1713,12 @@ pub fn tick(ctx: &mut impl ApuContext) {
                             + mix.get_channel_mix_multiplier(ChannelMix::CH4) * ch4)
                 }
 
-                ctx.apu_mut().output_sample = Some(Sample {
+                let unfiltered = Sample {
                     left: blend_samples(channel_mix_left, vol_mul_left, ch1, ch2, ch3, ch4),
                     right: blend_samples(channel_mix_right, vol_mul_right, ch1, ch2, ch3, ch4),
-                })
+                };
+
+                ctx.apu_mut().output_sample = Some(ctx.apu_mut().hpf.filter_sample(unfiltered));
             }
         }
     }

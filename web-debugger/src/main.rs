@@ -3,7 +3,7 @@ use std::num::NonZeroU32;
 use std::rc::Rc;
 
 use feo3boy::gb::Gb;
-use feo3boy::memdev::{BiosRom, Cartridge};
+use feo3boy::memdev::{BiosRom, Cartridge, ReadCtx};
 use gloo::storage::errors::StorageError;
 use gloo::storage::{LocalStorage, Storage};
 use gloo::timers::callback::Timeout;
@@ -368,6 +368,7 @@ impl Component for App {
         let delete_breakpoint = link.callback(|addr| Msg::DeleteBreakpoint { addr });
         let toggle_breakpoint =
             link.callback(|(addr, new_enabled)| Msg::ToggleBreakpoint { addr, new_enabled });
+        let readctx = ReadCtx::new(self.gb.clock().snapshot());
         html! {
             <div class="App">
                 <div class="header">
@@ -412,7 +413,7 @@ impl Component for App {
                         <Serial serial_output={self.serial.clone()} />
                     </div>
                     <div class="column scroll main">
-                        <Memview mem={RcRef::new(self.gb.clone()).map(|gb| gb.mmu.as_ref())} />
+                        <Memview mem={RcRef::new(self.gb.clone()).map(|gb| gb.mmu.as_ref())} readctx={readctx} />
                     </div>
                 </div>
             </div>

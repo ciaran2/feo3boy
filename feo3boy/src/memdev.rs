@@ -160,7 +160,7 @@ impl fmt::Display for RelativeAddr {
 ///
 /// In the future, it may also contain information such as the device that caused the read, which
 /// could be used to help implement certain "simultaneous" read operations.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ReadCtx {
     /// Access time. The clock snapshot where the read is occurring.
     atime: ClockSnapshot,
@@ -185,7 +185,7 @@ impl ReadCtx {
 ///
 /// In the future, it may also contain information such as the device that caused the write, which
 /// could be used to help implement certain "simultaneous" write operations.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct WriteCtx {
     /// Access time. The clock snapshot where the read is occurring.
     atime: ClockSnapshot,
@@ -1150,6 +1150,22 @@ impl<const N: usize> From<&[u8; N]> for AllRam {
     /// than 0x10000.
     fn from(bytes: &[u8; N]) -> Self {
         (&bytes[..]).into()
+    }
+}
+
+impl Deref for AllRam {
+    type Target = [u8; 0x10000];
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &*self.0
+    }
+}
+
+impl DerefMut for AllRam {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut *self.0
     }
 }
 

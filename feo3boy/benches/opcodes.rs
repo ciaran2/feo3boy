@@ -4,18 +4,18 @@ use feo3boy::gbz80core::direct_executor_v2::DirectExecutorV2;
 use feo3boy::gbz80core::executor::Executor;
 use feo3boy::gbz80core::microcode_executor::{MicrocodeExecutor, MicrocodeState};
 use feo3boy::gbz80core::stepping_executor::{SteppingExecutor, SteppingExecutorState};
-use feo3boy::gbz80core::Gbz80State;
-use feo3boy::memdev::{AllRam, RootMemDevice};
+use feo3boy::gbz80core::TestGb;
+use feo3boy::memdev::AllRam;
 
-fn run_until_halted<E: Executor>(gb: &mut (Gbz80State, AllRam, E::State)) -> (u8, u8, u8, u8) {
-    while !gb.0.halted {
+fn run_until_halted<E: Executor>(gb: &mut TestGb<AllRam, E::State>) -> (u8, u8, u8, u8) {
+    while !gb.cpu.halted {
         E::run_single_instruction(gb);
     }
     (
-        gb.1.read_byte(0xC000),
-        gb.1.read_byte(0xC001),
-        gb.1.read_byte(0xC002),
-        gb.1.read_byte(0xC003),
+        gb.mem[0xC000],
+        gb.mem[0xC001],
+        gb.mem[0xC002],
+        gb.mem[0xC003],
     )
 }
 
@@ -28,7 +28,7 @@ fn opcodes_benchmark(c: &mut Criterion) {
         b.iter_batched_ref(
             || {
                 let mem = AllRam::from(fib);
-                (Gbz80State::default(), mem, ())
+                TestGb::new(mem, ())
             },
             |gb| run_until_halted::<DirectExecutor>(gb),
             BatchSize::LargeInput,
@@ -38,7 +38,7 @@ fn opcodes_benchmark(c: &mut Criterion) {
         b.iter_batched_ref(
             || {
                 let mem = AllRam::from(fib);
-                (Gbz80State::default(), mem, MicrocodeState::default())
+                TestGb::new(mem, MicrocodeState::default())
             },
             |gb| run_until_halted::<MicrocodeExecutor>(gb),
             BatchSize::LargeInput,
@@ -48,7 +48,7 @@ fn opcodes_benchmark(c: &mut Criterion) {
         b.iter_batched_ref(
             || {
                 let mem = AllRam::from(fib);
-                (Gbz80State::default(), mem, ())
+                TestGb::new(mem, ())
             },
             |gb| run_until_halted::<DirectExecutorV2>(gb),
             BatchSize::LargeInput,
@@ -58,7 +58,7 @@ fn opcodes_benchmark(c: &mut Criterion) {
         b.iter_batched_ref(
             || {
                 let mem = AllRam::from(fib);
-                (Gbz80State::default(), mem, SteppingExecutorState::default())
+                TestGb::new(mem, SteppingExecutorState::default())
             },
             |gb| run_until_halted::<SteppingExecutor>(gb),
             BatchSize::LargeInput,

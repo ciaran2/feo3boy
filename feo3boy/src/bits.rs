@@ -1,6 +1,6 @@
 //! Utilites for working with bits and bitflags.
 
-use bitflags::BitFlags;
+use bitflags::Flags;
 
 /// A group of bits within a byte. Provides utilities for extracting and setting the
 /// selected bits.
@@ -64,7 +64,7 @@ impl BitGroup {
     #[inline]
     pub fn apply_bits<B>(self, dest: &mut B, val: u8)
     where
-        B: BitFlags<Bits = u8>,
+        B: Flags<Bits = u8>,
     {
         let mut bits = dest.bits();
         self.apply(&mut bits, val);

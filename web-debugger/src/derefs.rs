@@ -1,5 +1,5 @@
 use feo3boy::gb::Gb;
-use feo3boy::memdev::RootMemDevice;
+use feo3boy::memdev::{ReadCtx, RootMemDevice};
 use yew::prelude::*;
 
 use crate::instrs::{Instr, InstrInfo};
@@ -22,13 +22,14 @@ pub struct ComputedDerefs {
 
 impl From<&Gb> for ComputedDerefs {
     fn from(gb: &Gb) -> Self {
+        let readctx = ReadCtx::new(gb.clock().snapshot());
         Self {
-            pbc: gb.mmu.read(gb.cpustate.regs.bc()),
-            pde: gb.mmu.read(gb.cpustate.regs.de()),
-            phl: gb.mmu.read(gb.cpustate.regs.hl()),
-            pffc: gb.mmu.read(0xff00 + gb.cpustate.regs.c as u16),
-            psp: gb.mmu.read(gb.cpustate.regs.sp),
-            ppc: InstrInfo::fetch_at(&gb.mmu, gb.cpustate.regs.pc),
+            pbc: gb.mmu.read(&readctx, gb.cpustate.regs.bc()),
+            pde: gb.mmu.read(&readctx, gb.cpustate.regs.de()),
+            phl: gb.mmu.read(&readctx, gb.cpustate.regs.hl()),
+            pffc: gb.mmu.read(&readctx, 0xff00 + gb.cpustate.regs.c as u16),
+            psp: gb.mmu.read(&readctx, gb.cpustate.regs.sp),
+            ppc: InstrInfo::fetch_at(&gb.mmu, &readctx, gb.cpustate.regs.pc),
         }
     }
 }

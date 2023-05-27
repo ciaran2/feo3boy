@@ -76,6 +76,11 @@ impl TimerCounter {
         self.0.set_untracked(timer);
         overflow
     }
+
+    /// Get the value of the timer counter.
+    pub fn value(&self) -> u8 {
+        *self.0
+    }
 }
 
 #[derive(Default, Debug, Clone, Eq, PartialEq)]
@@ -139,6 +144,21 @@ impl TimerRegs {
     /// Get the divider register.
     pub fn divider(&self) -> &TimerDivider {
         &self.divider
+    }
+
+    /// Get the value of the timer counter register.
+    pub fn counter(&self) -> u8 {
+        self.timer_counter.value()
+    }
+
+    /// Get the value of the timer mod register.
+    pub fn modulus(&self) -> u8 {
+        self.timer_mod
+    }
+
+    /// Get the internal value of the timer control register (all bits, readable or otherwise).
+    pub fn control(&self) -> u8 {
+        self.timer_control.bits()
     }
 }
 

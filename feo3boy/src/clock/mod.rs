@@ -44,7 +44,7 @@ pub trait SystemClockContext {
 }
 
 /// Represents the system's actual clock.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Eq, PartialEq)]
 pub struct SystemClock {
     /// Number of m-cycles elapsed since startup.
     ///

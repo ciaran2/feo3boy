@@ -8,7 +8,7 @@ use feo3boy_opcodes::opcode::args::{AluOp, AluUnaryOp, ConditionCode, Operand16,
 use log::trace;
 
 use crate::gbz80core::direct_executor::{Ctx, Run, Runner};
-use crate::memdev::RootMemDevice;
+use crate::gbz80core::externdefs;
 
 impl Runner for AluOp {}
 impl Runner for AluUnaryOp {}
@@ -31,50 +31,50 @@ impl Run<Operand8> {
             Operand8::AddrHL => {
                 let addr = ctx.cpu().regs.hl();
                 ctx.yield1m();
-                ctx.mem().read_byte(addr)
+                externdefs::read_mem(ctx, addr)
             }
             Operand8::AddrBC => {
                 let addr = ctx.cpu().regs.bc();
                 ctx.yield1m();
-                ctx.mem().read_byte(addr)
+                externdefs::read_mem(ctx, addr)
             }
             Operand8::AddrDE => {
                 let addr = ctx.cpu().regs.de();
                 ctx.yield1m();
-                ctx.mem().read_byte(addr)
+                externdefs::read_mem(ctx, addr)
             }
             Operand8::AddrHLInc => {
                 let addr = ctx.cpu().regs.hl();
                 ctx.yield1m();
                 ctx.cpu_mut().regs.set_hl(addr.wrapping_add(1));
-                ctx.mem().read_byte(addr)
+                externdefs::read_mem(ctx, addr)
             }
             Operand8::AddrHLDec => {
                 let addr = ctx.cpu().regs.hl();
                 ctx.yield1m();
                 ctx.cpu_mut().regs.set_hl(addr.wrapping_sub(1));
-                ctx.mem().read_byte(addr)
+                externdefs::read_mem(ctx, addr)
             }
             Operand8::Immediate => {
                 let addr = ctx.cpu_mut().regs.pc;
                 ctx.cpu_mut().regs.pc = addr.wrapping_add(1);
                 ctx.yield1m();
-                ctx.mem().read_byte(addr)
+                externdefs::read_mem(ctx, addr)
             }
             Operand8::AddrImmediate => {
                 let addr = Operand16::Immediate.runner().read(ctx);
                 ctx.yield1m();
-                ctx.mem().read_byte(addr)
+                externdefs::read_mem(ctx, addr)
             }
             Operand8::AddrRelC => {
                 let addr = 0xFF00 + ctx.cpu().regs.c as u16;
                 ctx.yield1m();
-                ctx.mem().read_byte(addr)
+                externdefs::read_mem(ctx, addr)
             }
             Operand8::AddrRelImmediate => {
                 let addr = 0xFF00 + Operand8::Immediate.runner().read(ctx) as u16;
                 ctx.yield1m();
-                ctx.mem().read_byte(addr)
+                externdefs::read_mem(ctx, addr)
             }
         }
     }
@@ -93,45 +93,45 @@ impl Run<Operand8> {
             Operand8::AddrHL => {
                 let addr = ctx.cpu().regs.hl();
                 ctx.yield1m();
-                ctx.mem_mut().write_byte(addr, val)
+                externdefs::write_mem(ctx, addr, val)
             }
             Operand8::AddrBC => {
                 let addr = ctx.cpu().regs.bc();
                 ctx.yield1m();
-                ctx.mem_mut().write_byte(addr, val)
+                externdefs::write_mem(ctx, addr, val)
             }
             Operand8::AddrDE => {
                 let addr = ctx.cpu().regs.de();
                 ctx.yield1m();
-                ctx.mem_mut().write_byte(addr, val)
+                externdefs::write_mem(ctx, addr, val)
             }
             Operand8::AddrHLInc => {
                 let addr = ctx.cpu().regs.hl();
                 ctx.yield1m();
                 ctx.cpu_mut().regs.set_hl(addr.wrapping_add(1));
-                ctx.mem_mut().write_byte(addr, val)
+                externdefs::write_mem(ctx, addr, val)
             }
             Operand8::AddrHLDec => {
                 let addr = ctx.cpu().regs.hl();
                 ctx.yield1m();
                 ctx.cpu_mut().regs.set_hl(addr.wrapping_sub(1));
-                ctx.mem_mut().write_byte(addr, val)
+                externdefs::write_mem(ctx, addr, val)
             }
             Operand8::Immediate => panic!("Immediates cannot be used as store destinations"),
             Operand8::AddrImmediate => {
                 let addr = Operand16::Immediate.runner().read(ctx);
                 ctx.yield1m();
-                ctx.mem_mut().write_byte(addr, val)
+                externdefs::write_mem(ctx, addr, val)
             }
             Operand8::AddrRelC => {
                 let addr = 0xFF00 + ctx.cpu().regs.c as u16;
                 ctx.yield1m();
-                ctx.mem_mut().write_byte(addr, val)
+                externdefs::write_mem(ctx, addr, val)
             }
             Operand8::AddrRelImmediate => {
                 let addr = 0xFF00 + Operand8::Immediate.runner().read(ctx) as u16;
                 ctx.yield1m();
-                ctx.mem_mut().write_byte(addr, val)
+                externdefs::write_mem(ctx, addr, val)
             }
         }
     }
@@ -172,10 +172,10 @@ impl Run<Operand16> {
                 let [low, high] = val.to_le_bytes();
                 let mut addr = Wrapping(Operand16::Immediate.runner().read(ctx));
                 ctx.yield1m();
-                ctx.mem_mut().write_byte(addr.0.into(), low);
+                externdefs::write_mem(ctx, addr.0, low);
                 addr += Wrapping(1u16);
                 ctx.yield1m();
-                ctx.mem_mut().write_byte(addr.0.into(), high);
+                externdefs::write_mem(ctx, addr.0, high);
             }
         }
     }
