@@ -1036,6 +1036,9 @@ pub trait LinearFeedbackShiftRegister: Clone + fmt::Debug + Default + PartialEq 
     /// at the end of the operation. The output is always either 0 or 1.
     fn increment_by_and_get_output(&mut self, increments: u64) -> u16;
 
+    /// Get the current register state of the LFSR.
+    fn state(&self) -> u16;
+
     /// Return true if the LFSR is using short mode.
     fn short(&self) -> bool;
 
@@ -1090,6 +1093,10 @@ impl LinearFeedbackShiftRegister for DirectLinearFeedbackShiftRegister {
             do_increments(apply_long, self.value, increments)
         };
         self.value & 1
+    }
+
+    fn state(&self) -> u16 {
+        self.value
     }
 
     fn short(&self) -> bool {
@@ -1157,94 +1164,91 @@ impl LinearFeedbackShiftRegister for TabledLinearFeedbackShiftRegister {
         }
     }
 
+    fn state(&self) -> u16 {
+        if self.short_width {
+            // Get the current value of the LFSR assuming we have shifted enough times that bits
+            // from 15 bit mode have all been shifted away. We will later reapply bits from 15
+            // bit mode if necessary.
+            let base_value = if self.locked {
+                0x7fff
+            } else {
+                lfsr::LFSR7_PATTERN[self.idx7()]
+            };
+
+            // Amount that saved_high_bits have been shifted down.
+            let amount_shifted = self.elapsed_increments - self.changed_increment;
+            // Figure out the actual value of the LFSR by reapplying the saved_high_bits.
+            if amount_shifted < 8 {
+                let reapplied = (self.saved_high_bits >> amount_shifted) & 0x7f80;
+                let reapply_mask = (0x7f80 >> amount_shifted) & 0x7f80;
+                (base_value & !reapply_mask) | (reapplied & reapply_mask)
+            } else {
+                base_value
+            }
+        } else {
+            if self.locked {
+                0x7fff
+            } else {
+                lfsr::LFSR15_PATTERN[self.idx15()]
+            }
+        }
+    }
+
     fn short(&self) -> bool {
         self.short_width
     }
 
     fn set_short(&mut self, short_width: bool) {
         if short_width != self.short_width {
+            let state = self.state();
             if short_width {
-                if self.locked {
-                    // If we were locked at 15 bits, we are still going to be locked at 7 bits, and
-                    // don't need to change anything, but to be sure we convert back correctly
-                    // later, we'll store the locked bit pattern in saved_high_bits and update the
-                    // changed_increment.
-                    self.changed_increment = self.elapsed_increments;
-                    self.saved_high_bits = 0x7f80;
-                } else {
-                    // Changing from wide to short, so we need to recalculate the index_offset such
-                    // that the current value of `elapsed_increments` has the same value for the
-                    // 7-bit secton as we have for the 15-bit section.
+                // Store information about the high bits from the 15 bit register so we can
+                // restore them later if needed.
+                self.changed_increment = self.elapsed_increments;
+                self.saved_high_bits = state & 0x7f80;
 
-                    // Get the current 15 bit value.
-                    let value = lfsr::LFSR15_PATTERN[self.idx15()];
+                // Get just the last bits of the 7-bit portion. This is the relevant part and is
+                // used in the reverse lookup table to figure out where we are in the 7-bit
+                // sequence.
+                let masked_lower_bits = state & 0x007f;
 
-                    // Store information about the high bits from the 15 bit register so we can
-                    // restore them later if needed.
-                    self.changed_increment = self.elapsed_increments;
-                    self.saved_high_bits = value & 0x7f80;
-
-                    // Get just the last bits of the 7-bit portion. This is the relevant part and is
-                    // used in the reverse lookup table to figure out where we are in the 7-bit
-                    // sequence.
-                    let masked_lower_bits = value & 0x007f;
-
-                    match lfsr::LFSR7_REVERSE_LOOKUP.get(masked_lower_bits as usize) {
-                        // If the index is out of bounds, the value is all 1 and will cause us to be
-                        // locked in 7 bit mode.
-                        None => {
-                            self.locked = true;
-                        }
-                        Some(&idx7) => {
-                            let pat_len = lfsr::LFSR7_PATTERN.len() as u64;
-                            let idx7 = idx7 as u64;
-                            // Find an index_offset which, when added to the current increment
-                            // produces the correct current index into the LFSR7_PATTERN.
-                            //
-                            // Basically, we're trying to solve `index = elapsed + offset` but mod
-                            // pat_len, which is `index - elapsed = offset`. Since `index` and
-                            // `offset` are `% pat_len`, we adjust the formula to avoid underflow.
-                            //
-                            // Essentially, we add pat_len to idx7 to make sure it is large enough
-                            // to subtract from, and then mod elapsed by `pat_len` to ensure it is
-                            // smaller than `idx7 + pat_len`. This produces an index_offset which is
-                            // somewhere in the range `1..(2 * pat_len)`.
-                            //
-                            // Since mod will be applied again when calculating the final index, we
-                            // don't need to apply mod to index_offset again here.
-                            self.index_offset =
-                                idx7 + pat_len - (self.elapsed_increments % pat_len);
-                        }
-                    };
-                }
+                match lfsr::LFSR7_REVERSE_LOOKUP.get(masked_lower_bits as usize) {
+                    // If the index is out of bounds, the value is all 1 and will cause us to be
+                    // locked in 7 bit mode.
+                    None => {
+                        self.locked = true;
+                    }
+                    Some(&idx7) => {
+                        // Changing from 15 to 7 can never unlock so we dont' need to reset the
+                        // locked state here.
+                        let pat_len = lfsr::LFSR7_PATTERN.len() as u64;
+                        let idx7 = idx7 as u64;
+                        // Find an index_offset which, when added to the current increment
+                        // produces the correct current index into the LFSR7_PATTERN.
+                        //
+                        // Basically, we're trying to solve `index = elapsed + offset` but mod
+                        // pat_len, which is `index - elapsed = offset`. Since `index` and
+                        // `offset` are `% pat_len`, we adjust the formula to avoid underflow.
+                        //
+                        // Essentially, we add pat_len to idx7 to make sure it is large enough
+                        // to subtract from, and then mod elapsed by `pat_len` to ensure it is
+                        // smaller than `idx7 + pat_len`. This produces an index_offset which is
+                        // somewhere in the range `1..(2 * pat_len)`.
+                        //
+                        // Since mod will be applied again when calculating the final index, we
+                        // don't need to apply mod to index_offset again here.
+                        self.index_offset = idx7 + pat_len - (self.elapsed_increments % pat_len);
+                        debug_assert!(idx7 == self.idx7() as u64);
+                    }
+                };
             } else {
-                // Changing from 7 to 15 can result in unlocking if done soon enough!
-
-                // Get the current value of the LFSR assuming we have shifted enough times that bits
-                // from 15 bit mode have all been shifted away. We will later reapply bits from 15
-                // bit mode if necessary.
-                let base_value = if self.locked {
-                    0x7fff
-                } else {
-                    lfsr::LFSR7_PATTERN[self.idx7()]
-                };
-
-                // Amount that saved_high_bits have been shifted down.
-                let amount_shifted = self.elapsed_increments - self.changed_increment;
-                // Figure out the actual value of the LFSR by reapplying the saved_high_bits.
-                let value = if amount_shifted < 8 {
-                    let reapplied = (self.saved_high_bits >> amount_shifted) & 0x7f8;
-                    let reapply_mask = (0x7f8 >> amount_shifted) & 0x7f8;
-                    (base_value & !reapply_mask) | (reapplied & reapply_mask)
-                } else {
-                    base_value
-                };
-
-                match lfsr::LFSR15_REVERSE_LOOKUP.get(value as usize) {
+                match lfsr::LFSR15_REVERSE_LOOKUP.get(state as usize) {
                     None => {
                         self.locked = true;
                     }
                     Some(&idx15) => {
+                        // Changing from 7 to 15 can unlock.
+                        self.locked = false;
                         let pat_len = lfsr::LFSR15_PATTERN.len() as u64;
                         let idx15 = idx15 as u64;
                         // Find an index_offset which, when added to the current increment
@@ -1255,6 +1259,7 @@ impl LinearFeedbackShiftRegister for TabledLinearFeedbackShiftRegister {
                     }
                 }
             }
+            self.short_width = short_width;
         }
     }
 
@@ -1742,6 +1747,58 @@ pub fn tick(ctx: &mut impl ApuContext) {
                 };
 
                 ctx.apu_mut().output_sample = Some(ctx.apu_mut().hpf.filter_sample(unfiltered));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use rand::distributions::Uniform;
+    use rand::{Rng, SeedableRng};
+    use rand_pcg::Pcg64Mcg;
+
+    #[test]
+    fn compare_lfsrs() {
+        let mut rng =
+            Pcg64Mcg::from_seed([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0xA, 0xB, 0xC, 0xD, 0xE, 0xF]);
+
+        let steps_before_change_dist = Uniform::new(0, 0x10000);
+        let steps_before_change_back_dist = Uniform::new(0, 0x100);
+
+        for _ in 0..0x1000 {
+            let mut directlfsr = DirectLinearFeedbackShiftRegister::default();
+            let mut tabledlfsr = TabledLinearFeedbackShiftRegister::default();
+            assert_eq!(directlfsr.state(), tabledlfsr.state());
+
+            let steps_before_change = rng.sample(steps_before_change_dist);
+            let steps_before_change_back = rng.sample(steps_before_change_back_dist);
+
+            for _ in 0..steps_before_change {
+                let directbit = directlfsr.increment_by_and_get_output(1);
+                let tabledbit = tabledlfsr.increment_by_and_get_output(1);
+                assert_eq!(directbit, tabledbit);
+                assert_eq!(directlfsr.state(), tabledlfsr.state());
+            }
+            directlfsr.set_short(true);
+            tabledlfsr.set_short(true);
+            assert_eq!(directlfsr.state(), tabledlfsr.state());
+            for _ in 0..steps_before_change_back {
+                let directbit = directlfsr.increment_by_and_get_output(1);
+                let tabledbit = tabledlfsr.increment_by_and_get_output(1);
+                assert_eq!(directbit, tabledbit);
+                assert_eq!(directlfsr.state(), tabledlfsr.state());
+            }
+            directlfsr.set_short(false);
+            tabledlfsr.set_short(false);
+            assert_eq!(directlfsr.state(), tabledlfsr.state());
+            for _ in 0..0x10000 {
+                let directbit = directlfsr.increment_by_and_get_output(1);
+                let tabledbit = tabledlfsr.increment_by_and_get_output(1);
+                assert_eq!(directbit, tabledbit);
+                assert_eq!(directlfsr.state(), tabledlfsr.state());
             }
         }
     }
