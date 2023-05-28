@@ -98,36 +98,23 @@ macro_rules! memdev_fields {
 ///
 /// usage:
 /// ```
-/// # use feo3boy::memdev::{MemDevice, RelativeAddr};
-/// # use feo3boy::{dispatch_memdev_bytes, dispatch_memdev_byte};
+/// # use feo3boy::memdev::{MemDevice, RelativeAddr, ReadCtx, WriteCtx};
+/// # use feo3boy::{memdev_bytes_from_byte, dispatch_memdev_byte};
 /// # struct MyType(u8, [u8; 3]);
 /// # impl MemDevice for MyType {
 /// # const LEN: usize = 5;
-/// # fn read_bytes_relative(&self, addr: RelativeAddr, data: &mut [u8]) {
-/// #     dispatch_memdev_bytes!(MyType, addr, data, |addr, mut data| {
-/// #         0x00 => data[0] = self.0.read_byte_relative(addr),
-/// #         0x01..=0x04 => self.1.read_bytes_relative(addr, data),
-/// #     })
-/// # }
-/// #
-/// fn read_byte_relative(&self, addr: RelativeAddr) -> u8 {
+/// # memdev_bytes_from_byte!(MyType);
+/// fn read_byte_relative(&self, ctx: &ReadCtx, addr: RelativeAddr) -> u8 {
 ///     dispatch_memdev_byte!(MyType, addr, |addr| {
-///         0x00 => self.0.read_byte_relative(addr),
-///         0x01..=0x04 => self.1.read_byte_relative(addr),
+///         0x00 => self.0.read_byte_relative(ctx, addr),
+///         0x01..=0x04 => self.1.read_byte_relative(ctx, addr),
 ///     })
 /// }
-/// #
-/// # fn write_bytes_relative(&mut self, addr: RelativeAddr, data: &[u8]) {
-/// #     dispatch_memdev_bytes!(MyType, addr, data, |addr, ref data| {
-/// #         0x00 => self.0.write_byte_relative(addr, data[0]),
-/// #         0x01..=0x04 => self.1.write_bytes_relative(addr, data),
-/// #     })
-/// # }
 ///
-/// fn write_byte_relative(&mut self, addr: RelativeAddr, val: u8) {
+/// fn write_byte_relative(&mut self, ctx: &WriteCtx, addr: RelativeAddr, val: u8) {
 ///     dispatch_memdev_byte!(MyType, addr, |addr| {
-///         0x00 => self.0.write_byte_relative(addr, val),
-///         0x01..=0x04 => self.1.write_byte_relative(addr, val),
+///         0x00 => self.0.write_byte_relative(ctx, addr, val),
+///         0x01..=0x04 => self.1.write_byte_relative(ctx, addr, val),
 ///     })
 /// }
 /// # }
@@ -177,22 +164,22 @@ macro_rules! dispatch_memdev_byte {
 ///
 /// usage:
 /// ```
-/// # use feo3boy::memdev::{MemDevice, RelativeAddr};
+/// # use feo3boy::memdev::{MemDevice, RelativeAddr, ReadCtx, WriteCtx};
 /// # use feo3boy::{dispatch_memdev_bytes, dispatch_memdev_byte};
 /// # struct MyType(u8, [u8; 4]);
 /// # impl MemDevice for MyType {
 /// # const LEN: usize = 5;
-/// fn read_bytes_relative(&self, addr: RelativeAddr, data: &mut [u8]) {
+/// fn read_bytes_relative(&self, ctx: &ReadCtx, addr: RelativeAddr, data: &mut [u8]) {
 ///     dispatch_memdev_bytes!(MyType, addr, data, |addr, mut data| {
-///         0x00 => data[0] = self.0.read_byte_relative(addr),
-///         0x01..=0x04 => self.1.read_bytes_relative(addr, data),
+///         0x00 => data[0] = self.0.read_byte_relative(ctx, addr),
+///         0x01..=0x04 => self.1.read_bytes_relative(ctx, addr, data),
 ///     })
 /// }
 ///
-/// fn write_bytes_relative(&mut self, addr: RelativeAddr, data: &[u8]) {
+/// fn write_bytes_relative(&mut self, ctx: &WriteCtx, addr: RelativeAddr, data: &[u8]) {
 ///     dispatch_memdev_bytes!(MyType, addr, data, |addr, ref data| {
-///         0x00 => self.0.write_byte_relative(addr, data[0]),
-///         0x01..=0x04 => self.1.write_bytes_relative(addr, data),
+///         0x00 => self.0.write_byte_relative(ctx, addr, data[0]),
+///         0x01..=0x04 => self.1.write_bytes_relative(ctx, addr, data),
 ///     })
 /// }
 /// # }

@@ -727,8 +727,11 @@ ctx_applier!([In1], [Out1, Out2, Out3, Out4]);
 ctx_applier!([In1, In2], [Out1, Out2, Out3, Out4]);
 ctx_applier!([In1, In2, In3], [Out1, Out2, Out3, Out4]);
 
+#[cfg(test)]
+use crate::{gbz80core::TestGb, memdev::GrowRam};
+
 executor_tests! {
     tests,
-    crate::gbz80core::microcode_executor::MicrocodeExecutor,
-    crate::gbz80core::TestGb<Box<[u8; 0x10000]>, crate::gbz80core::microcode_executor::MicrocodeState>
+    MicrocodeExecutor,
+    TestGb<GrowRam, MicrocodeState>
 }

@@ -8,6 +8,9 @@ macro_rules! executor_tests {
 
             use crate::gbz80core::executor::Executor;
 
+            #[allow(unused)]
+            use super::*;
+
             fn init() {
                 let _ = env_logger::builder().is_test(true).try_init();
             }
@@ -103,6 +106,13 @@ macro_rules! executor_tests {
                             let mut expected = gb.clone();
                             expected.cpu.regs.pc = 1;
                             set_dest(inst, &mut expected, input);
+                            expected.clock.advance1m();
+                            if (0x70..=0x77).contains(&inst) {
+                                expected.clock.advance1m();
+                            }
+                            if (inst & 0x0f) % 8 == 0x06 {
+                                expected.clock.advance1m();
+                            }
                             expected
                         };
 
@@ -148,6 +158,11 @@ macro_rules! executor_tests {
                             let mut expected = gb.clone();
                             expected.cpu.regs.pc = 2;
                             set_dest(inst, &mut expected, input);
+                            expected.clock.advance1m();
+                            expected.clock.advance1m();
+                            if inst == 0x36 {
+                                expected.clock.advance1m();
+                            }
                             expected
                         };
 
@@ -203,6 +218,10 @@ macro_rules! executor_tests {
                                     if (v1 & 0xf) + (v2 & 0xf) > 0xf {
                                         expected.cpu.regs.flags |= Flags::HALFCARRY;
                                     }
+                                    expected.clock.advance1m();
+                                    if (inst & 0x0f) % 8 == 0x06 {
+                                        expected.clock.advance1m();
+                                    }
                                     expected
                                 };
 
@@ -236,6 +255,8 @@ macro_rules! executor_tests {
                                 if (v1 & 0xf) + (v2 & 0xf) > 0xf {
                                     expected.cpu.regs.flags |= Flags::HALFCARRY;
                                 }
+                                expected.clock.advance1m();
+                                expected.clock.advance1m();
                                 expected
                             };
 
@@ -266,6 +287,7 @@ macro_rules! executor_tests {
                             if (v & 0xf) + (v & 0xf) > 0xf {
                                 expected.cpu.regs.flags |= Flags::HALFCARRY;
                             }
+                            expected.clock.advance1m();
                             expected
                         };
 
@@ -323,6 +345,10 @@ macro_rules! executor_tests {
                                     if (v1 & 0xf) + (v2 & 0xf) + carry > 0xf {
                                         expected.cpu.regs.flags |= Flags::HALFCARRY;
                                     }
+                                    expected.clock.advance1m();
+                                    if (inst & 0x0f) % 8 == 0x06 {
+                                        expected.clock.advance1m();
+                                    }
                                     expected
                                 };
 
@@ -357,6 +383,8 @@ macro_rules! executor_tests {
                                 if (v1 & 0xf) + (v2 & 0xf) + carry > 0xf {
                                     expected.cpu.regs.flags |= Flags::HALFCARRY;
                                 }
+                                expected.clock.advance1m();
+                                expected.clock.advance1m();
                                 expected
                             };
 
@@ -391,6 +419,7 @@ macro_rules! executor_tests {
                             if (v & 0xf) + (v & 0xf) + carry > 0xf {
                                 expected.cpu.regs.flags |= Flags::HALFCARRY;
                             }
+                            expected.clock.advance1m();
                             expected
                         };
 
@@ -446,6 +475,10 @@ macro_rules! executor_tests {
                                     if (v1 & 0xf) < (v2 & 0xf) {
                                         expected.cpu.regs.flags |= Flags::HALFCARRY;
                                     }
+                                    expected.clock.advance1m();
+                                    if (inst & 0x0f) % 8 == 0x06 {
+                                        expected.clock.advance1m();
+                                    }
                                     expected
                                 };
 
@@ -478,6 +511,8 @@ macro_rules! executor_tests {
                                 if (v1 & 0xf) < (v2 & 0xf) {
                                     expected.cpu.regs.flags |= Flags::HALFCARRY;
                                 }
+                                expected.clock.advance1m();
+                                expected.clock.advance1m();
                                 expected
                             };
 
@@ -497,6 +532,7 @@ macro_rules! executor_tests {
                             expected.cpu.regs.pc = 1;
                             expected.cpu.regs.acc = 0;
                             expected.cpu.regs.flags = Flags::ZERO | Flags::SUB;
+                            expected.clock.advance1m();
                             expected
                         };
 
@@ -555,6 +591,10 @@ macro_rules! executor_tests {
                                     {
                                         expected.cpu.regs.flags |= Flags::HALFCARRY;
                                     }
+                                    expected.clock.advance1m();
+                                    if (inst & 0x0f) % 8 == 0x06 {
+                                        expected.clock.advance1m();
+                                    }
                                     expected
                                 };
 
@@ -589,6 +629,8 @@ macro_rules! executor_tests {
                                 {
                                     expected.cpu.regs.flags |= Flags::HALFCARRY;
                                 }
+                                expected.clock.advance1m();
+                                expected.clock.advance1m();
                                 expected
                             };
 
@@ -614,6 +656,7 @@ macro_rules! executor_tests {
                                 expected.cpu.regs.flags =
                                     Flags::SUB | Flags::CARRY | Flags::HALFCARRY;
                             }
+                            expected.clock.advance1m();
                             expected
                         };
 
@@ -663,6 +706,10 @@ macro_rules! executor_tests {
                                     if res == 0 {
                                         expected.cpu.regs.flags |= Flags::ZERO;
                                     }
+                                    expected.clock.advance1m();
+                                    if (inst & 0x0f) % 8 == 0x06 {
+                                        expected.clock.advance1m();
+                                    }
                                     expected
                                 };
 
@@ -689,6 +736,8 @@ macro_rules! executor_tests {
                                 if res == 0 {
                                     expected.cpu.regs.flags |= Flags::ZERO;
                                 }
+                                expected.clock.advance1m();
+                                expected.clock.advance1m();
                                 expected
                             };
 
@@ -710,6 +759,7 @@ macro_rules! executor_tests {
                             if v == 0 {
                                 expected.cpu.regs.flags |= Flags::ZERO;
                             }
+                            expected.clock.advance1m();
                             expected
                         };
 
@@ -759,6 +809,10 @@ macro_rules! executor_tests {
                                     if res == 0 {
                                         expected.cpu.regs.flags |= Flags::ZERO;
                                     }
+                                    expected.clock.advance1m();
+                                    if (inst & 0x0f) % 8 == 0x06 {
+                                        expected.clock.advance1m();
+                                    }
                                     expected
                                 };
 
@@ -785,6 +839,8 @@ macro_rules! executor_tests {
                                 if res == 0 {
                                     expected.cpu.regs.flags |= Flags::ZERO;
                                 }
+                                expected.clock.advance1m();
+                                expected.clock.advance1m();
                                 expected
                             };
 
@@ -804,6 +860,7 @@ macro_rules! executor_tests {
                             expected.cpu.regs.pc = 1;
                             expected.cpu.regs.acc = 0;
                             expected.cpu.regs.flags = Flags::ZERO;
+                            expected.clock.advance1m();
                             expected
                         };
 
@@ -853,6 +910,10 @@ macro_rules! executor_tests {
                                     if res == 0 {
                                         expected.cpu.regs.flags |= Flags::ZERO;
                                     }
+                                    expected.clock.advance1m();
+                                    if (inst & 0x0f) % 8 == 0x06 {
+                                        expected.clock.advance1m();
+                                    }
                                     expected
                                 };
 
@@ -879,6 +940,8 @@ macro_rules! executor_tests {
                                 if res == 0 {
                                     expected.cpu.regs.flags |= Flags::ZERO;
                                 }
+                                expected.clock.advance1m();
+                                expected.clock.advance1m();
                                 expected
                             };
 
@@ -900,6 +963,7 @@ macro_rules! executor_tests {
                             if v == 0 {
                                 expected.cpu.regs.flags |= Flags::ZERO;
                             }
+                            expected.clock.advance1m();
                             expected
                         };
 
@@ -954,6 +1018,10 @@ macro_rules! executor_tests {
                                     if (v1 & 0xf) < (v2 & 0xf) {
                                         expected.cpu.regs.flags |= Flags::HALFCARRY;
                                     }
+                                    expected.clock.advance1m();
+                                    if (inst & 0x0f) % 8 == 0x06 {
+                                        expected.clock.advance1m();
+                                    }
                                     expected
                                 };
 
@@ -985,6 +1053,8 @@ macro_rules! executor_tests {
                                 if (v1 & 0xf) < (v2 & 0xf) {
                                     expected.cpu.regs.flags |= Flags::HALFCARRY;
                                 }
+                                expected.clock.advance1m();
+                                expected.clock.advance1m();
                                 expected
                             };
 
@@ -1003,6 +1073,7 @@ macro_rules! executor_tests {
                             let mut expected = gb.clone();
                             expected.cpu.regs.pc = 1;
                             expected.cpu.regs.flags = Flags::ZERO | Flags::SUB;
+                            expected.clock.advance1m();
                             expected
                         };
 
@@ -1040,7 +1111,10 @@ macro_rules! executor_tests {
 
                             let expected = {
                                 let mut expected = gb.clone();
+                                expected.clock.advance1m();
+                                expected.clock.advance1m();
                                 if should_jump {
+                                    expected.clock.advance1m();
                                     expected.cpu.regs.pc = (0x102 + offset as i32) as u16;
                                 } else {
                                     expected.cpu.regs.pc = 0x102;
@@ -1084,7 +1158,11 @@ macro_rules! executor_tests {
 
                             let expected = {
                                 let mut expected = gb.clone();
+                                expected.clock.advance1m();
+                                expected.clock.advance1m();
+                                expected.clock.advance1m();
                                 if should_jump {
+                                    expected.clock.advance1m();
                                     expected.cpu.regs.pc = dest;
                                 } else {
                                     expected.cpu.regs.pc = 3;
@@ -1114,6 +1192,7 @@ macro_rules! executor_tests {
                         let expected = {
                             let mut expected = gb.clone();
                             expected.cpu.regs.pc = dest;
+                            expected.clock.advance1m();
                             expected
                         };
 
@@ -1152,6 +1231,10 @@ macro_rules! executor_tests {
                         // the address of the instruction after RST.
                         expected.mem[0x1fe] = 0x02;
                         expected.mem[0x1ff] = 0x01;
+                        expected.clock.advance1m();
+                        expected.clock.advance1m();
+                        expected.clock.advance1m();
+                        expected.clock.advance1m();
                         expected
                     };
 
@@ -1194,7 +1277,15 @@ macro_rules! executor_tests {
 
                             let expected = {
                                 let mut expected = gb.clone();
+                                expected.clock.advance1m();
+                                expected.clock.advance1m();
                                 if should_jump {
+                                    expected.clock.advance1m();
+                                    expected.clock.advance1m();
+                                    if opcode != 0xc9 {
+                                        // Unconditional return takes one fewer cycles.
+                                        expected.clock.advance1m();
+                                    }
                                     expected.cpu.regs.sp = 0x200;
                                     expected.cpu.regs.pc = dest;
                                 } else {
@@ -1229,6 +1320,10 @@ macro_rules! executor_tests {
                         expected.cpu.regs.sp = 0x200;
                         expected.cpu.regs.pc = dest;
                         expected.cpu.interrupt_master_enable.set();
+                        expected.clock.advance1m();
+                        expected.clock.advance1m();
+                        expected.clock.advance1m();
+                        expected.clock.advance1m();
                         expected
                     };
 
@@ -1271,7 +1366,13 @@ macro_rules! executor_tests {
 
                             let expected = {
                                 let mut expected = gb.clone();
+                                expected.clock.advance1m();
+                                expected.clock.advance1m();
+                                expected.clock.advance1m();
                                 if should_jump {
+                                    expected.clock.advance1m();
+                                    expected.clock.advance1m();
+                                    expected.clock.advance1m();
                                     expected.cpu.regs.sp = 0x1fe;
                                     // Return to 0x0103.
                                     expected.mem[0x1fe] = 0x03;

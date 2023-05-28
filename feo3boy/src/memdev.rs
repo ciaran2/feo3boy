@@ -1,5 +1,5 @@
 use std::convert::TryFrom;
-use std::ops::{Deref, DerefMut, Range};
+use std::ops::{Deref, DerefMut, Range, Index, IndexMut};
 use std::{fmt, mem, slice};
 
 use log::trace;
@@ -1168,6 +1168,65 @@ impl DerefMut for AllRam {
         &mut *self.0
     }
 }
+
+/// Simple memory device which works similarly to AllRam but allocates memory space only as-needed.
+/// This is useful for small unit tests which want to do equality checks on the entire body of ram,
+/// since those tests can be written to only use low parts of memory, and then the GrowRam will stay
+/// fairly small, which makes the equality comparison much faster.
+#[derive(Debug, Default, Clone, Eq)]
+pub struct GrowRam(Vec<u8>);
+
+impl PartialEq for GrowRam {
+    fn eq(&self, other: &Self) -> bool {
+        if self.0.len() < other.0.len() {
+            let (overlap, extra) = other.0.split_at(self.0.len());
+            self.0 == overlap && extra.iter().all(|&val| val == 0)
+        } else {
+            let (overlap, extra) = self.0.split_at(other.0.len());
+            other.0 == overlap && extra.iter().all(|&val| val == 0)
+        }
+    }
+}
+
+impl Index<usize> for GrowRam {
+    type Output = u8;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        assert!(index <= u16::MAX as usize, "address out of range");
+        if index < self.0.len() {
+            &self.0[index]
+        } else {
+            &0
+        }
+    }
+}
+
+impl IndexMut<usize> for GrowRam {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        assert!(index <= u16::MAX as usize, "address out of range");
+        if index >= self.0.len() {
+            self.0.resize(index + 1, 0);
+        }
+        &mut self.0[index]
+    }
+}
+
+impl MemDevice for GrowRam {
+    const LEN: usize = 0x10000;
+
+    fn read_byte_relative(&self, _ctx: &ReadCtx, addr: RelativeAddr) -> u8 {
+        // Since we have len 0x10000, we don't need to check addresses, they are always in range.
+        self[addr.index()]
+    }
+
+    fn write_byte_relative(&mut self, _ctx: &WriteCtx, addr: RelativeAddr, data: u8) {
+        self[addr.index()] = data;
+    }
+
+    memdev_bytes_from_byte!(GrowRam);
+}
+
+impl RootMemDevice for GrowRam {}
 
 /// MemoryDevice which configures the standard memory mapping of the real GameBoy.
 #[derive(Clone, Debug, Eq, PartialEq)]

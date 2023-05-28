@@ -498,8 +498,11 @@ impl Run<CBOpcode> {
     }
 }
 
+#[cfg(test)]
+use crate::{gbz80core::TestGb, memdev::GrowRam};
+
 executor_tests! {
     tests,
-    crate::gbz80core::direct_executor::DirectExecutor,
-    crate::gbz80core::TestGb<Box<[u8; 0x10000]>, ()>
+    DirectExecutor,
+    TestGb<GrowRam, ()>
 }

@@ -104,7 +104,7 @@ impl TimerDivider {
     /// the divider was last reset.
     pub fn value(&self, now: MCycle) -> u16 {
         debug_assert!(self.0.changed_cycle() <= now);
-        (now - self.0.changed_cycle()).as_u64() as u16
+        (now - self.0.changed_cycle()).as_tcycle().as_u64() as u16
     }
 
     /// Get the clock cycle when the divider was last reset by the CPU.
@@ -323,7 +323,8 @@ pub fn tick(ctx: &mut impl TimerContext) {
             ref divider,
             ..
         } = ctx.timer_regs();
-        timer_enable && (divider.value(now) & selected_divider_bit) != 0
+        let divider = divider.value(now);
+        timer_enable && (divider & selected_divider_bit) != 0
     };
     let old_divider_bit = mem::replace(&mut ctx.timer_mut().old_divider_bit, divider_bit);
 

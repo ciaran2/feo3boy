@@ -472,7 +472,7 @@ impl Envelope {
 /// This neatly explains why changing the wavelength value doesn't take effect
 /// immediately; the counter probably only resets on overflow or when the channel is
 /// triggered.
-#[derive(Clone, Default, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 struct WavelengthCalculator<const NUM_STEPS: u64, const PERIOD_MULTIPLIER: u64> {
     /// The latest wavelength setting.
     wavelength: u16,
@@ -495,9 +495,31 @@ struct WavelengthCalculator<const NUM_STEPS: u64, const PERIOD_MULTIPLIER: u64> 
     initial_period: DCycle,
 }
 
+impl<const NUM_STEPS: u64, const PERIOD_MULTIPLIER: u64> Default
+    for WavelengthCalculator<NUM_STEPS, PERIOD_MULTIPLIER>
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<const NUM_STEPS: u64, const PERIOD_MULTIPLIER: u64>
     WavelengthCalculator<NUM_STEPS, PERIOD_MULTIPLIER>
 {
+    /// Create a new WavelenghtCalculator with the wavelength set to zero.
+    const fn new() -> Self {
+        Self {
+            wavelength: 0,
+            wavelength_start_time: DCycle::ZERO,
+            initial_count: 0,
+            triggered_time: DCycle::ZERO,
+            // The period should always be reset when we trigger the wavelength for the first time,
+            // but starting with a non-zero value helps with certain unit tests and improves
+            // consistency.
+            initial_period: DCycle::new(2048 * PERIOD_MULTIPLIER),
+        }
+    }
+
     /// Set the wavelength, recalcuating the start time and initial count.
     #[inline]
     fn set_wavelength(&mut self, now: DCycle, wavelength: u16) {
@@ -571,6 +593,7 @@ impl<const NUM_STEPS: u64, const PERIOD_MULTIPLIER: u64>
         self.initial_count = 0;
         self.wavelength_start_time = now;
         self.triggered_time = now;
+        self.initial_period = self.period();
     }
 
     /// Compute the current duty step for the wavelength.
@@ -597,7 +620,7 @@ impl<const NUM_STEPS: u64, const PERIOD_MULTIPLIER: u64>
     /// Return true if we are in the first cycle. This is used by Channel 3 to determine if it
     /// should emit its old initial sample.
     fn is_first_duty_cycle(&self, now: DCycle) -> bool {
-        self.triggered_time + self.initial_period < now
+        now < self.triggered_time + self.initial_period
     }
 
     /// Get the duty step as-of 1 d-cycle ago, or none if we are in the first duty cycle.
@@ -1000,7 +1023,7 @@ impl MemDevice for WavetableChannel {
             0x04 => self.set_wavelength_high_and_control(ctx.atime().elapsed_fixed_cycles(), val),
             // Channel "samples" block. ApuRegs will remap this portion to the correct
             // offset.
-            0x05 => self.set_sample_pair(addr, val),
+            0x05..=0x15 => self.set_sample_pair(addr, val),
         })
     }
 

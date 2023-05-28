@@ -40,8 +40,11 @@ define_state_executor!(
     ],
 );
 
+#[cfg(test)]
+use crate::{gbz80core::TestGb, memdev::GrowRam};
+
 executor_tests! {
     tests,
-    crate::gbz80core::stepping_executor::SteppingExecutor,
-    crate::gbz80core::TestGb<Box<[u8; 0x10000]>, crate::gbz80core::stepping_executor::SteppingExecutorState>
+    SteppingExecutor,
+    TestGb<GrowRam,SteppingExecutorState>
 }

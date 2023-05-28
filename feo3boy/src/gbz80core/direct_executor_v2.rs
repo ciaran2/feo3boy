@@ -28,8 +28,11 @@ define_direct_executor!(
     ],
 );
 
+#[cfg(test)]
+use crate::{gbz80core::TestGb, memdev::GrowRam};
+
 executor_tests! {
     tests,
-    crate::gbz80core::direct_executor_v2::DirectExecutorV2,
-    crate::gbz80core::TestGb<Box<[u8; 0x10000]>, ()>
+    DirectExecutorV2,
+    TestGb<GrowRam, ()>
 }
