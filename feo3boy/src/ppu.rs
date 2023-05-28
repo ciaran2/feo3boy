@@ -1,7 +1,9 @@
 use crate::bits::BitGroup;
+use crate::clock::TCycle;
 use crate::interrupts::{InterruptContext, InterruptFlags, Interrupts};
 use crate::memdev::{
-    MemContext, MemDevice, MemSource, MemValue, Oam, RelativeAddr, RootMemDevice, Vram,
+    MemContext, MemDevice, MemSource, MemValue, Oam, ReadCtx, RelativeAddr, RootMemDevice, Vram,
+    WriteCtx,
 };
 use bitflags::bitflags;
 use log::{debug, trace};
@@ -213,11 +215,11 @@ impl MemValue for Object {
 //}
 
 impl Oam {
-    fn get_object(&self, i: u16) -> Object {
+    fn get_object(&self, ctx: &ReadCtx, i: u16) -> Object {
         trace!("getting attributes for object: {}", i);
         let base_index = i * 4;
         self.bypass()
-            .read_relative(OAM_BEGIN.move_forward_by(base_index))
+            .read_relative(ctx, OAM_BEGIN.move_forward_by(base_index))
     }
 }
 
@@ -261,10 +263,11 @@ fn get_tile_line(
 
     let line_address = (base_address + 16 * tile_offset + 2 * line as i16) as u16;
 
+    let readctx = ReadCtx::new(ctx.clock().snapshot());
     let [low_bits, high_bits]: [u8; 2] = ctx
         .vram()
         .bypass()
-        .read_relative(VRAM_BEGIN.move_forward_by(line_address));
+        .read_relative(&readctx, VRAM_BEGIN.move_forward_by(line_address));
 
     let mut output = [0; 8];
 
@@ -365,25 +368,25 @@ impl MemDevice for DmaState {
     const LEN: usize = 1;
 
     #[inline]
-    fn read_byte_relative(&self, addr: RelativeAddr) -> u8 {
+    fn read_byte_relative(&self, _ctx: &ReadCtx, addr: RelativeAddr) -> u8 {
         check_addr!(DmaState, addr);
         self.read_inner()
     }
 
     #[inline]
-    fn read_bytes_relative(&self, addr: RelativeAddr, data: &mut [u8]) {
+    fn read_bytes_relative(&self, _ctx: &ReadCtx, addr: RelativeAddr, data: &mut [u8]) {
         check_addr!(DmaState, addr, data.len());
         data[0] = self.read_inner();
     }
 
     #[inline]
-    fn write_byte_relative(&mut self, addr: RelativeAddr, data: u8) {
+    fn write_byte_relative(&mut self, _ctx: &WriteCtx, addr: RelativeAddr, data: u8) {
         check_addr!(DmaState, addr);
         self.write_inner(data);
     }
 
     #[inline]
-    fn write_bytes_relative(&mut self, addr: RelativeAddr, data: &[u8]) {
+    fn write_bytes_relative(&mut self, _ctx: &WriteCtx, addr: RelativeAddr, data: &[u8]) {
         check_addr!(DmaState, addr, data.len());
         self.write_inner(data[0]);
     }
@@ -427,7 +430,7 @@ pub struct PpuState {
     truecolor_palette: [(u8, u8, u8); 4],
     visible_screen_buffer: ScreenBuffer,
     drawing_screen_buffer: ScreenBuffer,
-    scanline_ticks: u64,
+    scanline_ticks: TCycle,
     object_cursor: u16,
     scanline_x: u8,
     fetcher_x: u16,
@@ -436,6 +439,8 @@ pub struct PpuState {
     obj_fifo: VecDeque<(u8, ObjAttrs)>,
     bg_discard: u8,
     in_window: bool,
+    /// Cycle when PPU tick was last run.
+    last_tick_time: TCycle,
 }
 
 impl PpuState {
@@ -451,7 +456,7 @@ impl PpuState {
         self.bg_fifo.clear();
         self.obj_fifo.clear();
         self.obj_queue.clear();
-        self.scanline_ticks -= 456;
+        self.scanline_ticks -= SCANLINE_WIDTH;
         self.object_cursor = 0;
         self.scanline_x = 0;
         self.fetcher_x = 0;
@@ -479,7 +484,7 @@ impl Default for PpuState {
             ],
             visible_screen_buffer: Box::new([(0xff, 0xff, 0xff); 23040]),
             drawing_screen_buffer: Box::new([(0xff, 0xff, 0xff); 23040]),
-            scanline_ticks: 0,
+            scanline_ticks: TCycle::ZERO,
             object_cursor: 0,
             scanline_x: 0,
             fetcher_x: 0,
@@ -488,6 +493,7 @@ impl Default for PpuState {
             obj_fifo: VecDeque::new(),
             bg_discard: 0,
             in_window: false,
+            last_tick_time: TCycle::ZERO,
         }
     }
 }
@@ -520,10 +526,11 @@ pub fn bg_tile_fetch(ctx: &mut impl PpuContext) {
     let tile_id_offset =
         ((tile_map_y as u16 / 8) & 0x1f) * 32 + ((ctx.ppu().fetcher_x + scroll_offset_x) & 0x1f);
 
-    let tile_id = ctx
-        .vram()
-        .bypass()
-        .read_byte_relative(VRAM_BEGIN.move_forward_by(tile_id_base + tile_id_offset));
+    let readctx = ReadCtx::new(ctx.clock().snapshot());
+    let tile_id = ctx.vram().bypass().read_byte_relative(
+        &readctx,
+        VRAM_BEGIN.move_forward_by(tile_id_base + tile_id_offset),
+    );
 
     if ctx.ppu_regs().lcdc_y / 8 == 0 {
         debug!(
@@ -552,26 +559,32 @@ pub fn bg_tile_fetch(ctx: &mut impl PpuContext) {
     ctx.ppu_mut().fetcher_x += 1;
 }
 
-pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
-    tick_dma(ctx, tcycles);
+/// Number of ticks in a scanline.
+const SCANLINE_WIDTH: TCycle = TCycle::new(456);
+
+pub fn tick(ctx: &mut impl PpuContext) {
+    tick_dma(ctx);
+
+    let now = ctx.clock().elapsed_cycles().as_tcycle();
+    let cycles = now - mem::replace(&mut ctx.ppu_mut().last_tick_time, now);
 
     if ctx
         .ppu_regs()
         .lcd_control
         .contains(LcdFlags::DISPLAY_ENABLE)
     {
-        ctx.ppu_mut().scanline_ticks += tcycles;
+        ctx.ppu_mut().scanline_ticks += cycles;
         let lcd_stat = ctx.ppu_regs().lcd_status;
         let mut lcdc_y = ctx.ppu_regs().lcdc_y;
         trace!("LCD is enabled.");
         trace!("LCD status {:b}", lcd_stat);
         trace!("Current scanline: {}", lcdc_y);
-        trace!("Scanline progress: {}", ctx.ppu().scanline_ticks);
+        trace!("Scanline progress: {}", ctx.ppu().scanline_ticks.as_u64());
 
         match ctx.ppu_regs().lcd_status.mode() {
             LcdMode::HBlank => {
                 trace!("HBlank");
-                if ctx.ppu().scanline_ticks > 456 {
+                if ctx.ppu().scanline_ticks > SCANLINE_WIDTH {
                     debug!("End of scan line {}", lcdc_y);
                     ctx.ppu_mut().scanline_reset();
                     lcdc_y += 1;
@@ -605,9 +618,9 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
             }
             LcdMode::VBlank => {
                 trace!("VBlank");
-                if ctx.ppu().scanline_ticks > 456 {
+                if ctx.ppu().scanline_ticks > SCANLINE_WIDTH {
                     debug!("End of scan line {}", lcdc_y);
-                    ctx.ppu_mut().scanline_ticks -= 456;
+                    ctx.ppu_mut().scanline_ticks -= SCANLINE_WIDTH;
                     lcdc_y += 1;
                     ctx.ppu_regs_mut().lcdc_y = lcdc_y;
 
@@ -625,11 +638,12 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
             LcdMode::OamScan => {
                 trace!("OAMScan");
 
-                let end_object = ctx.ppu().scanline_ticks as u16 / 2;
+                let end_object = (ctx.ppu().scanline_ticks.as_u64() / 2) as u16;
 
+                let readctx = ReadCtx::new(ctx.clock().snapshot());
                 for i in ctx.ppu().object_cursor..end_object {
                     if ctx.ppu().obj_queue.len() < 10 && i < 40 {
-                        let object = ctx.oam().get_object(i);
+                        let object = ctx.oam().get_object(&readctx, i);
                         let sprite_height = ctx.ppu_regs().lcd_control.sprite_height();
 
                         if lcdc_y + 16 >= object.y && lcdc_y + 16 < object.y + sprite_height {
@@ -651,7 +665,7 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
 
                 ctx.ppu_mut().object_cursor = end_object;
 
-                if ctx.ppu().scanline_ticks > 80 {
+                if ctx.ppu().scanline_ticks > TCycle::new(80) {
                     debug!("Video mode transition from 2 (OAMScan) to 3 (WriteScreen)");
                     ctx.vram_mut().mask();
                     ctx.ppu_regs_mut().lcd_status.set_mode(LcdMode::WriteScreen)
@@ -660,7 +674,7 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
             LcdMode::WriteScreen => {
                 trace!("WriteScreen");
 
-                for _i in 0..tcycles {
+                for _ in 0..cycles.as_u64() {
                     if ctx.ppu_regs().lcd_control.contains(LcdFlags::WINDOW_ENABLE)
                         && ctx.ppu().scanline_x + 7 == ctx.ppu_regs().window_x
                         && lcdc_y >= ctx.ppu_regs().window_y
@@ -719,7 +733,7 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
 
                     ctx.ppu_mut().scanline_x += 1;
                     if ctx.ppu().scanline_x > 159 {
-                        debug!("Video mode transition from 3 (WriteScreen) to 0 (HBlank) after {} cycles.", ctx.ppu().scanline_ticks - 80);
+                        debug!("Video mode transition from 3 (WriteScreen) to 0 (HBlank) after {} cycles.", ctx.ppu().scanline_ticks.as_u64() - 80);
                         ctx.oam_mut().unmask();
                         ctx.vram_mut().unmask();
                         ctx.ppu_regs_mut().lcd_status.set_mode(LcdMode::HBlank);
@@ -736,18 +750,20 @@ pub fn tick(ctx: &mut impl PpuContext, tcycles: u64) {
 }
 
 /// Run one DMA tick.
-fn tick_dma(ctx: &mut impl PpuContext, _tcycles: u64) {
+fn tick_dma(ctx: &mut impl PpuContext) {
     if ctx.ppu_regs().dma.active() {
+        let readctx = ReadCtx::new(ctx.clock().snapshot());
+        let writectx = WriteCtx::new(ctx.clock().snapshot());
         // The address add can never overflow because "base" is always a multiple of 0x100
         // and offset is always 0x00..0xa0, so essentially this address add is just
         // combining bits.
         let src = ctx.ppu_regs().dma.source_addr();
         let dest = ctx.ppu_regs().dma.dest_addr();
-        let byte = ctx.mem().read_byte(src);
+        let byte = ctx.mem().read_byte(&readctx, src);
         ctx.oam_mut()
             .bypass_mut()
             .bypass_mut()
-            .write_byte_relative(dest, byte);
+            .write_byte_relative(&writectx, dest, byte);
         ctx.ppu_regs_mut().dma.advance();
     }
 }

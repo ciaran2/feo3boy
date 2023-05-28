@@ -1,6 +1,6 @@
 //! Utilites for working with bits and bitflags.
 
-use bitflags::BitFlags;
+use bitflags::Flags;
 
 /// A group of bits within a byte. Provides utilities for extracting and setting the
 /// selected bits.
@@ -43,21 +43,51 @@ impl BitGroup {
 
     /// Write `val` to the part of `dest` represented by this [`BitGroup`].
     ///
+    /// Shift `val` to the left so that it starts at the same point as this `BitGroup` and then
+    /// apply it to `dest` with a mask.
+    #[inline]
+    pub fn apply(self, dest: &mut u8, val: u8) {
+        *dest = self.applied(*dest, val);
+    }
+
+    /// Write `val` to the part of `dest` represented by this [`BitGroup`], returning the
+    /// result.
+    ///
     /// Shift `val` to the left so that it starts at the same point as this `BitGroup` and
     /// then apply it to `dest` with a mask.
     #[inline]
-    pub fn apply(self, dest: &mut u8, val: u8) {
-        *dest = (*dest & !self.0) | ((val << self.0.trailing_zeros()) & self.0);
+    pub const fn applied(self, dest: u8, val: u8) -> u8 {
+        (dest & !self.0) | ((val << self.0.trailing_zeros()) & self.0)
     }
 
     /// Write `val` to this bits-based value.
     #[inline]
     pub fn apply_bits<B>(self, dest: &mut B, val: u8)
     where
-        B: BitFlags<Bits = u8>,
+        B: Flags<Bits = u8>,
     {
         let mut bits = dest.bits();
         self.apply(&mut bits, val);
         *dest = B::from_bits_truncate(bits);
+    }
+}
+
+/// Extension trait that adds the `with_bits` and `set_bits` methods to `u8`.
+pub trait ApplyBitGroup {
+    /// Make a new copy of `self` with the bits specified by the given `BitGroup` set to
+    /// the `value` specified.
+    fn with_bits(self, group: BitGroup, value: u8) -> Self;
+
+    /// Set the bits specified by the given `BitGroup` to the `value` specified, in-place.
+    fn set_bits(&mut self, group: BitGroup, value: u8);
+}
+
+impl ApplyBitGroup for u8 {
+    fn with_bits(self, group: BitGroup, value: u8) -> Self {
+        group.applied(self, value)
+    }
+
+    fn set_bits(&mut self, group: BitGroup, value: u8) {
+        *self = self.with_bits(group, value)
     }
 }

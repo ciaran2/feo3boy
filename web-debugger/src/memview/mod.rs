@@ -3,7 +3,7 @@ use std::ops::RangeInclusive;
 
 use feo3boy::gb::Gb;
 use feo3boy::interrupts::InterruptFlags;
-use feo3boy::memdev::{GbMmu, MemMappedIo};
+use feo3boy::memdev::{GbMmu, MemMappedIo, ReadCtx};
 use owning_ref::RcRef;
 use yew::prelude::*;
 
@@ -18,6 +18,7 @@ type GbMem = RcRef<Gb, GbMmu>;
 #[derive(Properties, PartialEq)]
 pub struct Props {
     pub mem: GbMem,
+    pub readctx: ReadCtx,
 }
 
 pub enum Msg {}
@@ -72,7 +73,7 @@ impl Component for Memview {
                     <span>{"Not Usable"}</span>
                 </div>
             </div>
-            <ViewIo io={mem.io.clone()} />
+            <ViewIo io={mem.clone().map(|mem| &mem.io)} readctx={ctx.props().readctx.clone()} />
             <div class="mem-section zram">
                 <h4>{"\"Page Zero\" RAM"}</h4>
                 <ViewByteSlice start_addr={0xff80}
@@ -185,13 +186,17 @@ fn interpret_as_char(byte: u8) -> char {
     }
 }
 
+type IoRef = RcRef<Gb, MemMappedIo>;
+
 #[derive(Properties, PartialEq)]
 pub struct ViewIoProps {
-    pub io: MemMappedIo,
+    pub io: IoRef,
+    pub readctx: ReadCtx,
 }
 
 #[function_component(ViewIo)]
 pub fn view_io(props: &ViewIoProps) -> Html {
+    let now = props.readctx.atime().elapsed_cycles();
     html! {<div class="mem-section io">
         <h4>{"Memory-Mapped IO"}</h4>
         <div class="line">
@@ -218,22 +223,22 @@ pub fn view_io(props: &ViewIoProps) -> Html {
         <div class="line">
             {addr(0xff04)}
             {named("Divider")}
-            <span class="byte">{hex16(props.io.timer_regs.divider)}</span>
+            <span class="byte">{hex16(props.io.timer_regs.divider().value(now))}</span>
         </div>
         <div class="line">
             {addr(0xff05)}
             {named("Timer Accumulator")}
-            <span class="byte">{hexbyte(props.io.timer_regs.timer)}</span>
+            <span class="byte">{hexbyte(props.io.timer_regs.counter())}</span>
         </div>
         <div class="line">
             {addr(0xff06)}
             {named("Timer Modulo")}
-            <span class="byte">{hexbyte(props.io.timer_regs.timer_mod)}</span>
+            <span class="byte">{hexbyte(props.io.timer_regs.modulus())}</span>
         </div>
         <div class="line">
             {addr(0xff07)}
             {named("Timer Control")}
-            <span class="byte">{hexbyte(props.io.timer_regs.timer_control.bits())}</span>
+            <span class="byte">{hexbyte(props.io.timer_regs.control())}</span>
         </div>
         <div class="line bad">
             {addr_range(0xff08..=0xff0e)}

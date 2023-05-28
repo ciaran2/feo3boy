@@ -11,126 +11,110 @@ macro_rules! memdev_fields {
         impl $crate::memdev::MemDevice for $ty {
             const LEN: usize = $len;
 
-            fn read_byte_relative(&self, addr: $crate::memdev::RelativeAddr) -> u8 {
+            fn read_byte_relative(&self, ctx: &$crate::memdev::ReadCtx, addr: $crate::memdev::RelativeAddr) -> u8 {
                 $crate::dispatch_memdev_byte!($ty, addr, |addr| {
-                    $($start $(..= $end)? => $crate::memdev_fields!(@reader: self, addr, $target),)*
+                    $($start $(..= $end)? => $crate::memdev_fields!(@reader: self, ctx, addr, $target),)*
                 })
             }
 
-            fn read_bytes_relative(&self, addr: $crate::memdev::RelativeAddr, data: &mut [u8]) {
+            fn read_bytes_relative(&self, ctx: &$crate::memdev::ReadCtx, addr: $crate::memdev::RelativeAddr, data: &mut [u8]) {
                 $crate::dispatch_memdev_bytes!($ty, addr, data, |addr, mut data| {
                     $($start $(..= $end)? => {
-                        $crate::memdev_fields!(@range_reader: self, addr, data, $target)
+                        $crate::memdev_fields!(@range_reader: self, ctx, addr, data, $target)
                     },)*
                 })
             }
 
-            fn write_byte_relative(&mut self, addr: $crate::memdev::RelativeAddr, val: u8) {
+            fn write_byte_relative(&mut self, ctx: &$crate::memdev::WriteCtx, addr: $crate::memdev::RelativeAddr, val: u8) {
                 $crate::dispatch_memdev_byte!($ty, addr, |addr| {
-                    $($start $(..= $end)? => $crate::memdev_fields!(@writer: self, addr, val, $target),)*
+                    $($start $(..= $end)? => $crate::memdev_fields!(@writer: self, ctx, addr, val, $target),)*
                 })
             }
 
-            fn write_bytes_relative(&mut self, addr: $crate::memdev::RelativeAddr, data: &[u8]) {
+            fn write_bytes_relative(&mut self, ctx: &$crate::memdev::WriteCtx, addr: $crate::memdev::RelativeAddr, data: &[u8]) {
                 $crate::dispatch_memdev_bytes!($ty, addr, data, |addr, ref data| {
                     $($start $(..= $end)? => {
-                        $crate::memdev_fields!(@range_writer: self, addr, data, $target)
+                        $crate::memdev_fields!(@range_writer: self, ctx, addr, data, $target)
                     },)*
                 });
             }
         }
     };
 
-    (@reader: $self:ident, $addr:expr, $target:ident) => {
-        $crate::memdev::MemDevice::read_byte_relative(&$self.$target, $addr)
+    (@reader: $self:ident, $ctx:ident, $addr:expr, $target:ident) => {
+        $crate::memdev::MemDevice::read_byte_relative(&$self.$target, $ctx, $addr)
     };
-    (@reader: $self:ident, $addr:expr, $target:literal) => {
+    (@reader: $self:ident, $ctx:ident, $addr:expr, $target:literal) => {
         $target
     };
-    (@reader: $self:ident, $addr:expr, { $target:ident, skip_over: $skip:literal }) => {
-        $crate::memdev_fields!(@reader: $self, $addr.skip_over($skip), $target)
+    (@reader: $self:ident, $ctx:ident, $addr:expr, { $target:ident, skip_over: $skip:literal }) => {
+        $crate::memdev_fields!(@reader: $self, $ctx, $addr.skip_over($skip), $target)
     };
-    (@reader: $self:ident, $addr:expr, { $target:ident, readonly }) => {
-        $crate::memdev_fields!(@reader: $self, $addr, $target)
+    (@reader: $self:ident, $ctx:ident, $addr:expr, { $target:ident, readonly }) => {
+        $crate::memdev_fields!(@reader: $self, $ctx, $addr, $target)
     };
 
-    (@range_reader: $self:ident, $addr:expr, $data:ident, $target:ident) => {
-        $crate::memdev::MemDevice::read_bytes_relative(&$self.$target, $addr, $data)
+    (@range_reader: $self:ident, $ctx:ident, $addr:expr, $data:ident, $target:ident) => {
+        $crate::memdev::MemDevice::read_bytes_relative(&$self.$target, $ctx, $addr, $data)
     };
-    (@range_reader: $self:ident, $addr:expr, $data:ident, $target:literal) => {
+    (@range_reader: $self:ident, $ctx:ident, $addr:expr, $data:ident, $target:literal) => {
         $data.fill($target)
     };
-    (@range_reader: $self:ident, $addr:expr, $data:ident, { $target:ident, skip_over: $skip:literal }) => {
-        $crate::memdev_fields!(@range_reader: $self, $addr.skip_over($skip), $data, $target)
+    (@range_reader: $self:ident, $ctx:ident, $addr:expr, $data:ident, { $target:ident, skip_over: $skip:literal }) => {
+        $crate::memdev_fields!(@range_reader: $self, $ctx, $addr.skip_over($skip), $data, $target)
     };
-    (@range_reader: $self:ident, $addr:expr, $data:ident, { $target:ident, readonly }) => {
-        $crate::memdev_fields!(@range_reader: $self, $addr, $data, $target)
-    };
-
-    (@writer: $self:ident, $addr:expr, $val:ident, $target:ident) => {
-        $crate::memdev::MemDevice::write_byte_relative(&mut $self.$target, $addr, $val)
-    };
-    (@writer: $self:ident, $addr:expr, $val:ident, $target:literal) => {
-        ()
-    };
-    (@writer: $self:ident, $addr:expr, $val:ident, { $target:ident, skip_over: $skip:literal }) => {
-        $crate::memdev_fields!(@writer: $self, $addr.skip_over($skip), $val, $target)
-    };
-    (@writer: $self:ident, $addr:expr, $val:ident, { $target:ident, readonly }) => {
-        ()
+    (@range_reader: $self:ident, $ctx:ident, $addr:expr, $data:ident, { $target:ident, readonly }) => {
+        $crate::memdev_fields!(@range_reader: $self, $ctx, $addr, $data, $target)
     };
 
-    (@range_writer: $self:ident, $addr:expr, $data:ident, $target:ident) => {
-        $crate::memdev::MemDevice::write_bytes_relative(&mut $self.$target, $addr, $data)
+    (@writer: $self:ident, $ctx:ident, $addr:expr, $val:ident, $target:ident) => {
+        $crate::memdev::MemDevice::write_byte_relative(&mut $self.$target, $ctx, $addr, $val)
     };
-    (@range_writer: $self:ident, $addr:expr, $data:ident, $target:literal) => {
+    (@writer: $self:ident, $ctx:ident, $addr:expr, $val:ident, $target:literal) => {
         ()
     };
-    (@range_writer: $self:ident, $addr:expr, $data:ident, { $target:ident, skip_over: $skip:literal }) => {
-        $crate::memdev_fields!(@range_writer: $self, $addr.skip_over($skip), $data, $target)
+    (@writer: $self:ident, $ctx:ident, $addr:expr, $val:ident, { $target:ident, skip_over: $skip:literal }) => {
+        $crate::memdev_fields!(@writer: $self, $ctx, $addr.skip_over($skip), $val, $target)
     };
-    (@range_writer: $self:ident, $addr:expr, $data:ident, { $target:ident, readonly }) => {
+    (@writer: $self:ident, $ctx:ident, $addr:expr, $val:ident, { $target:ident, readonly }) => {
         ()
     };
 
-    (@addr: $base:ident, $addr:tt) => { $base.offset_by($addr) };
-    (@addr: $base:ident, $addr:literal..=$end:literal) => { $base.offset_by($addr) };
+    (@range_writer: $self:ident, $ctx:ident, $addr:expr, $data:ident, $target:ident) => {
+        $crate::memdev::MemDevice::write_bytes_relative(&mut $self.$target, $ctx, $addr, $data)
+    };
+    (@range_writer: $self:ident, $ctx:ident, $addr:expr, $data:ident, $target:literal) => {
+        ()
+    };
+    (@range_writer: $self:ident, $ctx:ident, $addr:expr, $data:ident, { $target:ident, skip_over: $skip:literal }) => {
+        $crate::memdev_fields!(@range_writer: $self, $ctx, $addr.skip_over($skip), $data, $target)
+    };
+    (@range_writer: $self:ident, $ctx:ident, $addr:expr, $data:ident, { $target:ident, readonly }) => {
+        ()
+    };
 }
 
 /// Dispatch a memdev read/write for a single byte to handlers based on their address.
 ///
 /// usage:
 /// ```
-/// # use feo3boy::memdev::{MemDevice, RelativeAddr};
-/// # use feo3boy::{dispatch_memdev_bytes, dispatch_memdev_byte};
+/// # use feo3boy::memdev::{MemDevice, RelativeAddr, ReadCtx, WriteCtx};
+/// # use feo3boy::{memdev_bytes_from_byte, dispatch_memdev_byte};
 /// # struct MyType(u8, [u8; 3]);
 /// # impl MemDevice for MyType {
 /// # const LEN: usize = 5;
-/// # fn read_bytes_relative(&self, addr: RelativeAddr, data: &mut [u8]) {
-/// #     dispatch_memdev_bytes!(MyType, addr, data, |addr, mut data| {
-/// #         0x00 => data[0] = self.0.read_byte_relative(addr),
-/// #         0x01..=0x04 => self.1.read_bytes_relative(addr, data),
-/// #     })
-/// # }
-/// #
-/// fn read_byte_relative(&self, addr: RelativeAddr) -> u8 {
+/// # memdev_bytes_from_byte!(MyType);
+/// fn read_byte_relative(&self, ctx: &ReadCtx, addr: RelativeAddr) -> u8 {
 ///     dispatch_memdev_byte!(MyType, addr, |addr| {
-///         0x00 => self.0.read_byte_relative(addr),
-///         0x01..=0x04 => self.1.read_byte_relative(addr),
+///         0x00 => self.0.read_byte_relative(ctx, addr),
+///         0x01..=0x04 => self.1.read_byte_relative(ctx, addr),
 ///     })
 /// }
-/// #
-/// # fn write_bytes_relative(&mut self, addr: RelativeAddr, data: &[u8]) {
-/// #     dispatch_memdev_bytes!(MyType, addr, data, |addr, ref data| {
-/// #         0x00 => self.0.write_byte_relative(addr, data[0]),
-/// #         0x01..=0x04 => self.1.write_bytes_relative(addr, data),
-/// #     })
-/// # }
 ///
-/// fn write_byte_relative(&mut self, addr: RelativeAddr, val: u8) {
+/// fn write_byte_relative(&mut self, ctx: &WriteCtx, addr: RelativeAddr, val: u8) {
 ///     dispatch_memdev_byte!(MyType, addr, |addr| {
-///         0x00 => self.0.write_byte_relative(addr, val),
-///         0x01..=0x04 => self.1.write_byte_relative(addr, val),
+///         0x00 => self.0.write_byte_relative(ctx, addr, val),
+///         0x01..=0x04 => self.1.write_byte_relative(ctx, addr, val),
 ///     })
 /// }
 /// # }
@@ -180,22 +164,22 @@ macro_rules! dispatch_memdev_byte {
 ///
 /// usage:
 /// ```
-/// # use feo3boy::memdev::{MemDevice, RelativeAddr};
+/// # use feo3boy::memdev::{MemDevice, RelativeAddr, ReadCtx, WriteCtx};
 /// # use feo3boy::{dispatch_memdev_bytes, dispatch_memdev_byte};
 /// # struct MyType(u8, [u8; 4]);
 /// # impl MemDevice for MyType {
 /// # const LEN: usize = 5;
-/// fn read_bytes_relative(&self, addr: RelativeAddr, data: &mut [u8]) {
+/// fn read_bytes_relative(&self, ctx: &ReadCtx, addr: RelativeAddr, data: &mut [u8]) {
 ///     dispatch_memdev_bytes!(MyType, addr, data, |addr, mut data| {
-///         0x00 => data[0] = self.0.read_byte_relative(addr),
-///         0x01..=0x04 => self.1.read_bytes_relative(addr, data),
+///         0x00 => data[0] = self.0.read_byte_relative(ctx, addr),
+///         0x01..=0x04 => self.1.read_bytes_relative(ctx, addr, data),
 ///     })
 /// }
 ///
-/// fn write_bytes_relative(&mut self, addr: RelativeAddr, data: &[u8]) {
+/// fn write_bytes_relative(&mut self, ctx: &WriteCtx, addr: RelativeAddr, data: &[u8]) {
 ///     dispatch_memdev_bytes!(MyType, addr, data, |addr, ref data| {
-///         0x00 => self.0.write_byte_relative(addr, data[0]),
-///         0x01..=0x04 => self.1.write_bytes_relative(addr, data),
+///         0x00 => self.0.write_byte_relative(ctx, addr, data[0]),
+///         0x01..=0x04 => self.1.write_bytes_relative(ctx, addr, data),
 ///     })
 /// }
 /// # }
@@ -327,21 +311,33 @@ macro_rules! check_addr {
 #[macro_export]
 macro_rules! memdev_bytes_from_byte {
     ($dev:ty) => {
-        fn read_bytes_relative(&self, addr: $crate::memdev::RelativeAddr, data: &mut [u8]) {
+        fn read_bytes_relative(
+            &self,
+            ctx: &$crate::memdev::ReadCtx,
+            addr: $crate::memdev::RelativeAddr,
+            data: &mut [u8],
+        ) {
             $crate::check_addr!($dev, addr, data.len());
             for (offset, dest) in data.iter_mut().enumerate() {
                 *dest = $crate::memdev::MemDevice::read_byte_relative(
                     self,
+                    ctx,
                     addr.move_forward_by(offset as u16),
                 );
             }
         }
 
-        fn write_bytes_relative(&mut self, addr: $crate::memdev::RelativeAddr, data: &[u8]) {
+        fn write_bytes_relative(
+            &mut self,
+            ctx: &$crate::memdev::WriteCtx,
+            addr: $crate::memdev::RelativeAddr,
+            data: &[u8],
+        ) {
             $crate::check_addr!($dev, addr, data.len());
             for (offset, source) in data.iter().enumerate() {
                 $crate::memdev::MemDevice::write_byte_relative(
                     self,
+                    ctx,
                     addr.move_forward_by(offset as u16),
                     *source,
                 );

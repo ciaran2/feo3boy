@@ -15,8 +15,6 @@ use once_cell::sync::Lazy;
 use crate::gbz80core::executor::{Executor, ExecutorState, PausePoint, SubInstructionExecutor};
 use crate::gbz80core::{externdefs, ExecutorContext, InterruptMasterState};
 
-mod tests;
-
 /// State of the microcode executor in the CPU.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MicrocodeState {
@@ -728,3 +726,12 @@ ctx_applier!([In1, In2, In3], [Out1, Out2, Out3]);
 ctx_applier!([In1], [Out1, Out2, Out3, Out4]);
 ctx_applier!([In1, In2], [Out1, Out2, Out3, Out4]);
 ctx_applier!([In1, In2, In3], [Out1, Out2, Out3, Out4]);
+
+#[cfg(test)]
+use crate::{gbz80core::TestGb, memdev::GrowRam};
+
+executor_tests! {
+    tests,
+    MicrocodeExecutor,
+    TestGb<GrowRam, MicrocodeState>
+}

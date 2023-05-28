@@ -1,8 +1,12 @@
 pub use feo3boy_opcodes::gbz80types::Flags;
 
+use crate::clock::{SystemClock, SystemClockContext};
 use crate::gbz80core::executor::ExecutorState;
-use crate::interrupts::{InterruptContext, MemInterrupts};
-use crate::memdev::{MemContext, MemDevice, RootExtend};
+use crate::interrupts::{InterruptContext, InterruptFlags, Interrupts};
+use crate::memdev::{MemContext, MemDevice, ReadCtx, RootExtend, RootMemDevice, WriteCtx};
+
+#[macro_use]
+mod executor_testing;
 
 pub mod direct_executor;
 pub mod direct_executor_v2;
@@ -178,244 +182,141 @@ pub trait CpuContext {
 // Utility implementations of CpuContext.
 /////////////////////////////////////////
 
+/// A GameBoy that provides only a CPU and Memory. Intended primarily for testing
+#[derive(Default, Clone, Debug, Eq, PartialEq)]
+pub struct TestGb<M, S = ()> {
+    pub cpu: Gbz80State,
+    pub state: S,
+    pub clock: SystemClock,
+    pub mem: M,
+}
+
+impl<M, S> TestGb<M, S> {
+    /// Create a new `TestGb` with the given memory and executor state.
+    pub fn new(mem: M, state: S) -> Self {
+        Self {
+            cpu: Gbz80State::default(),
+            state,
+            clock: SystemClock::new(),
+            mem,
+        }
+    }
+}
+
+impl<const N: usize, S: Default> TestGb<[u8; N], S> {
+    /// Create a default `TestGb` with the given memory and executor state.
+    ///
+    /// Not all [u8; N] implement default, so this allows `::default` to work even in cases where it
+    /// otherwise wouldn't. In cases where default does exist, this shadows the trait method.
+    pub fn default() -> Self {
+        Self {
+            cpu: Gbz80State::default(),
+            state: S::default(),
+            clock: SystemClock::new(),
+            mem: [0u8; N],
+        }
+    }
+}
+
+impl<const N: usize, S: Default> TestGb<Box<[u8; N]>, S> {
+    /// Create a default `TestGb` with the given memory and executor state.
+    ///
+    /// Not all [u8; N] implement default, so this allows `::default` to work even in cases where it
+    /// otherwise wouldn't. In cases where default does exist, this shadows the trait method.
+    pub fn default() -> Self {
+        Self {
+            cpu: Gbz80State::default(),
+            state: S::default(),
+            clock: SystemClock::new(),
+            mem: Box::new([0u8; N]),
+        }
+    }
+}
+
 /// Allows a tuple of Gbz80State and any MemDevice to be used as an [`ExecutorContext`].
-impl<M: MemDevice> ExecutorContext for (Gbz80State, M) {
-    type State = ();
-
-    #[inline]
-    fn executor(&self) -> &Self::State {
-        &()
-    }
-
-    #[inline]
-    fn executor_mut(&mut self) -> &mut Self::State {
-        // since () is a ZST, we can just return our address as a mutable pointer to one.
-        assert!(std::mem::size_of::<()>() == 0);
-        unsafe { std::mem::transmute(self) }
-    }
-
-    /// With just a Gbz80State and arbitrary MemDevice, yielding actually does nothing.
-    #[inline]
-    fn yield1m(&mut self) {}
-}
-
-impl<M> CpuContext for (Gbz80State, M) {
-    #[inline]
-    fn cpu(&self) -> &Gbz80State {
-        &self.0
-    }
-
-    #[inline]
-    fn cpu_mut(&mut self) -> &mut Gbz80State {
-        &mut self.0
-    }
-}
-
-impl<M: MemDevice> MemContext for (Gbz80State, M) {
-    type Mem = RootExtend<M>;
-
-    #[inline]
-    fn mem(&self) -> &Self::Mem {
-        RootExtend::wrap_ref(&self.1)
-    }
-
-    #[inline]
-    fn mem_mut(&mut self) -> &mut Self::Mem {
-        RootExtend::wrap_mut(&mut self.1)
-    }
-}
-
-impl<M: MemDevice> InterruptContext for (Gbz80State, M) {
-    type Interrupts = MemInterrupts<RootExtend<M>>;
-
-    #[inline]
-    fn interrupts(&self) -> &Self::Interrupts {
-        MemInterrupts::wrap_ref(self.mem())
-    }
-
-    #[inline]
-    fn interrupts_mut(&mut self) -> &mut Self::Interrupts {
-        MemInterrupts::wrap_mut(self.mem_mut())
-    }
-}
-
-/// Allows a tuple of references to Gbz80State and any MemDevice to be used as CpuContext.
-impl<M: MemDevice> ExecutorContext for (&mut Gbz80State, &mut M) {
-    type State = ();
-
-    #[inline]
-    fn executor(&self) -> &Self::State {
-        &()
-    }
-
-    #[inline]
-    fn executor_mut(&mut self) -> &mut Self::State {
-        // since () is a ZST, we can just return our address as a mutable pointer to one.
-        assert!(std::mem::size_of::<()>() == 0);
-        unsafe { std::mem::transmute(self) }
-    }
-
-    /// With just a Gbz80State and arbitrary MemDevice, yielding actually does nothing.
-    #[inline]
-    fn yield1m(&mut self) {}
-}
-
-impl<M> CpuContext for (&mut Gbz80State, &mut M) {
-    #[inline]
-    fn cpu(&self) -> &Gbz80State {
-        self.0
-    }
-
-    #[inline]
-    fn cpu_mut(&mut self) -> &mut Gbz80State {
-        self.0
-    }
-}
-
-impl<M: MemDevice> MemContext for (&mut Gbz80State, &mut M) {
-    type Mem = RootExtend<M>;
-
-    #[inline]
-    fn mem(&self) -> &Self::Mem {
-        RootExtend::wrap_ref(self.1)
-    }
-
-    #[inline]
-    fn mem_mut(&mut self) -> &mut Self::Mem {
-        RootExtend::wrap_mut(self.1)
-    }
-}
-
-impl<M: MemDevice> InterruptContext for (&mut Gbz80State, &mut M) {
-    type Interrupts = MemInterrupts<RootExtend<M>>;
-
-    #[inline]
-    fn interrupts(&self) -> &Self::Interrupts {
-        MemInterrupts::wrap_ref(self.mem())
-    }
-
-    #[inline]
-    fn interrupts_mut(&mut self) -> &mut Self::Interrupts {
-        MemInterrupts::wrap_mut(self.mem_mut())
-    }
-}
-
-/// Allows a tuple of Gbz80State and any MemDevice and [`ExecutorState`] to be used as an
-/// [`ExecutorContext`].
-impl<M: MemDevice, S: ExecutorState> ExecutorContext for (Gbz80State, M, S) {
+impl<M: MemDevice, S: ExecutorState> ExecutorContext for TestGb<M, S> {
     type State = S;
 
     #[inline]
     fn executor(&self) -> &Self::State {
-        &self.2
+        &self.state
     }
 
     #[inline]
     fn executor_mut(&mut self) -> &mut Self::State {
-        &mut self.2
+        &mut self.state
     }
 
-    /// With just a Gbz80State and arbitrary MemDevice, yielding actually does nothing.
     #[inline]
-    fn yield1m(&mut self) {}
+    fn yield1m(&mut self) {
+        self.clock.advance1m();
+    }
 }
 
-impl<M, S> CpuContext for (Gbz80State, M, S) {
+impl<M, S> CpuContext for TestGb<M, S> {
     #[inline]
     fn cpu(&self) -> &Gbz80State {
-        &self.0
+        &self.cpu
     }
 
     #[inline]
     fn cpu_mut(&mut self) -> &mut Gbz80State {
-        &mut self.0
+        &mut self.cpu
     }
 }
 
-impl<M: MemDevice, S> MemContext for (Gbz80State, M, S) {
+impl<M: MemDevice, S> MemContext for TestGb<M, S> {
     type Mem = RootExtend<M>;
 
     #[inline]
     fn mem(&self) -> &Self::Mem {
-        RootExtend::wrap_ref(&self.1)
+        RootExtend::wrap_ref(&self.mem)
     }
 
     #[inline]
     fn mem_mut(&mut self) -> &mut Self::Mem {
-        RootExtend::wrap_mut(&mut self.1)
+        RootExtend::wrap_mut(&mut self.mem)
     }
 }
 
-impl<M: MemDevice, S> InterruptContext for (Gbz80State, M, S) {
-    type Interrupts = MemInterrupts<RootExtend<M>>;
+impl<M, S> SystemClockContext for TestGb<M, S> {
+    fn clock(&self) -> &SystemClock {
+        &self.clock
+    }
+}
+
+impl<M: MemDevice, S> InterruptContext for TestGb<M, S> {
+    type Interrupts = Self;
 
     #[inline]
     fn interrupts(&self) -> &Self::Interrupts {
-        MemInterrupts::wrap_ref(self.mem())
+        self
     }
 
     #[inline]
     fn interrupts_mut(&mut self) -> &mut Self::Interrupts {
-        MemInterrupts::wrap_mut(self.mem_mut())
+        self
     }
 }
 
-/// Allows a tuple of references to [`Gbz80State`] and any [`MemDevice`] and
-/// [`ExecutorState`] to be used as CpuContext.
-impl<M: MemDevice, S: ExecutorState> ExecutorContext for (&mut Gbz80State, &mut M, &mut S) {
-    type State = S;
-
-    #[inline]
-    fn executor(&self) -> &Self::State {
-        &self.2
+impl<M: MemDevice, S> Interrupts for TestGb<M, S> {
+    fn queued(&self) -> InterruptFlags {
+        let ctx = ReadCtx::new(self.clock.snapshot());
+        InterruptFlags::from_bits_truncate(self.mem().read_byte(&ctx, 0xff0f))
     }
 
-    #[inline]
-    fn executor_mut(&mut self) -> &mut Self::State {
-        &mut self.2
+    fn set_queued(&mut self, flags: InterruptFlags) {
+        let ctx = WriteCtx::new(self.clock.snapshot());
+        self.mem_mut().write_byte(&ctx, 0xff0f, flags.bits());
     }
 
-    /// With just a Gbz80State and arbitrary MemDevice, yielding actually does nothing.
-    #[inline]
-    fn yield1m(&mut self) {}
-}
-
-impl<M: MemDevice, S> CpuContext for (&mut Gbz80State, &mut M, &mut S) {
-    #[inline]
-    fn cpu(&self) -> &Gbz80State {
-        self.0
+    fn enabled(&self) -> InterruptFlags {
+        let ctx = ReadCtx::new(self.clock.snapshot());
+        InterruptFlags::from_bits_truncate(self.mem().read_byte(&ctx, 0xffff))
     }
 
-    #[inline]
-    fn cpu_mut(&mut self) -> &mut Gbz80State {
-        self.0
-    }
-}
-
-impl<M: MemDevice, S> MemContext for (&mut Gbz80State, &mut M, &mut S) {
-    type Mem = RootExtend<M>;
-
-    #[inline]
-    fn mem(&self) -> &Self::Mem {
-        RootExtend::wrap_ref(self.1)
-    }
-
-    #[inline]
-    fn mem_mut(&mut self) -> &mut Self::Mem {
-        RootExtend::wrap_mut(self.1)
-    }
-}
-
-impl<M: MemDevice, S> InterruptContext for (&mut Gbz80State, &mut M, &mut S) {
-    type Interrupts = MemInterrupts<RootExtend<M>>;
-
-    #[inline]
-    fn interrupts(&self) -> &Self::Interrupts {
-        MemInterrupts::wrap_ref(self.mem())
-    }
-
-    #[inline]
-    fn interrupts_mut(&mut self) -> &mut Self::Interrupts {
-        MemInterrupts::wrap_mut(self.mem_mut())
+    fn set_enabled(&mut self, flags: InterruptFlags) {
+        let ctx = WriteCtx::new(self.clock.snapshot());
+        self.mem_mut().write_byte(&ctx, 0xffff, flags.bits());
     }
 }

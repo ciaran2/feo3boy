@@ -9,20 +9,20 @@ macro_rules! executor_tests {
     ($executor:ty, $modname:ident) => {
         mod $modname {
             use feo3boy::gbz80core::executor::Executor;
-            use feo3boy::gbz80core::Gbz80State;
-            use feo3boy::memdev::{AllRam, RootMemDevice};
+            use feo3boy::gbz80core::TestGb;
+            use feo3boy::memdev::AllRam;
 
             use super::*;
 
             #[test]
             fn fibonacci() {
-                const OUTPUT: u16 = 0xC000;
+                const OUTPUT: usize = 0xC000;
 
-                let mut mem = AllRam::from(include_bytes!("fibonacci.bin"));
-                let mut cpu = Gbz80State::default();
-                let mut state = <$executor as Executor>::State::default();
-                while !cpu.halted {
-                    <$executor>::run_single_instruction(&mut (&mut cpu, &mut mem, &mut state));
+                let mem = AllRam::from(include_bytes!("fibonacci.bin"));
+                let state = <$executor as Executor>::State::default();
+                let mut gb = TestGb::new(mem, state);
+                while !gb.cpu.halted {
+                    <$executor>::run_single_instruction(&mut gb);
                 }
 
                 let (mut f1, mut f2) = (0, 1);
@@ -37,19 +37,19 @@ macro_rules! executor_tests {
                     if fib > u8::MAX as u32 {
                         break;
                     }
-                    assert_eq!(mem.read_byte(OUTPUT + i as u16), fib as u8);
+                    assert_eq!(gb.mem[OUTPUT + i], fib as u8);
                 }
             }
 
             #[test]
             fn fibonacci16() {
-                const OUTPUT: u16 = 0xC000;
+                const OUTPUT: usize = 0xC000;
 
-                let mut mem = AllRam::from(include_bytes!("fibonacci16.bin"));
-                let mut cpu = Gbz80State::default();
-                let mut state = <$executor as Executor>::State::default();
-                while !cpu.halted {
-                    <$executor>::run_single_instruction(&mut (&mut cpu, &mut mem, &mut state));
+                let mem = AllRam::from(include_bytes!("fibonacci16.bin"));
+                let state = <$executor as Executor>::State::default();
+                let mut gb = TestGb::new(mem, state);
+                while !gb.cpu.halted {
+                    <$executor>::run_single_instruction(&mut gb);
                 }
 
                 let (mut f1, mut f2) = (0u32, 1);
@@ -64,27 +64,28 @@ macro_rules! executor_tests {
                     if fib > u16::MAX as u32 {
                         break;
                     }
-                    let val: u16 = mem.read(OUTPUT + i as u16 * 2);
+                    let val: u16 =
+                        u16::from_le_bytes([gb.mem[OUTPUT + i * 2], gb.mem[OUTPUT + i * 2 + 1]]);
                     assert_eq!(val, fib as u16);
                 }
             }
 
             #[test]
             fn squares() {
-                const OUTPUT: u16 = 0xC000;
+                const OUTPUT: usize = 0xC000;
 
-                let mut mem = AllRam::from(include_bytes!("squares.bin"));
-                let mut cpu = Gbz80State::default();
-                let mut state = <$executor as Executor>::State::default();
-                while !cpu.halted {
-                    <$executor>::run_single_instruction(&mut (&mut cpu, &mut mem, &mut state));
+                let mem = AllRam::from(include_bytes!("squares.bin"));
+                let state = <$executor as Executor>::State::default();
+                let mut gb = TestGb::new(mem, state);
+                while !gb.cpu.halted {
+                    <$executor>::run_single_instruction(&mut gb);
                 }
 
                 for (i, square) in (1..).map(|x| x * x).enumerate() {
                     if square > u8::MAX as u32 {
                         break;
                     }
-                    assert_eq!(mem.read_byte(OUTPUT + i as u16), square as u8);
+                    assert_eq!(gb.mem[OUTPUT + i], square as u8);
                 }
             }
 
@@ -140,7 +141,7 @@ mod test_roms {
     use feo3boy::gbz80core::executor::Executor;
     use feo3boy::gbz80core::microcode_executor::MicrocodeExecutor;
     use feo3boy::gbz80core::stepping_executor::SteppingExecutor;
-    use feo3boy::memdev::{BiosRom, Cartridge, RootMemDevice};
+    use feo3boy::memdev::{BiosRom, Cartridge, ReadCtx, RootMemDevice};
     use feo3boy_opcodes::opcode::Opcode;
 
     /// Checks if output matches the cpu_instrs output. Returns break when at the end of
@@ -193,11 +194,12 @@ Passed all tests";
             output_direct_v2.extend(gb_direct_v2.serial.stream.receive_bytes());
             output_stepping.extend(gb_stepping.serial.stream.receive_bytes());
 
+            let readctx = ReadCtx::new(gb_direct.clock().snapshot());
             let ex_pc = gb_direct.cpustate.regs.pc;
-            let instr_direct = Opcode::decode(gb_direct.mmu.read_byte(ex_pc));
-            let instr_microcode = Opcode::decode(gb_microcode.mmu.read_byte(ex_pc));
-            let instr_direct_v2 = Opcode::decode(gb_direct_v2.mmu.read_byte(ex_pc));
-            let instr_stepping = Opcode::decode(gb_stepping.mmu.read_byte(ex_pc));
+            let instr_direct = Opcode::decode(gb_direct.mmu.read_byte(&readctx, ex_pc));
+            let instr_microcode = Opcode::decode(gb_microcode.mmu.read_byte(&readctx, ex_pc));
+            let instr_direct_v2 = Opcode::decode(gb_direct_v2.mmu.read_byte(&readctx, ex_pc));
+            let instr_stepping = Opcode::decode(gb_stepping.mmu.read_byte(&readctx, ex_pc));
             DirectExecutor::run_single_instruction(&mut *gb_direct);
             MicrocodeExecutor::run_single_instruction(&mut *gb_microcode);
             DirectExecutorV2::run_single_instruction(&mut *gb_direct_v2);

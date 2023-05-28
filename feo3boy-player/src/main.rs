@@ -345,7 +345,7 @@ fn main() {
                 write_serial_data(&mut gb, &mut stdout);
                 gb.tick();
 
-                if let Some(sample) = gb.apu.consume_output_sample() {
+                if let Some(sample) = gb.consume_audio_sample() {
                     avg_sample_interval = if num_sample_intervals == 0.0 {
                         sample_instant.elapsed().as_micros() as f64
                     } else {
@@ -363,7 +363,7 @@ fn main() {
                         break;
                     }
                 } else if args.mute {
-                    let emu_time = gb.elapsed_time();
+                    let emu_time = gb.clock().elapsed_time();
                     if emu_time > scaled_time_since_startup {
                         // Emulator has gotten ahead of realtime, time to break.
                         break;
